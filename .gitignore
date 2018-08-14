@@ -1,6 +1,7 @@
 *.pyc
 tags
 logs/
+log_mog_tf_extras/*
 MNIST_data/
 gpu*
 .ipynb_checkpoints/
