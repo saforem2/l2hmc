@@ -795,6 +795,7 @@ class GaussianMixtureModel(object):
                         #  self._calc_tunneling_info(sess, step, temp=1.,
                         #                            temp_refresh=True)
                         self._print_time_info(t0, t1, step)
+                        self._save_variables()
                         #  if plot:
                             #  fig0, axes0 = self.plot_with_errors(
                             #      x_data=[self.steps_arr,
