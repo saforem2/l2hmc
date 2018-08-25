@@ -13,6 +13,8 @@ def errorbar_plot(x_data, y_data, y_errors, out_file=None, **kwargs):
     y = np.array(y_data)
     y_err = np.array(y_errors)
     if not (x.shape == y.shape == y_err.shape):
+        import pdb
+        pdb.set_trace()
         err_str = ("x, y, and y_errors all must have the same shape.\n"
                    f" x_data.shape: {x.shape}\n"
                    f" y_data.shape: {y.shape}\n"
