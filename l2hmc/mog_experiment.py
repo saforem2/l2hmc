@@ -20,32 +20,28 @@ from utils.dynamics import Dynamics
 from utils.sampler import propose
 from utils.notebook_utils import get_hmc_samples
 from utils.tf_logging import variable_summaries, get_run_num, make_run_dir
-from utils.tunneling import distance, calc_min_distance, calc_tunneling_rate,\
-        find_tunneling_events
+from utils.trajectories import calc_tunneling_rate, calc_avg_distances
 from utils.jackknife import block_resampling, jackknife_err
+from utils.data_utils import calc_avg_vals_errors
 from utils.plot_helper import errorbar_plot
-
-
-# look at scaling with dimensionality, look at implementing simple U2 model
-# into distributions and see if any unforseen prooblems arise. 
-
 
 ###############################################################################
 #  TODO:
-#   * Rewrite __init__ method and _init_params() to use setattr instead of
-#   using params dictionary.
 # -----------------------------------------------------------------------------
-#   * Go back to 2D case and look at different starting temperatures
-#   * Make trajectory length go with root T, go with higher temperature
-#   * In 2D start with higher initial temp to get around 50% acceptance rate
-# -----------------------------------------------------------------------------
-#   * For Lattice model:
+#   * (!!) For Lattice model:
 #       - Define distance as difference in average plaquette.
 #       - Look at site by site difference in plaquette (not sum) to prevent
 #       integer values that would be the same across different configurations
 #       - Try to get network to be compatible with complex numbers and
 #       eventually complex matrices.
+# -----------------------------------------------------------------------------
+#   * (!) Go back to 2D case and look at different starting temperatures
+#   * (!) Make trajectory length go with root T, go with higher temperature
+#   * (!) In 2D start with higher initial temp to get around 50% acceptance rate
+#   * (~) Look at using pathlib to deal with paths.
+#   * (~) Look at replacing self.params['...'] with setattr for initalization.
 ###############################################################################
+
 
 
 def lazy_property(function):
@@ -76,6 +72,7 @@ def check_log_dir(log_dir):
             os.makedirs(figs_dir)
     return log_dir, info_dir, figs_dir
 
+
 def create_log_dir():
     """Create directory for storing information about experiment."""
     root_log_dir = '../log_mog_tf/'
@@ -87,6 +84,7 @@ def create_log_dir():
     if not os.path.isdir(figs_dir):
         os.makedirs(figs_dir)
     return log_dir, info_dir, figs_dir
+
 
 def distribution_arr(x_dim, n_distributions):
     """Create array describing likelihood of drawing from distributions."""
@@ -102,6 +100,7 @@ def distribution_arr(x_dim, n_distributions):
         small_pi = (1. - sum(arr)) / (x_dim - n_distributions)
         arr.extend((x_dim - n_distributions) * [small_pi])
         return np.array(arr, dtype=np.float32)
+
 
 def network(x_dim, scope, factor):
     with tf.variable_scope(scope):
@@ -130,6 +129,7 @@ def network(x_dim, scope, factor):
         ])
     return net
 
+
 def plot_trajectory_and_distribution(samples, trajectory, x_dim=None):
     if samples.shape[1] == 3:
         fig = plt.figure()
@@ -147,26 +147,6 @@ def plot_trajectory_and_distribution(samples, trajectory, x_dim=None):
     return fig, ax
 
 
-def calc_avg_vals_errors(data, num_blocks=20):
-    """ Calculate average values and errors of using block jackknife
-    resampling method.
-
-    Args:
-        num_blocks (int):
-            Number of blocks to use for block jackknife resampling.
-    """
-    arr = np.array(data)
-    avg_val = np.mean(arr)
-    avg_val_rs = []
-    arr_rs = block_resampling(arr, num_blocks)
-    for block in arr_rs:
-        avg_val_rs.append(np.mean(block))
-    error = jackknife_err(y_i=avg_val_rs,
-                          y_full=avg_val,
-                          num_blocks=num_blocks)
-    return avg_val, error
-
-
 class GaussianMixtureModel(object):
     """Model for training L2HMC using multiple Gaussian distributions."""
     def __init__(self, params, config, log_dir=None):
@@ -180,30 +160,31 @@ class GaussianMixtureModel(object):
 
         self.log_dir, self.info_dir, self.figs_dir = dirs
 
-        self.params_file = self.info_dir + 'params_dict.pkl'
+        self.files={
+            'distances': os.path.join(self.info_dir, 'distances.pkl'),
+            'distances_highT': os.path.join(self.info_dir,
+                                            'distances_highT.pkl'),
+            'tunneling_rates': os.path.join(self.info_dir,
+                                            'tunneling_rates.pkl'),
+            'tunneling_rates_highT': os.path.join(self.info_dir,
+                                                  'tunneling_rates_highT.pkl'),
+            'acceptance_rates': os.path.join(self.info_dir,
+                                             'acceptance_rates.pkl'),
+            'acceptance_rates_highT': os.path.join(self.info_dir,
+                                                   'acceptance_rates_highT.pkl')
+        }
 
-        self.distances_file = self.info_dir +  'distances.pkl'
-        self.tunneling_rates_file = self.info_dir + 'tunneling_rates.pkl'
-        self.acceptance_rates_file = self.info_dir + 'acceptance_rates.pkl'
-
-        self.distances_highT_file = (self.info_dir + 'distances_highT.pkl')
-        self.tunneling_rates_highT_file = (self.info_dir +
-                                           'tunneling_rates_highT.pkl')
-        self.acceptance_rates_highT_file = (self.info_dir +
-                                            'acceptance_rates_highT.pkl')
-
-        if os.path.isfile(self.params_file):
+        if os.path.isfile(os.path.join(self.info_dir, 'parameters.txt')):
             self._load_variables()
-
 
         self.global_step = tf.Variable(0, name='global_step', trainable=False)
         tf.add_to_collection('global_step', self.global_step)
 
         self.learning_rate = tf.train.exponential_decay(
-            self.params['lr_init'],
+            self.lr_init,
             self.global_step,
-            self.params['lr_decay_steps'],
-            self.params['lr_decay_rate'],
+            self.lr_decay_steps,
+            self.lr_decay_rate,
             staircase=True
         )
 
@@ -213,47 +194,14 @@ class GaussianMixtureModel(object):
     def _init_params(self, params):
         """Parse keys in params dictionary to be used for setting instance
         parameters."""
-        self.params = {}
-        self.params['x_dim'] = params.get('x_dim', 3)
-        #  number of Gaussian distributions to use for target distribution
-        self.params['num_distributions'] = params.get('num_distributions', 2)
-        self.params['lr_init'] = params.get('lr_init', 1e-3)
-        self.params['lr_decay_steps'] = params.get('lr_decay_steps', 1000)
-        self.params['lr_decay_rate'] = params.get('lr_decay_rate', 0.96)
-        self.params['temp_init'] = params.get('temp_init', 10)
-        self.params['annealing_steps'] = params.get('annealing_steps', 100)
-        self.params['annealing_rate'] = params.get('annealing_rate', 0.98)
-        #  Initial step size (learnable)
-        self.params['eps'] = params.get('eps', 0.1)
-        self.params['scale'] = params.get('scale', 0.1)
-        nts = params.get('num_training_steps', 2e4)
-        self.params['num_training_steps'] = nts
-        #  number of samples (minibatch size) to use for training
-        self.params['num_samples'] = params.get('num_samples', 200)
-        #  Length of trajectory to use during training 
-        ttl0 = params.get('train_trajectory_length', 10)
-        self.params['train_trajectory_length'] = ttl0
-        #  Length of trajectory to use when calculating tunneling rate info
-        ttl1 = params.get('test_trajectory_length', 2e3)
-        self.params['test_trajectory_length'] = ttl1
-        #  Standard deviation of Gaussian distributions in target distribution
-        self.params['sigma'] = params.get('sigma', 0.05)
-        #  If num_distributions < x_dim, the likelihood of drawing a sample
-        #  outside of the target distributions.
-        self.params['small_pi'] = params.get('small_pi', 2e-16)
-        self.params['logging_steps'] = params.get('logging_steps', 100)
-        #  How often tunneling rate info should be calculated
-        trs = params.get('tunneling_rate_steps', 500)
-        self.params['tunneling_rate_steps'] = trs
-        self.params['save_steps'] = params.get('save_steps', 2500)
+        for key, val in params.items():
+            setattr(self, key, val)
 
-        #  Array containing the position of the Gaussian target distributions
-        self.means = params.get('means', np.eye(self.params['x_dim']))
-        self.covs, self.distribution = self._distribution(self.params['sigma'],
+        self.covs, self.distribution = self._distribution(self.sigma,
                                                           self.means)
         # Initial samples drawn from Normal distribution
-        self.samples = np.random.randn(self.params['num_samples'],
-                                       self.params['x_dim'])
+        self.samples = np.random.randn(self.num_samples,
+                                       self.x_dim)
         self.tunneling_rates = {}
         self.acceptance_rates = {}
         self.distances = {}
@@ -263,67 +211,22 @@ class GaussianMixtureModel(object):
         self.temp_arr = []
         self.steps_arr = []
         self.losses_arr = []
-        self.temp = self.params['temp_init']
-        #  self.tunneling_rates_avg = []
-        #  self.tunneling_rates_avg_highT = []
-        #  self.tunneling_rates_err = []
-        #  self.tunneling_rates_err_highT = []
-        #  self.acceptance_rates_avg = []
-        #  self.acceptance_rates_avg_highT = []
-        #  self.acceptance_rates_err = []
-        #  self.acceptance_rates_err_highT = []
-        #  self.distances_avg = []
-        #  self.distances_avg_highT = []
-        #  self.distances_err = []
-        #  self.distances_err_highT = []
-        #  self.tunneling_info = []
-        #  self.attr_names = [
-        #      'losses_arr',
-        #      'steps_arr',
-        #      'temp_arr',
-        #      'means',
-        #      'covs',
-        #      'tunneling_rates_avg', # = [average_value, error]
-        #      'tunneling_rates_avg_highT'
-        #      'acceptance_rates_avg',
-        #      'acceptance_rates_avg_highT',
-        #      'distances_avg',
-        #      'distances_avg_highT',
-        #  ]
-        #  self.attrs_dict = {
-        #      'losses_arr': self.losses_arr,
-        #      'steps_arr': self.steps_arr,
-        #      'temp_arr': self.temp_arr,
-        #      'means': self.means,
-        #      'covs': self.covs,
-        #      'tunneling_rates_avg': self.tunneling_rates_avg,
-        #      'tunneling_rates_err': self.tunneling_rates_err,
-        #      'tunneling_rates_avg_highT': self.tunneling_rates_avg_highT,
-        #      'tunneling_rates_err_highT': self.tunneling_rates_err_highT,
-        #      'acceptance_rates_avg': self.acceptance_rates_avg,
-        #      'acceptance_rates_err': self.acceptance_rates_err,
-        #      'acceptance_rates_avg_highT': self.acceptance_rates_avg_highT,
-        #      'acceptance_rates_err_highT': self.acceptance_rates_err_highT,
-        #      'distances_avg': self.distances_avg,
-        #      'distances_avg_highT': self.distances_avg_highT,
-        #      'distances_err': self.distances_err,
-        #      'distances_err_highT': self.distances_err_highT,
-        #  }
+        self.temp = self.temp_init
 
     def _distribution(self, sigma, means):
         """Initialize distribution using utils/distributions.py"""
         means = np.array(means).astype(np.float32)
-        cov_mtx = sigma * np.eye(self.params['x_dim']).astype(np.float32)
-        covs = np.array([cov_mtx] * self.params['x_dim']).astype(np.float32)
-        dist_arr = distribution_arr(self.params['x_dim'],
-                                    self.params['num_distributions'])
+        cov_mtx = sigma * np.eye(self.x_dim).astype(np.float32)
+        covs = np.array([cov_mtx] * self.x_dim).astype(np.float32)
+        dist_arr = distribution_arr(self.x_dim,
+                                    self.num_distributions)
         distribution = GMM(means, covs, dist_arr)
         return covs, distribution
 
     def _create_dynamics(self, trajectory_length, eps, use_temperature=True):
         """ Create dynamics object using 'utils/dynamics.py'. """
         energy_function = self.distribution.get_energy_function()
-        self.dynamics = Dynamics(self.params['x_dim'],
+        self.dynamics = Dynamics(self.x_dim,
                                  energy_function,
                                  trajectory_length,
                                  eps,
@@ -335,7 +238,7 @@ class GaussianMixtureModel(object):
         training. """
         with tf.name_scope('loss'):
             self.x = tf.placeholder(tf.float32, shape=(None,
-                                                       self.params['x_dim']),
+                                                       self.x_dim),
                                     name='x')
             self.z = tf.random_normal(tf.shape(self.x), name='z')
             self.Lx, _, self.px, self.output = propose(self.x, self.dynamics,
@@ -347,14 +250,10 @@ class GaussianMixtureModel(object):
                   + 1e-4)
             v2 = ((tf.reduce_sum(tf.square(self.z - self.Lz), axis=1) * self.pz)
                   + 1e-4)
-            scale = self.params['scale']
+            scale = self.scale
 
-            #  tf.assign_add(self.loss, (scale * (tf.reduce_mean(1.0 / v1)
-            #                                     + tf.reduce_mean(1.0 / v2))))
-            #  tf.assign_add(self.loss, (- tf.reduce_mean(v1, name='v1')
-            #                            - tf.reduce_mean(v1, name='v2')) / scale)
-            self.loss = self.loss + scale * (tf.reduce_mean(1.0 / v1) +
-                                             tf.reduce_mean(1.0 / v2))
+            self.loss = self.loss + scale * (tf.reduce_mean(1.0 / v1)
+                                             + tf.reduce_mean(1.0 / v2))
             self.loss = self.loss + ((- tf.reduce_mean(v1, name='v1')
                                       - tf.reduce_mean(v2, name='v2')) / scale)
 
@@ -377,9 +276,16 @@ class GaussianMixtureModel(object):
     def _create_params_file(self):
         """Write relevant parameters to .txt file for reference."""
         params_txt_file = self.info_dir + 'parameters.txt'
+        bad_keys = ['global_step', 'learning_rate', 'dynamics',
+                    'x', 'z', 'Lx', 'px', 'Lz', 'pz', 'loss',
+                    'output', 'train_op', 'summary_op', 'sess']
         with open(params_txt_file, 'w') as f:
-            for key, value in self.params.items():
-                f.write(f'\n{key}: {value}\n')
+            #  for key, value in self.params.items():
+            for key, val in self.__dict__.items():
+                b1 = not isinstance(val, (dict, list, np.ndarray, tf.Variable))
+                b2 = key not in bad_keys
+                if b1 and b2:
+                    f.write(f'\n{key}: {val}\n')
             f.write(f"\nmeans:\n\n {str(self.means)}\n"
                     f"\ncovs:\n\n {str(self.covs)}\n")
         print(f'params file written to: {params_txt_file}')
@@ -387,92 +293,43 @@ class GaussianMixtureModel(object):
     def _save_variables(self):
         """Save current values of variables."""
         print(f"Saving parameter values to: {self.info_dir}")
-        with open(self.params_file, 'wb') as f:
-            pickle.dump(self.params, f)
-
-        with open(self.tunneling_rates_file, 'wb') as f:
-            pickle.dump(self.tunneling_rates, f)
-
-        with open(self.tunneling_rates_highT_file, 'wb') as f:
-            pickle.dump(self.tunneling_rates_highT, f)
-
-        with open(self.acceptance_rates_file, 'wb') as f:
-            pickle.dump(self.acceptance_rates, f)
-
-        with open(self.acceptance_rates_highT_file, 'wb') as f:
-            pickle.dump(self.acceptance_rates_highT, f)
-
-        with open(self.distances_file, 'wb') as f:
-            pickle.dump(self.distances, f)
-
-        with open(self.distances_highT_file, 'wb') as f:
-            pickle.dump(self.distances_highT, f)
-
-        #  for key, val in self.attrs_dict.items():
-        #      out_file = self.info_dir + key
-        #      np.save(out_file, np.array(val))
+        for name, file in self.files.items():
+            with open(file, 'wb') as f:
+                pickle.dump(getattr(self, name), f)
+        np.save(self.info_dir + 'temp_arr.npy', np.array(self.temp_arr))
+        np.save(self.info_dir + 'steps_arr.npy', np.array(self.steps_arr))
+        np.save(self.info_dir + 'losses_arr.npy', np.array(self.losses_arr))
+        np.save(self.info_dir + 'covs_arr.npy', np.array(self.covs))
 
     def _load_variables(self):
         """Load variables from previously ran experiment."""
         print(f'Loading from previous parameters in from: {self.info_dir}')
-
-        #  self.params = {}
-        with open(self.params_file, 'rb') as f:
-            self.params = pickle.load(f)
-        #  for key, val in params.items():
-        #      self.params[key] = val
-
-        with open(self.tunneling_rates_file, 'rb') as f:
-            self.tunneling_rates = pickle.load(f)
-
-        with open(self.tunneling_rates_highT_file, 'rb') as f:
-            self.tunneling_rates_highT = pickle.load(f)
-
-        with open(self.acceptance_rates_file, 'rb') as f:
-            self.acceptance_rates = pickle.load(f)
-
-        with open(self.acceptance_rates_highT_file, 'rb') as f:
-            self.acceptance_rates_highT = pickle.load(f)
-
-        with open(self.distances_file, 'rb') as f:
-            self.distances = pickle.load(f)
-
-        with open(self.distances_highT_file, 'rb') as f:
-            self.distances_highT = pickle.load(f)
-
-        #  for key, val in self.attrs_dict.items():
-        #      in_file = self.info_dir + key + '.npy'
-        #      if key not in ['means', 'covariances']:
-        #          val = list(np.load(in_file))
-        #          #  setattr(self, key, list(np.load(in_file)))
-        #      else:
-        #          val = np.load(in_file)
-        #          #  setattr(self, key, np.load(in_file))
-
-        #  if len(self.temp_arr) == 0:
-        #      import pdb
-        #      pdb.set_trace()
-        #  else:
-        #      self.temp = self.temp_arr[-1]
+        for name, file in self.files.items():
+            with open(file, 'rb') as f:
+                setattr(self, name, pickle.load(f))
+        self.covs = np.load(self.info_dir + 'covs_arr.npy')
+        self.temp_arr = list(np.load(self.info_dir + 'temp_arr.npy'))
+        self.steps_arr = list(np.load(self.info_dir + 'steps_arr.npy'))
+        self.losses_arr = list(np.load(self.info_dir + 'losses_arr.npy'))
+        self.temp = self.temp_arr[-1]
 
     def build_graph(self):
         """Build the graph for our model."""
-        self._create_dynamics(self.params['train_trajectory_length'],
-                              self.params['eps'],
+        self._create_dynamics(self.train_trajectory_length,
+                              self.eps,
                               use_temperature=True)
         self._create_loss()
         self._create_optimizer()
         self._create_summaries()
         self._create_params_file()
 
-
     def generate_trajectories(self, temp=1., num_samples=None, num_steps=None):
         """ Generate trajectories using current values from L2HMC update
         method.  """
         if num_samples is None:
-            num_samples = self.params['num_samples']
+            num_samples = self.num_samples
         if num_steps is None:
-            num_steps = self.params['test_trajectory_length']
+            num_steps = self.test_trajectory_length
         _samples = self.distribution.get_samples(num_samples)
         _trajectories = []
         _loss_arr = []
@@ -481,7 +338,7 @@ class GaussianMixtureModel(object):
         for step in range(num_steps):
             _trajectories.append(np.copy(_samples))
             _feed_dict = {self.x: _samples,
-                          self.dynamics.temperature: temp,}
+                          self.dynamics.temperature: temp}
             _loss, _samples, _px = self.sess.run([
                 self.loss,
                 self.output[0],
@@ -491,42 +348,12 @@ class GaussianMixtureModel(object):
             _px_arr.append(np.copy(_px))
         return np.array(_trajectories), np.array(_loss_arr), np.array(_px_arr)
 
-    def _calc_distances(self, trajectories):
-        """Caclulate the (Euclidean) distance traveled for each
-        trajectory.
-
-        Args:
-            trajectories (array-like):
-                Array containing self.params['num_samples'] unique
-                trajectories, where each trajectory is
-                self.params['test_trajectory_length'] steps long.
-        Returns:
-            distances_arr (np.ndarray):
-                Array containing the total distance traveled during each
-                trajectory in trajectories.
-        """
-        distances_arr = []
-        for trajectory in trajectories:
-            diffs = trajectory[:-1, :] - trajectory[1:, :]
-            distance = sum([np.sqrt(np.dot(d, d.T)) for d in diffs])
-            # normalize to calculate distance / step
-            distances_arr.append(distance / len(trajectory))
-        return np.array(distances_arr)
-
-    def calc_avg_distances(self, trajectories):
-        """Calculate average (Euclidean) distance traveled by each trajectory
-        (with errors) using block jackknife resampling from
-        self.calc_avg_vals_errors method. """
-        distances = self._calc_distances(trajectories)
-        distances_avg_err = self.calc_avg_vals_errors(distances)
-        return distances_avg_err
-
     def calc_tunneling_rates(self, trajectories):
         """Calculate tunneling rates from trajectories."""
         tunneling_rates = []
         for i in range(trajectories.shape[1]):
-            rate = find_tunneling_events(trajectories[:, i, :], self.means,
-                                         self.params['num_distributions'])
+            rate = calc_tunneling_rate(trajectories[:, i, :], self.means,
+                                         self.num_distributions)
             tunneling_rates.append(rate)
         return tunneling_rates
 
@@ -544,57 +371,70 @@ class GaussianMixtureModel(object):
                 tunn_avg_err[0] contains average tunneling rate
                 tunn_avg_err[1] contains average tunneling rate error.
         """
-        if 1 < self.temp < 2:
-            new_tunneling_rate = tunn_avg_err[0]
-            prev_tunneling_rate = 0
-            if len(self.tunneling_rates_avg) > 1:
-                prev_tunneling_rate = self.tunneling_rates_avg[-2]
+        pass
+        #  if 1 < self.temp < 2:
+        #      new_tunneling_rate = tunn_avg_err[0]
+        #      prev_tunneling_rate = 0
+        #      if len(self.tunneling_rates_avg) > 1:
+        #          prev_tunneling_rate = self.tunneling_rates_avg[-2]
+        #
+        #      tunneling_rate_diff = (new_tunneling_rate
+        #                             - prev_tunneling_rate
+        #                             + 2 * tunn_avg_err[1])
+        #
+        #      #  if the tunneling rate decreased since the last
+        #      #  time it was calculated, restart the temperature
+        #      if tunneling_rate_diff < 0:
+        #          # the following will revert self.temp to a
+        #          # value slightly smaller than the value it had
+        #          # previously the last time the tunneling rate
+        #          # was calculated
+        #          print("\n\tTunneling rate decreased!")
+        #          print("\tNew tunneling rate:"
+        #                f" {new_tunneling_rate:.3g}, "
+        #                "Previous tunneling_rate:"
+        #                f" {prev_tunneling_rate:.3g}, "
+        #                f"diff: {tunneling_rate_diff:.3g}\n")
+        #          print("\tResetting temperature...")
+        #          if len(self.temp_arr) > 1:
+        #              prev_temp = self.temp_arr[-2]
+        #              new_temp = (prev_temp *
+        #                          self.params['annealing_rate'])
+        #              print(f"\tCurrent temp: {self.temp:.3g}, "
+        #                    f"\t Previous temp: {prev_temp:.3g}, "
+        #                    f"\t New temp: {new_temp:.3g}\n")
+        #              self.temp = new_temp
+        #              self.temp_arr[-1] = self.temp
 
-            tunneling_rate_diff = (new_tunneling_rate
-                                   - prev_tunneling_rate
-                                   + 2 * tunn_avg_err[1])
-
-            #  if the tunneling rate decreased since the last
-            #  time it was calculated, restart the temperature 
-            if tunneling_rate_diff < 0:
-                # the following will revert self.temp to a
-                # value slightly smaller than the value it had
-                # previously the last time the tunneling rate
-                # was calculated
-                print("\n\tTunneling rate decreased!")
-                print("\tNew tunneling rate:"
-                      f" {new_tunneling_rate:.3g}, "
-                      "Previous tunneling_rate:"
-                      f" {prev_tunneling_rate:.3g}, "
-                      f"diff: {tunneling_rate_diff:.3g}\n")
-                print("\tResetting temperature...")
-                if len(self.temp_arr) > 1:
-                    prev_temp = self.temp_arr[-2]
-                    new_temp = (prev_temp *
-                                self.params['annealing_rate'])
-                    print(f"\tCurrent temp: {self.temp:.3g}, "
-                          f"\t Previous temp: {prev_temp:.3g}, "
-                          f"\t New temp: {new_temp:.3g}\n")
-                    self.temp = new_temp
-                    self.temp_arr[-1] = self.temp
-
-    def _calc_tunneling_info(self, trajectory_stats):
+    def _calc_tunneling_info(self, trajectory_data):
         """Calculate average tunneling rate and error by generating
         trajectories at a temperature of 1.
 
         Args:
-            temp_refresh (boolean):
-                Whether or not to implement the temperature
-                refresher. (experimental)
+            trajectory_data (list): 
+                trajectory_data[0] = Array of trajectories, 
+                    shape = [trajectory_length, 
+                             number of unique trajectories, 
+                             x_dim]
+                trajectory_data[1] = Loss array, the loss from each trajectory.
+                trajectory_data[3] = Acceptancea rray, the acceptance rates
+                    from each trajectory.
+        Returns:
+            tunn_avg_err (np.ndarray):
+                Array containing the tunneling rate averages and their
+                respective errors.
+            accept_avg_err (np.ndarray):
+                Array containing the acceptance rate averages and their
+                respective errors.
         """
-        # trajectories are contained in trajectory_stats[0]
-        tunneling_rates = self.calc_tunneling_rates(trajectory_stats[0])
+        # trajectories are contained in trajectory_data[0]
+        tunneling_rates = self.calc_tunneling_rates(trajectory_data[0])
         #  Calculate the average value and error of tunneling rates 
-        tunn_avg_err = self.calc_avg_vals_errors(tunneling_rates)
+        tunn_avg_err = calc_avg_vals_errors(tunneling_rates)
         # not sure if this is needed
-        loss_arr = trajectory_stats[1]
-        # acceptance rates are contained in trajectory_stats[2]
-        accept_avg_err = self.calc_avg_vals_errors(trajectory_stats[2])
+        loss_arr = trajectory_data[1]
+        # acceptance rates are contained in trajectory_data[2]
+        accept_avg_err = calc_avg_vals_errors(trajectory_data[2])
 
         return tunn_avg_err, accept_avg_err
 
@@ -637,15 +477,12 @@ class GaussianMixtureModel(object):
                 Temperature
 
         """
-        print(f"\n\tTEMP: {temp:.3g}, "
-              f"Step: {self.steps_arr[-1]}, "
-              f"Loss (avg): {np.mean(losses):.4g}, \n"
-              f"\tAccept rate (avg): {ar_info[0]:.4g}, "
-              f"Accept rate (err): {ar_info[1]:.4g}, \n"
-              f"\tTunneling rate (avg): {tr_info[0]:.4g}, "
-              f"Tunneling rate (err): {tr_info[1]:.4g},\n"
-              f"\tDistance traversed (avg): {dist_info[0]:.4g}, "
-              f"Distance traversed (err): {dist_info[1]:.4g}\n")
+        print(f"\n\tStep: {self.steps_arr[-1]}, "
+              f"temp: {temp:.3g}, "
+              f"Loss: {np.mean(losses):.4g} \n"
+              f"\tAccept rate: {ar_info[0]:.4g} +/- {ar_info[1]:.4g}\n"
+              f"\tTunneling rate: {tr_info[0]:.4g} +/- {tr_info[1]:.4g}\n"
+              f"\tDistance: {dist_info[0]:.4g} +/- {dist_info[1]:.4g}")
 
     def _generate_plots(self, step):
         """ Plot tunneling rate, acceptance_rate vs. training step for both
@@ -669,7 +506,7 @@ class GaussianMixtureModel(object):
         x_steps = [self.steps_arr, self.steps_arr, self.steps_arr]
         x_temps = [self.temp_arr, self.temp_arr, self.temp_arr]
 
-        get_vals_as_arr = lambda _dict: np.array(list(_dict.values()))
+        def get_vals_as_arr(_dict): return np.array(list(_dict.values()))
 
         tr_arr = get_vals_as_arr(self.tunneling_rates)
         ar_arr = get_vals_as_arr(self.acceptance_rates)
@@ -690,27 +527,11 @@ class GaussianMixtureModel(object):
                        ar_arr_highT[:, 1],
                        dist_arr_highT[:, 1]]
 
-
-        #  y_data = [self.tunneling_rates_avg,
-        #            self.acceptance_rates_avg,
-        #            self.distances_avg]
-
-        #  y_err = [self.tunneling_rates_err,
-        #           self.acceptance_rates_err,
-        #           self.distances_err]
-
-        #  y_data_highT = [self.tunneling_rates_avg_highT,
-        #                  self.acceptance_rates_avg_highT,
-        #                  self.distances_avg_highT]
-        #  y_err_highT = [self.tunneling_rates_err_highT,
-        #                 self.acceptance_rates_err_highT,
-        #                 self.distances_err_highT]
-
-        str0 = (f"{self.params['num_distributions']}"
-                + f" in {self.params['x_dim']} dims; ")
+        str0 = (f"{self.num_distributions}"
+                + f" in {self.x_dim} dims; ")
         str1 = (r'$\mathcal{N}_{\hat \mu}(\sqrt{2}\hat \mu;$'
-                + r'${{{0}}}),$'.format(self.params['sigma']))
-        prefix = str0 + str1
+                + r'${{{0}}}),$'.format(self.sigma))
+        #  prefix = str0 + str1
         title = str0 + str1 + r'$T_{trajectory} = 1$'
         title_highT = str0 + str1 + r'$T_{trajectory} > 1$'
         kwargs = {
@@ -724,7 +545,9 @@ class GaussianMixtureModel(object):
             'reverse_x': False,
             'plt_stle': 'ggplot'
         }
-        out_file = lambda file, step: self.figs_dir + f'{file}_{step+1}.pdf'
+
+        def out_file(f, s): return self.figs_dir + f'{f}_{s+1}.pdf'
+        #  out_file = lambda file, step: self.figs_dir + f'{file}_{step+1}.pdf'
         out_file0 = out_file('tr_ar_dist_steps_lowT', step)
         out_file1 = out_file('tr_ar_dist_steps_highT', step)
         out_file2 = out_file('tr_ar_dist_temps_lowT', step)
@@ -751,6 +574,14 @@ class GaussianMixtureModel(object):
                       out_file=out_file3, **kwargs)
         plt.close('all')
 
+    def _save_model(self, saver, writer, step):
+        """Save tensorflow model with graph and all quantities of interest."""
+        self._save_variables()
+        ckpt_file = os.path.join(self.log_dir, 'model.ckpt')
+        print(f'Saving checkpoint to: {ckpt_file}\n')
+        saver.save(self.sess, ckpt_file, global_step=step)
+        writer.flush()
+
     def train(self, num_train_steps, plot=True):
         """Train the model."""
         saver = tf.train.Saver(max_to_keep=3)
@@ -769,6 +600,7 @@ class GaussianMixtureModel(object):
         t0 = time.time()
         try:
             for step in range(initial_step, initial_step + num_train_steps):
+                t00 = time.time()
                 feed_dict = {self.x: self.samples,
                              self.dynamics.temperature: self.temp}
 
@@ -784,7 +616,10 @@ class GaussianMixtureModel(object):
                 self.losses_arr.append(loss_)
                 eps = self.sess.run(self.dynamics.eps)
 
-                if step % self.params['logging_steps'] == 0:
+                if (step + 1) % self.save_steps == 0:
+                    self._save_model(saver, writer, step)
+
+                if step % self.logging_steps == 0:
                     summary_str = self.sess.run(self.summary_op,
                                            feed_dict=feed_dict)
                     writer.add_summary(summary_str, global_step=step)
@@ -795,27 +630,27 @@ class GaussianMixtureModel(object):
                           f"accept rate: {np.mean(px_):.2g}, "
                           f"LR: {lr_:.3g}, "
                           f"temp: {self.temp:.5g}, "
-                          f"step size: {eps:.3g}\n")
+                          f"step size: {eps:.3g}")
 
-                if step % self.params['annealing_steps'] == 0:
-                    tt = self.temp * self.params['annealing_rate']
-                    if tt > 1.:
-                        self.temp = tt
+                if step % self.annealing_steps == 0:
+                    temp_ = self.temp * self.annealing_rate
+                    if temp_ > 1.:
+                        self.temp = temp_
 
-                if (step + 1) % self.params['tunneling_rate_steps'] == 0:
+                if (step + 1) % self.tunneling_rate_steps == 0:
                     t1 = time.time()
                     self.temp_arr.append(self.temp)
                     self.steps_arr.append(step + 1)
 
-                    ns = self.params['num_samples']
-                    ttl = self.params['test_trajectory_length']
+                    ns = self.num_samples
+                    ttl = self.test_trajectory_length
 
-                    # ts0 = trajectory_stats0
-                    # ts0[0] = trajectories, of shape [ttl, ns, x_dim]
-                    # ts0[1] = loss_arr, the loss from each trajectory
-                    # ts0[3] = acceptance_arr, the acceptance rate from each
+                    # td0 = trajectory_data
+                    # td0[0] = trajectories, of shape [ttl, ns, x_dim]
+                    # td0[1] = loss_arr, the loss from each trajectory
+                    # td0[3] = acceptance_arr, the acceptance rate from each
                     #          trajectory
-                    ts0 = self.generate_trajectories(temp=1.,
+                    td0 = self.generate_trajectories(temp=1.,
                                                      num_samples=ns,
                                                      num_steps=ttl)
                     # tr0 = tunneling_rates0
@@ -824,116 +659,89 @@ class GaussianMixtureModel(object):
                     # ar0 = acceptance_rates1
                     # ar0[0] = average acceptance rate from ar1
                     # ar0[1] = average acceptance rate error from ar1
-                    tr0, ar0 = self._calc_tunneling_info(ts0)
+                    tr0, ar0 = self._calc_tunneling_info(td0)
 
                     # ad0 = average distances0
                     # ad0[0] = average distance traveled over all trajectories
                     # ad0[1] = error in average distance 
                     # NOTE: we swap axes 0 and 1 of the trajectories to reshape
                     # them as [num_samples, num_steps, x_dim]
-                    ad0 = self.calc_avg_distances(ts0[0].transpose([1, 0, 2]))
+                    ad0 = calc_avg_distances(td0[0].transpose([1, 0, 2]))
 
-                    self._print_tunneling_info(tr0, ar0, ad0, ts0[1], temp=1.)
+                    self._print_tunneling_info(tr0, ar0, ad0, td0[1], temp=1.)
 
-                    # ts1 = trajectory_stats1, elements are the same as ts0
-                    ts1 = self.generate_trajectories(temp=self.temp,
+                    # td1 = trajectory_data1, elements are the same as td0
+                    td1 = self.generate_trajectories(temp=self.temp,
                                                      num_samples=ns,
                                                      num_steps=ttl)
                     # tr1 = tunneling_rates1, same elements as tr0
                     # ar0 = acceptance_rates0, same elements as ar0
-                    tr1, ar1 = self._calc_tunneling_info(ts1)
+                    tr1, ar1 = self._calc_tunneling_info(td1)
 
                     # ad1 = average distances1, same elements as ad0
-                    ad1 = self.calc_avg_distances(ts1[0].transpose([1, 0, 2]))
+                    ad1 = calc_avg_distances(td1[0].transpose([1, 0, 2]))
 
-                    self._print_tunneling_info(tr1, ar1, ad1, ts1[1],
+                    self._print_tunneling_info(tr1, ar1, ad1, td1[1],
                                                temp=self.temp)
-
 
                     self.tunneling_rates[(step, 1.)] = tr0
                     self.acceptance_rates[(step, 1.)] = ar0
                     self.distances[(step, 1.)] = ad0
-
-                    #  self.tunneling_rates_avg.append(tr0[0])
-                    #  self.tunneling_rates_err.append(tr0[1])
-
-                    #  self.acceptance_rates_avg.append(ar0[0])
-                    #  self.acceptance_rates_err.append(ar0[1])
-
-                    #  self.distances_avg.append(ad0[0])
-                    #  self.distances_err.append(ad0[1])
 
                     temp_key = round(self.temp, 3)
                     self.tunneling_rates_highT[(step, temp_key)] = tr1
                     self.acceptance_rates_highT[(step, temp_key)] = ar1
                     self.distances_highT[(step, temp_key)] = ad1
 
-                    #  self.tunneling_rates_avg_highT.append(tr1[0])
-                    #  self.tunneling_rates_err_highT.append(tr1[1])
-
-                    #  self.acceptance_rates_avg_highT.append(ar1[0])
-                    #  self.acceptance_rates_err_highT.append(ar1[1])
-
-                    #  self.distances_avg_highT.append(ad1[0])
-                    #  self.distances_err_highT.append(ad1[1])
-
-                    #  self._calc_tunneling_info(sess, step, temp=1.,
-                    #                            temp_refresh=True)
                     self._print_time_info(t0, t1, step)
                     self._save_variables()
+                    print('\n')
+                    self._save_model(saver, writer, step)
                     if plot:
                         self._generate_plots(step)
-
-
-                if (step + 1) % self.params['save_steps'] == 0:
-                    self._save_variables()
-                    ckpt_file = os.path.join(self.log_dir, 'model.ckpt')
-                    print(f'Saving checkpoint to: {ckpt_file}\n')
-                    saver.save(self.sess, ckpt_file, global_step=step)
+                        print('\n')
 
             writer.close()
 
         except (KeyboardInterrupt, SystemExit):
-            print("KeyboardInterrupt detected, saving current state and"
-                  " exiting. ")
+            print("\nKeyboardInterrupt detected! \n"
+                  + "Saving current state and exiting.\n")
             #  self.plot_tunneling_rates()
             self._save_variables()
-            ckpt_file = os.path.join(self.log_dir, 'model.ckpt')
-            print(f'Saving checkpoint to: {ckpt_file}\n')
-            saver.save(self.sess, ckpt_file, global_step=step)
-            writer.flush()
+            self._save_model(saver, writer, step)
             writer.close()
 
 
 def main(args):
     """Main method for running from command-line."""
-    X_DIM = args.dimension
-    NUM_DISTRIBUTIONS = args.num_distributions
+    x_dim = args.dimension
+    num_distributions = args.num_distributions
 
-    MEANS = np.zeros((X_DIM, X_DIM), dtype=np.float32)
-    CENTERS = np.sqrt(2)  # center of Gaussian
-    for i in range(NUM_DISTRIBUTIONS):
-        MEANS[i::NUM_DISTRIBUTIONS, i] = CENTERS
+    means = np.zeros((x_dim, x_dim), dtype=np.float32)
+    centers = np.sqrt(2)  # center of Gaussian
+    for i in range(num_distributions):
+        means[i::num_distributions, i] = centers
 
 
     params = {                          # default parameter values
-        'x_dim': X_DIM,
-        'num_distributions': NUM_DISTRIBUTIONS,
-        'lr_init': 1e-3,
-        'temp_init': 20,
-        'annealing_rate': 0.98,
+        'x_dim': x_dim,
+        'num_distributions': num_distributions,
         'eps': 0.1,
         'scale': 0.1,
         'num_samples': 200,
-        'train_trajectory_length': 10,
-        'test_trajectory_length': 2000,
-        'means': MEANS,
+        'means': means,
         'sigma': 0.05,
         'small_pi': 2E-16,
-        'num_training_steps': 20000,
+        'lr_init': 1e-3,
+        'temp_init': 20,
         'annealing_steps': 200,
+        'annealing_rate': 0.98,
+        'train_trajectory_length': 10,
+        'test_trajectory_length': 2000,
+        'num_training_steps': 20000,
         'tunneling_rate_steps': 500,
         'lr_decay_steps': 1000,
+        'lr_decay_rate': 0.96,
         'save_steps': 2500,
         'logging_steps': 100
     }
@@ -960,7 +768,6 @@ def main(args):
         params['tunneling_rate_steps'] = args.tunneling_rate_steps
     if args.make_plots:
         plot = args.make_plots
-        print(f'plot value: {plot}')
 
     config = tf.ConfigProto()
     config.gpu_options.allow_growth = True
@@ -984,7 +791,7 @@ if __name__ == '__main__':
                         help="Dimensionality of distribution space.")
 
     parser.add_argument("-N", "--num_distributions", type=int, required=True,
-                        help="Number of distributions to include for GMM model.")
+                        help="Number of target distributions for GMM model.")
 
     parser.add_argument("-n", "--num_steps", default=10000, type=int,
                         required=True, help="Define the number of training "
@@ -1026,7 +833,6 @@ if __name__ == '__main__':
     parser.add_argument('--make_plots', default=True, required=False,
                         help="Whether or not to create plots during training."
                         " (Default: True)")
-
 
     parser.add_argument("--log_dir", type=str, required=False,
                         help="Define the log dir to use if restoring from"
@@ -1105,3 +911,42 @@ if __name__ == '__main__':
 #  fig.savefig(out_file, dpi=400, bbox_inches='tight')
 #  plt.close('all')
 #  return fig, ax
+
+
+
+#  self.params = {}
+#  self.params['x_dim'] = params.get('x_dim', 3)
+#  #  number of Gaussian distributions to use for target distribution
+#  self.params['num_distributions'] = params.get('num_distributions', 2)
+#  self.params['lr_init'] = params.get('lr_init', 1e-3)
+#  self.params['lr_decay_steps'] = params.get('lr_decay_steps', 1000)
+#  self.params['lr_decay_rate'] = params.get('lr_decay_rate', 0.96)
+#  self.params['temp_init'] = params.get('temp_init', 10)
+#  self.params['annealing_steps'] = params.get('annealing_steps', 100)
+#  self.params['annealing_rate'] = params.get('annealing_rate', 0.98)
+#  #  Initial step size (learnable)
+#  self.params['eps'] = params.get('eps', 0.1)
+#  self.params['scale'] = params.get('scale', 0.1)
+#  nts = params.get('num_training_steps', 2e4)
+#  self.params['num_training_steps'] = nts
+#  #  number of samples (minibatch size) to use for training
+#  self.params['num_samples'] = params.get('num_samples', 200)
+#  #  Length of trajectory to use during training
+#  ttl0 = params.get('train_trajectory_length', 10)
+#  self.params['train_trajectory_length'] = ttl0
+#  #  Length of trajectory to use when calculating tunneling rate info
+#  ttl1 = params.get('test_trajectory_length', 2e3)
+#  self.params['test_trajectory_length'] = ttl1
+#  #  Standard deviation of Gaussian distributions in target distribution
+#  self.params['sigma'] = params.get('sigma', 0.05)
+#  #  If num_distributions < x_dim, the likelihood of drawing a sample
+#  #  outside of the target distributions.
+#  self.params['small_pi'] = params.get('small_pi', 2e-16)
+#  self.params['logging_steps'] = params.get('logging_steps', 100)
+#  #  How often tunneling rate info should be calculated
+#  trs = params.get('tunneling_rate_steps', 500)
+#  self.params['tunneling_rate_steps'] = trs
+#  self.params['save_steps'] = params.get('save_steps', 2500)
+#
+#  #  Array containing the position of the Gaussian target distributions
+#  self.means = params.get('means', np.eye(self.params['x_dim']))
