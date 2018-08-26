@@ -213,6 +213,18 @@ class GaussianMixtureModel(object):
         self.losses_arr = []
         self.temp = self.temp_init
 
+    def _load_variables(self):
+        """Load variables from previously ran experiment."""
+        print(f'Loading from previous parameters in from: {self.info_dir}')
+        for name, file in self.files.items():
+            with open(file, 'rb') as f:
+                setattr(self, name, pickle.load(f))
+        self.covs = np.load(self.info_dir + 'covs_arr.npy')
+        self.temp_arr = list(np.load(self.info_dir + 'temp_arr.npy'))
+        self.steps_arr = list(np.load(self.info_dir + 'steps_arr.npy'))
+        self.losses_arr = list(np.load(self.info_dir + 'losses_arr.npy'))
+        self.temp = self.temp_arr[-1]
+
     def _distribution(self, sigma, means):
         """Initialize distribution using utils/distributions.py"""
         means = np.array(means).astype(np.float32)
@@ -290,28 +302,12 @@ class GaussianMixtureModel(object):
                     f"\ncovs:\n\n {str(self.covs)}\n")
         print(f'params file written to: {params_txt_file}')
 
-    def _save_variables(self):
-        """Save current values of variables."""
-        print(f"Saving parameter values to: {self.info_dir}")
-        for name, file in self.files.items():
-            with open(file, 'wb') as f:
-                pickle.dump(getattr(self, name), f)
-        np.save(self.info_dir + 'temp_arr.npy', np.array(self.temp_arr))
-        np.save(self.info_dir + 'steps_arr.npy', np.array(self.steps_arr))
-        np.save(self.info_dir + 'losses_arr.npy', np.array(self.losses_arr))
-        np.save(self.info_dir + 'covs_arr.npy', np.array(self.covs))
-
-    def _load_variables(self):
-        """Load variables from previously ran experiment."""
-        print(f'Loading from previous parameters in from: {self.info_dir}')
-        for name, file in self.files.items():
-            with open(file, 'rb') as f:
-                setattr(self, name, pickle.load(f))
-        self.covs = np.load(self.info_dir + 'covs_arr.npy')
-        self.temp_arr = list(np.load(self.info_dir + 'temp_arr.npy'))
-        self.steps_arr = list(np.load(self.info_dir + 'steps_arr.npy'))
-        self.losses_arr = list(np.load(self.info_dir + 'losses_arr.npy'))
-        self.temp = self.temp_arr[-1]
+    def _update_trajectory_length(self, temp):
+        """Update the trajectory length to be roughly equal to half the period
+        of evolution. """
+        new_trajectory_length = 3 * np.sqrt(self.sigma * temp)
+        self.train_trajectory_length = new_trajectory_length
+        self.dynamics.T = new_trajectory_length
 
     def build_graph(self):
         """Build the graph for our model."""
@@ -348,7 +344,7 @@ class GaussianMixtureModel(object):
             _px_arr.append(np.copy(_px))
         return np.array(_trajectories), np.array(_loss_arr), np.array(_px_arr)
 
-    def calc_tunneling_rates(self, trajectories):
+    def _calc_tunneling_rates(self, trajectories):
         """Calculate tunneling rates from trajectories."""
         tunneling_rates = []
         for i in range(trajectories.shape[1]):
@@ -372,39 +368,6 @@ class GaussianMixtureModel(object):
                 tunn_avg_err[1] contains average tunneling rate error.
         """
         pass
-        #  if 1 < self.temp < 2:
-        #      new_tunneling_rate = tunn_avg_err[0]
-        #      prev_tunneling_rate = 0
-        #      if len(self.tunneling_rates_avg) > 1:
-        #          prev_tunneling_rate = self.tunneling_rates_avg[-2]
-        #
-        #      tunneling_rate_diff = (new_tunneling_rate
-        #                             - prev_tunneling_rate
-        #                             + 2 * tunn_avg_err[1])
-        #
-        #      #  if the tunneling rate decreased since the last
-        #      #  time it was calculated, restart the temperature
-        #      if tunneling_rate_diff < 0:
-        #          # the following will revert self.temp to a
-        #          # value slightly smaller than the value it had
-        #          # previously the last time the tunneling rate
-        #          # was calculated
-        #          print("\n\tTunneling rate decreased!")
-        #          print("\tNew tunneling rate:"
-        #                f" {new_tunneling_rate:.3g}, "
-        #                "Previous tunneling_rate:"
-        #                f" {prev_tunneling_rate:.3g}, "
-        #                f"diff: {tunneling_rate_diff:.3g}\n")
-        #          print("\tResetting temperature...")
-        #          if len(self.temp_arr) > 1:
-        #              prev_temp = self.temp_arr[-2]
-        #              new_temp = (prev_temp *
-        #                          self.params['annealing_rate'])
-        #              print(f"\tCurrent temp: {self.temp:.3g}, "
-        #                    f"\t Previous temp: {prev_temp:.3g}, "
-        #                    f"\t New temp: {new_temp:.3g}\n")
-        #              self.temp = new_temp
-        #              self.temp_arr[-1] = self.temp
 
     def _calc_tunneling_info(self, trajectory_data):
         """Calculate average tunneling rate and error by generating
@@ -428,7 +391,7 @@ class GaussianMixtureModel(object):
                 respective errors.
         """
         # trajectories are contained in trajectory_data[0]
-        tunneling_rates = self.calc_tunneling_rates(trajectory_data[0])
+        tunneling_rates = self._calc_tunneling_rates(trajectory_data[0])
         #  Calculate the average value and error of tunneling rates 
         tunn_avg_err = calc_avg_vals_errors(tunneling_rates)
         # not sure if this is needed
@@ -574,6 +537,17 @@ class GaussianMixtureModel(object):
                       out_file=out_file3, **kwargs)
         plt.close('all')
 
+    def _save_variables(self):
+        """Save current values of variables."""
+        print(f"Saving parameter values to: {self.info_dir}")
+        for name, file in self.files.items():
+            with open(file, 'wb') as f:
+                pickle.dump(getattr(self, name), f)
+        np.save(self.info_dir + 'temp_arr.npy', np.array(self.temp_arr))
+        np.save(self.info_dir + 'steps_arr.npy', np.array(self.steps_arr))
+        np.save(self.info_dir + 'losses_arr.npy', np.array(self.losses_arr))
+        np.save(self.info_dir + 'covs_arr.npy', np.array(self.covs))
+
     def _save_model(self, saver, writer, step):
         """Save tensorflow model with graph and all quantities of interest."""
         self._save_variables()
@@ -619,6 +593,12 @@ class GaussianMixtureModel(object):
                 if (step + 1) % self.save_steps == 0:
                     self._save_model(saver, writer, step)
 
+                if step % self.annealing_steps == 0:
+                    temp_ = self.temp * self.annealing_rate
+                    if temp_ > 1.:
+                        self.temp = temp_
+                        self._update_trajectory_length(temp_)
+
                 if step % self.logging_steps == 0:
                     summary_str = self.sess.run(self.summary_op,
                                            feed_dict=feed_dict)
@@ -632,10 +612,6 @@ class GaussianMixtureModel(object):
                           f"temp: {self.temp:.5g}, "
                           f"step size: {eps:.3g}")
 
-                if step % self.annealing_steps == 0:
-                    temp_ = self.temp * self.annealing_rate
-                    if temp_ > 1.:
-                        self.temp = temp_
 
                 if (step + 1) % self.tunneling_rate_steps == 0:
                     t1 = time.time()
@@ -721,7 +697,6 @@ def main(args):
     centers = np.sqrt(2)  # center of Gaussian
     for i in range(num_distributions):
         means[i::num_distributions, i] = centers
-
 
     params = {                          # default parameter values
         'x_dim': x_dim,
@@ -950,3 +925,40 @@ if __name__ == '__main__':
 #
 #  #  Array containing the position of the Gaussian target distributions
 #  self.means = params.get('means', np.eye(self.params['x_dim']))
+
+
+
+## TEMP REFRESH CODE
+#  if 1 < self.temp < 2:
+#      new_tunneling_rate = tunn_avg_err[0]
+#      prev_tunneling_rate = 0
+#      if len(self.tunneling_rates_avg) > 1:
+#          prev_tunneling_rate = self.tunneling_rates_avg[-2]
+#
+#      tunneling_rate_diff = (new_tunneling_rate
+#                             - prev_tunneling_rate
+#                             + 2 * tunn_avg_err[1])
+#
+#      #  if the tunneling rate decreased since the last
+#      #  time it was calculated, restart the temperature
+#      if tunneling_rate_diff < 0:
+#          # the following will revert self.temp to a
+#          # value slightly smaller than the value it had
+#          # previously the last time the tunneling rate
+#          # was calculated
+#          print("\n\tTunneling rate decreased!")
+#          print("\tNew tunneling rate:"
+#                f" {new_tunneling_rate:.3g}, "
+#                "Previous tunneling_rate:"
+#                f" {prev_tunneling_rate:.3g}, "
+#                f"diff: {tunneling_rate_diff:.3g}\n")
+#          print("\tResetting temperature...")
+#          if len(self.temp_arr) > 1:
+#              prev_temp = self.temp_arr[-2]
+#              new_temp = (prev_temp *
+#                          self.params['annealing_rate'])
+#              print(f"\tCurrent temp: {self.temp:.3g}, "
+#                    f"\t Previous temp: {prev_temp:.3g}, "
+#                    f"\t New temp: {new_temp:.3g}\n")
+#              self.temp = new_temp
+#              self.temp_arr[-1] = self.temp
