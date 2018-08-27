@@ -12,6 +12,8 @@ import pickle
 #  os.environ['TF_CPP_MIN_LOG_LEVEL']='2'
 
 from mpl_toolkits.mplot3d import Axes3D
+from tensorflow.python import debug as tf_debug
+
 from utils.func_utils import accept, jacobian, autocovariance,\
         get_log_likelihood, binarize, normal_kl, acl_spectrum, ESS
 from utils.distributions import GMM
@@ -190,6 +192,8 @@ class GaussianMixtureModel(object):
 
         self.build_graph()
         self.sess = tf.Session(config=config)
+        #  self.sess = tf_debug.LocalCLIDebugWrapperSession(self.sess,
+        #                                                   'localhost:6064')
 
     def _init_params(self, params):
         """Parse keys in params dictionary to be used for setting instance
@@ -238,9 +242,10 @@ class GaussianMixtureModel(object):
     def _create_dynamics(self, trajectory_length, eps, use_temperature=True):
         """ Create dynamics object using 'utils/dynamics.py'. """
         energy_function = self.distribution.get_energy_function()
+        tl = 3 * np.sqrt(self.sigma * self.temp_init)
         self.dynamics = Dynamics(self.x_dim,
                                  energy_function,
-                                 trajectory_length,
+                                 tl,
                                  eps,
                                  net_factory=network,
                                  use_temperature=use_temperature)
@@ -305,7 +310,7 @@ class GaussianMixtureModel(object):
     def _update_trajectory_length(self, temp):
         """Update the trajectory length to be roughly equal to half the period
         of evolution. """
-        new_trajectory_length = 3 * np.sqrt(self.sigma * temp)
+        new_trajectory_length = int(3 * np.sqrt(self.sigma * temp))
         self.train_trajectory_length = new_trajectory_length
         self.dynamics.T = new_trajectory_length
 
@@ -678,6 +683,7 @@ class GaussianMixtureModel(object):
                         print('\n')
 
             writer.close()
+            self.sess.close()
 
         except (KeyboardInterrupt, SystemExit):
             print("\nKeyboardInterrupt detected! \n"
@@ -686,6 +692,7 @@ class GaussianMixtureModel(object):
             self._save_variables()
             self._save_model(saver, writer, step)
             writer.close()
+            self.sess.close()
 
 
 def main(args):

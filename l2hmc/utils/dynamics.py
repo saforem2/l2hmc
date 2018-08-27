@@ -59,7 +59,7 @@ class Dynamics(object):
 
         self.eps = safe_exp(alpha, name='alpha')
         self._fn = energy_function
-        self.trajectory_length = trajectory_length
+        self.trajectory_length = int(trajectory_length)
         self.hmc = hmc
 
         self._init_mask()
