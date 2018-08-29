@@ -158,9 +158,8 @@ def plot_trajectory_and_distribution(samples, trajectory, x_dim=None):
 
 class GaussianMixtureModel(object):
     """Model for training L2HMC using multiple Gaussian distributions."""
-    def __init__(self, params, config, log_dir=None, verbose=False):
+    def __init__(self, params, config, log_dir=None):
         """Initialize parameters and define relevant directories."""
-        self.verbose = verbose
         self._init_params(params)
         #  self._params = params
 
@@ -184,6 +183,7 @@ class GaussianMixtureModel(object):
             'acceptance_rates_highT': os.path.join(self.info_dir,
                                                    'acceptance_rates_highT.pkl')
         }
+        self._save_init_variables()
 
         if os.path.isfile(os.path.join(self.info_dir, 'parameters.txt')):
             self._load_variables()
@@ -207,8 +207,6 @@ class GaussianMixtureModel(object):
 
         self.build_graph()
         self.sess = tf.Session(config=config)
-        #  self.sess = tf_debug.LocalCLIDebugWrapperSession(self.sess,
-        #                                                   'localhost:6064')
 
     def _init_params(self, params):
         """Parse keys in params dictionary to be used for setting instance
@@ -253,9 +251,25 @@ class GaussianMixtureModel(object):
         self.temp = self.temp_init
         self.step_init = 0
 
+    def _save_init_variables(self):
+        """Since certain parameters (annealing steps, etc.) may change as the
+        training proceeds, we create an additional file `_init_params.pkl` that
+        stores the initial values of all parameters just for safekeeping."""
+        _init_params_dict = {}
+        for key, val in self.__dict__.items():
+            if isinstance(val, (int, float)) or key=='means':
+                _init_params_dict[key] = val
+
+        _init_params_file = self.info_dir + '_init_params.pkl'
+        with open(_init_params_file, 'wb') as f:
+            pickle.dump(_init_params_dict, f)
+        print(f'Initial parameters written to {_init_params_file}.')
+
+
     def _save_variables(self):
         """Save current values of variables."""
         print(f"Saving parameter values to: {self.info_dir}")
+        self._create_params_file()
         for name, file in self.files.items():
             with open(file, 'wb') as f:
                 pickle.dump(getattr(self, name), f)
@@ -289,6 +303,10 @@ class GaussianMixtureModel(object):
             with open(file, 'rb') as f:
                 setattr(self, name, pickle.load(f))
 
+        # Since certain parameters (annealing steps, etc.) may change as the
+        # training proceeds, we create an additional file `_init_params.pkl`
+        # that stores the initial values of all parameters just for
+        # safekeeping.
         _params_file = self.info_dir + '_params.pkl'
         with open(_params_file, 'rb') as f:
             _params_dict = pickle.load(f)
@@ -371,15 +389,15 @@ class GaussianMixtureModel(object):
     def _create_params_file(self):
         """Write relevant parameters to .txt file for reference."""
         params_txt_file = self.info_dir + 'parameters.txt'
-        bad_keys = ['global_step', 'learning_rate', 'dynamics',
-                    'x', 'z', 'Lx', 'px', 'Lz', 'pz', 'loss',
-                    'output', 'train_op', 'summary_op', 'sess']
+        #  bad_keys = ['global_step', 'learning_rate', 'dynamics',
+        #              'x', 'z', 'Lx', 'px', 'Lz', 'pz', 'loss',
+        #              'output', 'train_op', 'summary_op', 'sess']
         with open(params_txt_file, 'w') as f:
             #  for key, value in self.params.items():
             for key, val in self.__dict__.items():
-                b1 = not isinstance(val, (dict, list, np.ndarray, tf.Variable))
-                b2 = key not in bad_keys
-                if b1 and b2:
+                #  b1 = not isinstance(val, (dict, list, np.ndarray, tf.Variable))
+                #  b2 = key not in bad_keys
+                if isinstance(val, (int, float, str)):
                     f.write(f'\n{key}: {val}\n')
             f.write(f"\nmeans:\n\n {str(self.means)}\n"
                     f"\ncovs:\n\n {str(self.covs)}\n")
@@ -402,13 +420,11 @@ class GaussianMixtureModel(object):
         self._create_loss()
         self._create_optimizer()
         self._create_summaries()
-        self._create_params_file()
+        self._save_variables()
 
     def generate_trajectories(self, temp=1., num_samples=500, num_steps=None):
         """ Generate trajectories using current values from L2HMC update
         method.  """
-        #  if num_samples is None:
-        #      num_samples = self.num_samples
         if num_steps is None:
             num_steps = 5 * self.trajectory_length
         _samples = self.distribution.get_samples(num_samples)
@@ -621,25 +637,43 @@ class GaussianMixtureModel(object):
         out_file2 = out_file('tr_ar_dist_temps_lowT')#, step)
         out_file3 = out_file('tr_ar_dist_temps_highT')#, step)
 
-        errorbar_plot(x_steps, y_data, y_err,
-                      out_file=out_file0, **kwargs)
+        def add_vline(axes, x, **kwargs):
+            if len(axes) > 1:
+                for ax in axes:
+                    ax.axvline(x=x, **kwargs)
+            else:
+                ax.axvline(x=x, **kwargs)
+            return ax
+
+        fig0, axes0 = errorbar_plot(x_steps, y_data, y_err,
+                                    out_file=out_file0, **kwargs)
+
+        line_args = {'color': 'C3', 'ls': ':', 'lw': 2.}
+        axes0 = add_vline(axes0, 1, **line_args)
+        #  for ax in axes:
+        #      ax.axvline(x=1, color='C3', ls=':', lw=2.)
 
         # for trajectories with temperature > 1 vs. STEP
         kwargs['title'] = title_highT
-        errorbar_plot(x_steps, y_data_highT, y_err_highT,
-                      out_file=out_file1, **kwargs)
+        fig1, axes1 = errorbar_plot(x_steps, y_data_highT, y_err_highT,
+                                    out_file=out_file1, **kwargs)
+        axes1 = add_vline(axes1, 1, **line_args)
+        #  for ax in axes:
+        #      ax.axvline(x=1, color='C3', ls=':', lw=2.)
 
         # for trajectories with temperature = 1. vs TEMP
         kwargs['x_label'] = 'Temperature'
         kwargs['title'] = title
         kwargs['reverse_x'] = True
-        errorbar_plot(x_temps, y_data, y_err,
-                      out_file=out_file2, **kwargs)
+        fig2, axes2 = errorbar_plot(x_temps, y_data, y_err,
+                                    out_file=out_file2, **kwargs)
+        axes2 = add_vline(axes2, 1, **line_args)
 
         # for trajectories with temperature > 1. vs TEMP
         kwargs['title'] = title_highT
-        errorbar_plot(x_temps, y_data_highT, y_err_highT,
-                      out_file=out_file3, **kwargs)
+        fig3, axes3 = errorbar_plot(x_temps, y_data_highT, y_err_highT,
+                                    out_file=out_file3, **kwargs)
+        axes3 = add_vline(axes3, 1, **line_args)
         plt.close('all')
 
     def train(self, num_train_steps):
@@ -790,14 +824,14 @@ class GaussianMixtureModel(object):
                         # want the tunneling to either increase or remain
                         # constant (within margin of error)
                         delta_tr0_dec = ((tr0_old - tr0_old_err)
-                                         (tr0_new + tr0_new_err))
+                                         - (tr0_new + tr0_new_err))
                         delta_tr1_dec = ((tr1_old - tr1_old_err)
-                                         (tr1_new + tr1_new_err))
+                                         - (tr1_new + tr1_new_err))
 
                         delta_tr0_inc = ((tr0_new - tr0_new_err)
-                                         (tr0_old + tr0_old_err))
+                                         - (tr0_old + tr0_old_err))
                         delta_tr1_inc = ((tr1_new - tr1_new_err)
-                                         (tr1_old + tr1_old_err))
+                                         - (tr1_old + tr1_old_err))
 
                         # if either of the tunneling rates decreased we want
                         # to slow down the annealing schedule. In order to do
@@ -816,15 +850,15 @@ class GaussianMixtureModel(object):
                             print('\nTunneling rate decreased. Slowing down'
                                   ' annealing schedule.')
                             print(f'Change in tunneling rate (temp = 1):'
-                                  f' {delta_tr0}')
+                                  f' {delta_tr0_dec}')
                             print(f'Change in tunneling rate (temp ='
-                                  f' {self.temp:.3g}): {delta_tr1}')
+                                  f' {self.temp:.3g}): {delta_tr1_dec}')
 
                             self.annealing_steps = int(self.annealing_steps /
                                                        self.annealing_factor)
                                                        #  / self.annealing_factor)
-                            self.temp = (self.temp_arr[-1]
-                                         * self.annealing_factor)
+                            self.temp = self.temp_arr[-2]
+                                         #  * self.annealing_factor)
                             #  self.temp = (self.temp / self.annealing_factor)
                                          #  / self.annealing_factor)
                             #  self.annealing_factor /= self.annealing_factor
@@ -833,26 +867,31 @@ class GaussianMixtureModel(object):
                             print(f'Temperature: {temp_old:.3g} -->'
                                   f' {self.temp:.3g}\n')
 
-                        if (_delta_tr0 > 0) or (delta_tr1_ > 0):
-                            as_old = self.annealing_steps
-                            temp_old = self.temp
-                            print('\nTunneling rate increased. Speeding up'
-                                  ' annealing schedule.')
-                            print(f'Change in tunneling rate (temp = 1):'
-                                  f' {delta_tr0}')
-                            print(f'Change in tunneling rate (temp ='
-                                  f' {self.temp:.3g}): {delta_tr1}')
+                        if (delta_tr0_inc > 0) or (delta_tr1_inc > 0):
+                            if delta_tr0_dec > 0 or delta_tr1_dec > 1:
+                                continue
+                            else:
+                                as_old = self.annealing_steps
+                                temp_old = self.temp
+                                print('\nTunneling rate increased. Speeding up'
+                                      ' annealing schedule.')
+                                print(f'Change in tunneling rate (temp = 1):'
+                                      f' {delta_tr0_inc}')
+                                print(f'Change in tunneling rate (temp ='
+                                      f' {self.temp:.3g}): {delta_tr1_inc}')
 
-                            self.annealing_steps = int(self.annealing_steps *
-                                                       self.annealing_factor)
-                                                       #  / self.annealing_factor)
-                            self.temp = (self.temp * self.annealing_factor)
-                                         #  / self.annealing_factor)
-                            #  self.annealing_factor /= self.annealing_factor
-                            print(f'Annealing steps: {as_old} -->'
-                                  f' {self.annealing_steps}')
-                            print(f'Temperature: {temp_old:.3g} -->'
-                                  f' {self.temp:.3g}\n')
+                                new_as = (self.annealing_steps
+                                          * self.annealing_factor)
+
+                                self.annealing_steps = int(new_as)
+                                                           #  / self.annealing_factor)
+                                #self.temp = (self.temp * self.annealing_factor)
+                                             #  / self.annealing_factor)
+                                #  self.annealing_factor /= self.annealing_factor
+                                print(f'Annealing steps: {as_old} -->'
+                                      f' {self.annealing_steps}')
+                                print(f'Temperature: {temp_old:.3g} -->'
+                                      f' {self.temp:.3g}\n')
 
                         self._print_header()
 
@@ -874,10 +913,61 @@ def main(args):
     x_dim = args.dimension
     num_distributions = args.num_distributions
 
+    # Create array containing the location of the mean for each Gaussian
     means = np.zeros((x_dim, x_dim), dtype=np.float32)
+
+    #---------------------------------------------------------------------------
+    # GMM Model with Gaussians centered along each axis:
+    #---------------------------------------------------------------------------
+    # If x_dim = num_distributions then we put one along each eaxis as shown
+    # below.
+    #    [X, 0, 0, ..., 0, 0, 0]
+    #    [0, X, 0, ..., 0, 0, 0]
+    #    [0, 0, X, ..., 0, 0, 0]
+    #    [          \          ]    =    diag(x) 
+    #    [0, 0, 0, ..., X, 0, 0]
+    #    [0, 0, 0, ..., 0, X, 0]
+    #    [0, 0, 0, ..., 0, 0, X]
     centers = np.sqrt(2)  # center of Gaussian
     for i in range(num_distributions):
         means[i::num_distributions, i] = centers
+
+    # If x_dim = num_distributions then we put one along each eaxis as shown
+    # below.
+    # NOTE: If num_distributions < x_dim then we 
+    #    [X, 0, 0, ..., 0, 0, 0]
+    #    [0, X, 0, ..., 0, 0, 0]
+    #    [0, 0, X, ..., 0, 0, 0]
+    #    [          \          ]    =    diag(x) 
+    #    [0, 0, 0, ..., X, 0, 0]
+    #    [0, 0, 0, ..., 0, X, 0]
+    #    [0, 0, 0, ..., 0, 0, X]
+
+    ###########################################################################
+    # TODO: 
+    #--------------------------------------------------------------------------
+    #   1.) Try experiment using pair of Gaussians both separated along a
+    #       single axis, and
+    #   2.) With Gaussians separated diagonally across all dimensions.
+    ###########################################################################
+
+    # Separated gaussians along a single axis chosen randomly from x_dim
+    #    [0, 0, 0, ..., 0, 0, 0]
+    #    [0, 0, 0, ..., 0, 0, 0]
+    #    [0, 0, 0, ..., 0, 0, 0]
+    #    [0, 0, 0, ..., 0, 0, 0]
+    #    [          .          ]
+    #    [          .          ]
+    #    [          .          ]
+    #    [0, 0, 0, ..., x, 0, 0]
+    #    [0, 0, 0, ..., 0, x, 0]
+    #    [0, 0, 0, ..., 0, 0, x]
+    #  centers1 = 1
+    #  rand_axis = np.random.randint(num_distributions)
+    #  means[0, rand_axis] = centers1
+    #  means[1, rand_axis] = - centers1
+    #  for i in range(num_distributions):
+    #      means[]
 
     params = {'x_dim': args.dimension,
               'num_distributions': num_distributions,
