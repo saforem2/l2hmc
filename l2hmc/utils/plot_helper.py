@@ -45,6 +45,10 @@ def errorbar_plot(x_data, y_data, y_errors, out_file=None, **kwargs):
     #  num_distributions = kwargs.get('num_distributions', 3)
     #  sigma = kwargs.get('sigma', 0.05)
     if kwargs is not None:
+        capsize = kwargs.get('capsize', 1.5)
+        capthick = kwargs.get('capthick', 1.5)
+        fillstyle = kwargs.get('fillstyle', 'full')
+        alpha = kwargs.get('alpha', 0.8)
         markersize = kwargs.get('markersize', 3)
         x_label = kwargs.get('x_label', '')
         y_label = kwargs.get('y_label', '')
@@ -60,8 +64,9 @@ def errorbar_plot(x_data, y_data, y_errors, out_file=None, **kwargs):
             ax.errorbar(x[idx], y[idx], yerr=y_err[idx],
                         color=colors[idx], ls=linestyles[idx],
                         marker=markers[idx], markersize=markersize,
-                        fillstyle='full', capsize=1.5, capthick=1.5,
-                        alpha=0.75, label=legend_labels[idx])
+                        fillstyle=fillstyle, alpha=alpha,
+                        capsize=capsize, capthick=capthick,
+                        label=legend_labels[idx])
             #  if idx == 0:
             #      ax.set_title(title, fontsize=16)
             #  ax.set_xlabel('', fontsize=10)
@@ -69,7 +74,7 @@ def errorbar_plot(x_data, y_data, y_errors, out_file=None, **kwargs):
                 ax.grid(True)
             if reverse_x:
                 ax.set_xlim(ax.get_xlim()[::-1])
-            ax.legend(loc='best', fontsize=10)
+            ax.legend(loc='best', fontsize=10, markerscale=1.5)
 
         axes[0].set_title(title, fontsize=16)
         fig.subplots_adjust(hspace=0)
