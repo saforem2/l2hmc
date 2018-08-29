@@ -1,6 +1,13 @@
 import os
 import numpy as np
 import matplotlib.pyplot as plt
+
+try:
+    plt.style.use('/Users/saforem2/.config/matplotlib/'
+                   + 'stylelib/ggplot_sam.mplstyle')
+
+except:
+    plt.style.use('ggplot')
 plt.rcParams['xtick.direction'] = 'in'
 plt.rcParams['ytick.direction'] = 'in'
 plt.rcParams['xtick.major.pad'] = 3.5
@@ -45,13 +52,7 @@ def errorbar_plot(x_data, y_data, y_errors, out_file=None, **kwargs):
         grid = kwargs.get('grid', False)
         reverse_x = kwargs.get('reverse_x', False)
         legend_labels = kwargs.get('legend_labels', np.full(x.shape[0], ''))
-        plt_style = kwargs.get('plt_style', 'ggplot')
-        try:
-            plt.style.use(plt_style)
-        except:
-            plt.style.use('ggplot')
 
-    fig, ax = plt.subplots()
     num_entries = x.shape[0]
     if num_entries > 1:
         fig, axes = plt.subplots(num_entries, sharex=True)
@@ -73,10 +74,11 @@ def errorbar_plot(x_data, y_data, y_errors, out_file=None, **kwargs):
         axes[0].set_title(title, fontsize=16)
         fig.subplots_adjust(hspace=0)
         plt.setp([a.get_xticklabels() for a in fig.axes[:-1]], visible=False)
-        #  axes[-1].set_xlabel(x_label, fontsize=14)
+        axes[-1].set_xlabel(x_label, fontsize=14)
         fig.tight_layout()
 
     else:
+        fig, ax = plt.subplots()
         ax.errorbar(x, y, yerr=y_err[idx],
                     color=colors[0], marker=markers[0],
                     ls=linestyles[0], fillstyle='full',
@@ -95,4 +97,8 @@ def errorbar_plot(x_data, y_data, y_errors, out_file=None, **kwargs):
         print(f"Saving figure to: {out_file}")
         fig.tight_layout()
         plt.savefig(out_file, dpi=400, bbox_inches='tight')
-    return fig, ax
+
+    if num_entries > 1:
+        return fig, axes
+    else: 
+        return fig, ax

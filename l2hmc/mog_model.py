@@ -267,7 +267,7 @@ class GaussianMixtureModel(object):
                 _params_dict[key] = val
 
         with open(_params_file, 'wb') as f:
-            pickle.dump(_params_dict)
+            pickle.dump(_params_dict, f)
 
         np.save(self.info_dir + 'temp_arr.npy', np.array(self.temp_arr))
         np.save(self.info_dir + 'steps_arr.npy', np.array(self.steps_arr))
@@ -642,7 +642,6 @@ class GaussianMixtureModel(object):
                       out_file=out_file3, **kwargs)
         plt.close('all')
 
-
     def train(self, num_train_steps):
         """Train the model."""
         saver = tf.train.Saver(max_to_keep=3)
@@ -667,16 +666,21 @@ class GaussianMixtureModel(object):
             self._print_header()
             for step in range(initial_step, initial_step + num_train_steps):
                 t00 = time.time()
+                #  _samples = self.distribution.get_samples(self.num_samples)
                 feed_dict = {self.x: self.samples,
                              self.dynamics.temperature: self.temp}
+                #  feed_dict = {self.x: self.samples,
+                #               self.dynamics.temperature: self.temp}
 
-                _, loss_, self.samples, px_, lr_, = self.sess.run([
+                #  _, loss_, self.samples, px_, lr_, = self.sess.run([
+                _, loss_, _samples, px_, lr_, = self.sess.run([
                     self.train_op,
                     self.loss,
                     self.output[0],
                     self.px,
                     self.learning_rate
                 ], feed_dict=feed_dict)
+
 
                 #  self.losses.append(loss_)
                 self.losses_arr.append(loss_)
@@ -706,7 +710,6 @@ class GaussianMixtureModel(object):
                                + f'{np.mean(px_):^13.4g}{lr_:^13.4g}'
                                + f'{eps:^13.4g}{self.trajectory_length:^13g}')
                     print(col_str)
-
 
                 if (step + 1) % self.tunneling_rate_steps == 0:
                     t1 = time.time()
@@ -786,15 +789,15 @@ class GaussianMixtureModel(object):
 
                         # want the tunneling to either increase or remain
                         # constant (within margin of error)
-                        delta_tr0 = ((tr0_old - tr0_old_err)
-                                     - (tr0_new + tr0_new_err))
-                        delta_tr1 = ((tr1_old - tr1_old_err)
-                                     - (tr1_new + tr1_new_err))
+                        delta_tr0_dec = ((tr0_old - tr0_old_err)
+                                         (tr0_new + tr0_new_err))
+                        delta_tr1_dec = ((tr1_old - tr1_old_err)
+                                         (tr1_new + tr1_new_err))
 
-                        delta_tr0_ = ((tr0_new - tr0_new_err)
-                                     - (tr0_old + tr0_old_err))
-                        delta_tr1_ = ((tr1_new - tr1_new_err)
-                                     - (tr1_old + tr1_old_err))
+                        delta_tr0_inc = ((tr0_new - tr0_new_err)
+                                         (tr0_old + tr0_old_err))
+                        delta_tr1_inc = ((tr1_new - tr1_new_err)
+                                         (tr1_old + tr1_old_err))
 
                         # if either of the tunneling rates decreased we want
                         # to slow down the annealing schedule. In order to do
@@ -807,7 +810,7 @@ class GaussianMixtureModel(object):
                             #      annealing factor itself to bring it closer
                             #      to 1.)
                             #  3.) Reset the temperature to a higher value?? 
-                        if (delta_tr0 > 0) or (delta_tr1 > 0):
+                        if (delta_tr0_dec > 0) or (delta_tr1_dec > 0):
                             as_old = self.annealing_steps
                             temp_old = self.temp
                             print('\nTunneling rate decreased. Slowing down'
@@ -820,7 +823,9 @@ class GaussianMixtureModel(object):
                             self.annealing_steps = int(self.annealing_steps /
                                                        self.annealing_factor)
                                                        #  / self.annealing_factor)
-                            self.temp = (self.temp / self.annealing_factor)
+                            self.temp = (self.temp_arr[-1]
+                                         * self.annealing_factor)
+                            #  self.temp = (self.temp / self.annealing_factor)
                                          #  / self.annealing_factor)
                             #  self.annealing_factor /= self.annealing_factor
                             print(f'Annealing steps: {as_old} -->'
@@ -828,7 +833,7 @@ class GaussianMixtureModel(object):
                             print(f'Temperature: {temp_old:.3g} -->'
                                   f' {self.temp:.3g}\n')
 
-                        if (delta_tr0_ > 0) or (delta_tr1_ > 0):
+                        if (_delta_tr0 > 0) or (delta_tr1_ > 0):
                             as_old = self.annealing_steps
                             temp_old = self.temp
                             print('\nTunneling rate increased. Speeding up'

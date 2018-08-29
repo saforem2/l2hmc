@@ -11,7 +11,8 @@ def get_run_num(log_dir):
         run_nums = []
         for item in contents:
             try:
-                run_nums.append(int(''.join(x for x in item if x.isdigit())))
+                run_nums.append(int(item.split('_')[-1]))
+                #  run_nums.append(int(''.join(x for x in item if x.isdigit())))
             except ValueError:
                 continue
         return sorted(run_nums)[-1] + 1
@@ -31,7 +32,7 @@ def make_run_dir(log_dir):
     else:
         _dir = log_dir + '/'
     run_num = get_run_num(_dir)
-    run_dir = _dir + f'run{run_num}/'
+    run_dir = _dir + f'run_{run_num}/'
     if os.path.isdir(run_dir):
         raise f'Directory: {run_dir} already exists, exiting!'
     else:
