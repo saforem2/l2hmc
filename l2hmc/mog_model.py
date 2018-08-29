@@ -12,7 +12,7 @@ import pickle
 #  os.environ['TF_CPP_MIN_LOG_LEVEL']='2'
 
 from mpl_toolkits.mplot3d import Axes3D
-from tensorflow.python import debug as tf_debug
+#  from tensorflow.python import debug as tf_debug
 
 from utils.func_utils import accept, jacobian, autocovariance,\
         get_log_likelihood, binarize, normal_kl, acl_spectrum, ESS
@@ -84,7 +84,6 @@ def check_log_dir(log_dir):
             os.makedirs(figs_dir)
     return log_dir, info_dir, figs_dir
 
-
 def create_log_dir():
     """Create directory for storing information about experiment."""
     root_log_dir = '../log_mog_tf/'
@@ -96,7 +95,6 @@ def create_log_dir():
     if not os.path.isdir(figs_dir):
         os.makedirs(figs_dir)
     return log_dir, info_dir, figs_dir
-
 
 def distribution_arr(x_dim, n_distributions):
     """Create array describing likelihood of drawing from distributions."""
@@ -112,7 +110,6 @@ def distribution_arr(x_dim, n_distributions):
         small_pi = (1. - sum(arr)) / (x_dim - n_distributions)
         arr.extend((x_dim - n_distributions) * [small_pi])
         return np.array(arr, dtype=np.float32)
-
 
 def network(x_dim, scope, factor):
     with tf.variable_scope(scope):
@@ -165,7 +162,7 @@ class GaussianMixtureModel(object):
         """Initialize parameters and define relevant directories."""
         self.verbose = verbose
         self._init_params(params)
-        self._params = params
+        #  self._params = params
 
         if log_dir is not None:
             dirs = check_log_dir(log_dir)
@@ -175,7 +172,6 @@ class GaussianMixtureModel(object):
         self.log_dir, self.info_dir, self.figs_dir = dirs
 
         self.files={
-            '_params': os.path.join(self.info_dir, '_params.pkl'),
             'distances': os.path.join(self.info_dir, 'distances.pkl'),
             'distances_highT': os.path.join(self.info_dir,
                                             'distances_highT.pkl'),
@@ -220,7 +216,7 @@ class GaussianMixtureModel(object):
         self.x_dim = None
         self.num_distributions = None
         self.eps = None
-        self.scale = None 
+        self.scale = None
         self.num_samples = None
         self.means = None
         self.sigma = None
@@ -257,6 +253,35 @@ class GaussianMixtureModel(object):
         self.temp = self.temp_init
         self.step_init = 0
 
+    def _save_variables(self):
+        """Save current values of variables."""
+        print(f"Saving parameter values to: {self.info_dir}")
+        for name, file in self.files.items():
+            with open(file, 'wb') as f:
+                pickle.dump(getattr(self, name), f)
+
+        _params_file = self.info_dir + '_params.pkl'
+        _params_dict = {}
+        for key, val in self.__dict__.items():
+            if isinstance(val, (int, float)) or key=='means':
+                _params_dict[key] = val
+
+        with open(_params_file, 'wb') as f:
+            pickle.dump(_params_dict)
+
+        np.save(self.info_dir + 'temp_arr.npy', np.array(self.temp_arr))
+        np.save(self.info_dir + 'steps_arr.npy', np.array(self.steps_arr))
+        np.save(self.info_dir + 'losses_arr.npy', np.array(self.losses_arr))
+        np.save(self.info_dir + 'covs_arr.npy', np.array(self.covs))
+
+    def _save_model(self, saver, writer, step):
+        """Save tensorflow model with graph and all quantities of interest."""
+        self._save_variables()
+        ckpt_file = os.path.join(self.log_dir, 'model.ckpt')
+        print(f'Saving checkpoint to: {ckpt_file}\n')
+        saver.save(self.sess, ckpt_file, global_step=step)
+        writer.flush()
+
     def _load_variables(self):
         """Load variables from previously ran experiment."""
         print(f'Loading from previous parameters in from: {self.info_dir}')
@@ -264,7 +289,11 @@ class GaussianMixtureModel(object):
             with open(file, 'rb') as f:
                 setattr(self, name, pickle.load(f))
 
-        for key, val in self._params.items():
+        _params_file = self.info_dir + '_params.pkl'
+        with open(_params_file, 'rb') as f:
+            _params_dict = pickle.load(f)
+
+        for key, val in _params_dict.items():
             setattr(self, key, val)
 
         self.covs = np.load(self.info_dir + 'covs_arr.npy')
@@ -275,8 +304,8 @@ class GaussianMixtureModel(object):
             self.temp = self.temp_arr[-1]
             self.step_init = self.steps_arr[-1]
         except IndexError:
-            raise IndexError(f"self.temp_arr.shape: {self.temp_arr.shape}")
-            raise IndexError(f"self.steps_arr.shape: {self.steps_arr.shape}")
+            raise IndexError(f"len(self.temp_arr): {len(self.temp_arr)}")
+            raise IndexError(f"len(self.steps_arr): {len(self.steps_arr)}")
 
     def _distribution(self, sigma, means):
         """Initialize distribution using utils/distributions.py"""
@@ -359,7 +388,7 @@ class GaussianMixtureModel(object):
     def _update_trajectory_length(self, temp):
         """Update the trajectory length to be roughly equal to half the period
         of evolution. """
-        new_trajectory_length = max([2, int(3 * np.sqrt(self.sigma * temp))])
+        new_trajectory_length = max([3, int(3 * np.sqrt(self.sigma * temp))])
         #  if new_trajectory_length < 2:
         #      new_trajectory_length = 3
         self.trajectory_length = new_trajectory_length
@@ -375,11 +404,11 @@ class GaussianMixtureModel(object):
         self._create_summaries()
         self._create_params_file()
 
-    def generate_trajectories(self, temp=1., num_samples=None, num_steps=None):
+    def generate_trajectories(self, temp=1., num_samples=500, num_steps=None):
         """ Generate trajectories using current values from L2HMC update
         method.  """
-        if num_samples is None:
-            num_samples = self.num_samples
+        #  if num_samples is None:
+        #      num_samples = self.num_samples
         if num_steps is None:
             num_steps = 5 * self.trajectory_length
         _samples = self.distribution.get_samples(num_samples)
@@ -581,16 +610,16 @@ class GaussianMixtureModel(object):
             'title': title,
             'grid': True,
             'reverse_x': False,
-            'plt_stle': 'ggplot'
+            'plt_stle': '~/.config/matplotlib/stylelib/ggplot_sam.mplstyle'
         }
 
         #  def out_file(f, s): return self.figs_dir + f'{f}_{s+1}.pdf'
-        def out_file(f, s): return self.figs_dir + f'{f}_{s+1}.pdf'
+        def out_file(f): return self.figs_dir + f'{f}.pdf'
 
-        out_file0 = out_file('tr_ar_dist_steps_lowT', step)
-        out_file1 = out_file('tr_ar_dist_steps_highT', step)
-        out_file2 = out_file('tr_ar_dist_temps_lowT', step)
-        out_file3 = out_file('tr_ar_dist_temps_highT', step)
+        out_file0 = out_file('tr_ar_dist_steps_lowT')#, step)
+        out_file1 = out_file('tr_ar_dist_steps_highT')#, step)
+        out_file2 = out_file('tr_ar_dist_temps_lowT')#, step)
+        out_file3 = out_file('tr_ar_dist_temps_highT')#, step)
 
         errorbar_plot(x_steps, y_data, y_err,
                       out_file=out_file0, **kwargs)
@@ -613,24 +642,6 @@ class GaussianMixtureModel(object):
                       out_file=out_file3, **kwargs)
         plt.close('all')
 
-    def _save_variables(self):
-        """Save current values of variables."""
-        print(f"Saving parameter values to: {self.info_dir}")
-        for name, file in self.files.items():
-            with open(file, 'wb') as f:
-                pickle.dump(getattr(self, name), f)
-        np.save(self.info_dir + 'temp_arr.npy', np.array(self.temp_arr))
-        np.save(self.info_dir + 'steps_arr.npy', np.array(self.steps_arr))
-        np.save(self.info_dir + 'losses_arr.npy', np.array(self.losses_arr))
-        np.save(self.info_dir + 'covs_arr.npy', np.array(self.covs))
-
-    def _save_model(self, saver, writer, step):
-        """Save tensorflow model with graph and all quantities of interest."""
-        self._save_variables()
-        ckpt_file = os.path.join(self.log_dir, 'model.ckpt')
-        print(f'Saving checkpoint to: {ckpt_file}\n')
-        saver.save(self.sess, ckpt_file, global_step=step)
-        writer.flush()
 
     def train(self, num_train_steps):
         """Train the model."""
@@ -775,10 +786,15 @@ class GaussianMixtureModel(object):
 
                         # want the tunneling to either increase or remain
                         # constant (within margin of error)
-                        delta_tr0 = ((tr0_new + tr0_new_err)
-                                     - (tr0_old - tr0_old_err))
-                        delta_tr1 = ((tr1_new + tr1_new_err)
-                                     - (tr1_old - tr1_old_err))
+                        delta_tr0 = ((tr0_old - tr0_old_err)
+                                     - (tr0_new + tr0_new_err))
+                        delta_tr1 = ((tr1_old - tr1_old_err)
+                                     - (tr1_new + tr1_new_err))
+
+                        delta_tr0_ = ((tr0_new - tr0_new_err)
+                                     - (tr0_old + tr0_old_err))
+                        delta_tr1_ = ((tr1_new - tr1_new_err)
+                                     - (tr1_old + tr1_old_err))
 
                         # if either of the tunneling rates decreased we want
                         # to slow down the annealing schedule. In order to do
@@ -800,21 +816,39 @@ class GaussianMixtureModel(object):
                                   f' {delta_tr0}')
                             print(f'Change in tunneling rate (temp ='
                                   f' {self.temp:.3g}): {delta_tr1}')
-                            #  print('Old annealing steps:'
-                            #        f' {self.annealing_steps}')
-                            #  print(f'Old temperature: {self.temp}')
-                                  #  ' Old annealing factor: '
-                                  #  f' {self.annealing_factor}.\n')
-                            self.annealing_steps = int((self.annealing_steps
-                                                        / self.annealing_factor)
-                                                       / self.annealing_factor)
-                            self.temp = ((self.temp / self.annealing_factor)
-                                         / self.annealing_factor)
+
+                            self.annealing_steps = int(self.annealing_steps /
+                                                       self.annealing_factor)
+                                                       #  / self.annealing_factor)
+                            self.temp = (self.temp / self.annealing_factor)
+                                         #  / self.annealing_factor)
                             #  self.annealing_factor /= self.annealing_factor
                             print(f'Annealing steps: {as_old} -->'
                                   f' {self.annealing_steps}')
                             print(f'Temperature: {temp_old:.3g} -->'
                                   f' {self.temp:.3g}\n')
+
+                        if (delta_tr0_ > 0) or (delta_tr1_ > 0):
+                            as_old = self.annealing_steps
+                            temp_old = self.temp
+                            print('\nTunneling rate increased. Speeding up'
+                                  ' annealing schedule.')
+                            print(f'Change in tunneling rate (temp = 1):'
+                                  f' {delta_tr0}')
+                            print(f'Change in tunneling rate (temp ='
+                                  f' {self.temp:.3g}): {delta_tr1}')
+
+                            self.annealing_steps = int(self.annealing_steps *
+                                                       self.annealing_factor)
+                                                       #  / self.annealing_factor)
+                            self.temp = (self.temp * self.annealing_factor)
+                                         #  / self.annealing_factor)
+                            #  self.annealing_factor /= self.annealing_factor
+                            print(f'Annealing steps: {as_old} -->'
+                                  f' {self.annealing_steps}')
+                            print(f'Temperature: {temp_old:.3g} -->'
+                                  f' {self.temp:.3g}\n')
+
                         self._print_header()
 
             writer.close()
@@ -855,7 +889,7 @@ def main(args):
               'num_training_steps': 20000,
               'tunneling_rate_steps': 1000,
               'save_steps': 1000,
-              'lr_decay_steps': 2500, 
+              'lr_decay_steps': 2500,
               'lr_decay_rate': 0.96,
               'logging_steps': 100}
 
