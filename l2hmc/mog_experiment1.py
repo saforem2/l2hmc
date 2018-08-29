@@ -161,10 +161,11 @@ def plot_trajectory_and_distribution(samples, trajectory, x_dim=None):
 
 class GaussianMixtureModel(object):
     """Model for training L2HMC using multiple Gaussian distributions."""
-    def __init__(self, params, config, log_dir=None):
+    def __init__(self, params, config, log_dir=None, verbose=False):
         """Initialize parameters and define relevant directories."""
-
+        self.verbose = verbose
         self._init_params(params)
+        self._params = params
 
         if log_dir is not None:
             dirs = check_log_dir(log_dir)
@@ -174,6 +175,7 @@ class GaussianMixtureModel(object):
         self.log_dir, self.info_dir, self.figs_dir = dirs
 
         self.files={
+            '_params': os.path.join(self.info_dir, '_params.pkl'),
             'distances': os.path.join(self.info_dir, 'distances.pkl'),
             'distances_highT': os.path.join(self.info_dir,
                                             'distances_highT.pkl'),
@@ -218,7 +220,7 @@ class GaussianMixtureModel(object):
         self.x_dim = None
         self.num_distributions = None
         self.eps = None
-        self.scale = None
+        self.scale = None 
         self.num_samples = None
         self.means = None
         self.sigma = None
@@ -233,15 +235,6 @@ class GaussianMixtureModel(object):
         self.lr_decay_rate = None
         self.logging_steps = None
         self.save_steps = None
-
-        for key, val in params.items():
-            setattr(self, key, val)
-
-        self.covs, self.distribution = self._distribution(self.sigma,
-                                                          self.means)
-        # Initial samples drawn from Normal distribution
-        self.samples = np.random.randn(self.num_samples,
-                                       self.x_dim)
         self.tunneling_rates = {}
         self.acceptance_rates = {}
         self.distances = {}
@@ -251,6 +244,16 @@ class GaussianMixtureModel(object):
         self.temp_arr = []
         self.steps_arr = []
         self.losses_arr = []
+
+        for key, val in params.items():
+            setattr(self, key, val)
+
+        self.covs, self.distribution = self._distribution(self.sigma,
+                                                          self.means)
+        # Initial samples drawn from Normal distribution
+        self.samples = np.random.randn(self.num_samples,
+                                       self.x_dim)
+
         self.temp = self.temp_init
         self.step_init = 0
 
@@ -260,6 +263,10 @@ class GaussianMixtureModel(object):
         for name, file in self.files.items():
             with open(file, 'rb') as f:
                 setattr(self, name, pickle.load(f))
+
+        for key, val in self._params.items():
+            setattr(self, key, val)
+
         self.covs = np.load(self.info_dir + 'covs_arr.npy')
         self.temp_arr = list(np.load(self.info_dir + 'temp_arr.npy'))
         self.steps_arr = list(np.load(self.info_dir + 'steps_arr.npy'))
@@ -427,27 +434,29 @@ class GaussianMixtureModel(object):
         # trajectories are contained in trajectory_data[0]
         tunneling_rates = self._calc_tunneling_rates(trajectory_data[0])
         #  Calculate the average value and error of tunneling rates 
-        tunn_avg_err = calc_avg_vals_errors(tunneling_rates)
+        tunn_avg_err = calc_avg_vals_errors(tunneling_rates, num_blocks=100)
         # not sure if this is needed
         loss_arr = trajectory_data[1]
         # acceptance rates are contained in trajectory_data[2]
-        accept_avg_err = calc_avg_vals_errors(trajectory_data[2])
+        accept_avg_err = calc_avg_vals_errors(trajectory_data[2],
+                                              num_blocks=100)
 
         return tunn_avg_err, accept_avg_err
 
     def _print_header(self, test_flag=False):
         if test_flag:
-            h_str = '{:^8s}{:^8s}{:^13s}{:^13s}{:^13s}{:^13s}{:^13s}{:^13s}'
-            h_strf = h_str.format("STEP", "TEMP", "LOSS", "ACCEPT RATE",
-                                  "TUNN RATE", "DIST", "STEP SIZE",
-                                  "TRAJ LENGTH")
+            h_str = ('{:^8s}{:^6s}{:^6s}{:^10s}{:^8s}{:^10s}'
+                     + '{:^8s}{:^10s}{:^8s}{:^11s}{:^6s}')
+            h_strf = h_str.format("STEP", "TEMP", "LOSS", "ACCEPT %", "ERR",
+                                  "TUNN %", "ERR", "DIST", "ERR", "STEP SIZE",
+                                  "LENGTH")
             dash0 = (len(h_strf) + 1) * '='
             dash1 = (len(h_strf) + 1) * '-'
             print(dash0)
             #  print(h_str)
             print(h_strf)
-            print(dash1)
             print(dash0)
+            #  print(dash1)
         else:
             h_str = '{:^13s}{:^8s}{:^13s}{:^13s}{:^13s}{:^13s}{:^13s}'
             h_strf = h_str.format("STEP", "TEMP", "LOSS", "ACCEPT RATE",
@@ -499,14 +508,19 @@ class GaussianMixtureModel(object):
 
         """
         i_str = (f'{self.steps_arr[-1]:^8g}'
-                 + f'{temp:^8.3g}'
-                 + f'{np.mean(losses):^13.4g}'
-                 + f'{ar_info[0]:^13.4g}'
-                 + f'{tr_info[0]:^13.4g}'
-                 + f'{dist_info[0]:^13.4g}'
-                 + f'{eps:^13.4g}'
-                 + f'{5 * int(self.trajectory_length):^13.4g}')
+                 + f'{temp:^6.3g}'
+                 + f'{np.mean(losses):^6.4g}'
+                 + f'{ar_info[0]:^10.4g}'
+                 + f'{ar_info[1]:^8.4g}'
+                 + f'{tr_info[0]:^10.4g}'
+                 + f'{tr_info[1]:^8.4g}'
+                 + f'{dist_info[0]:^10.4g}'
+                 + f'{dist_info[1]:^8.4g}'
+                 + f'{eps:^11.4g}'
+                 + f'{5 * int(self.trajectory_length):^6.4g}')
         print(i_str)
+        dash1 = (len(i_str) + 1) * '-'
+        print(dash1)
 
     def _generate_plots(self, step):
         """ Plot tunneling rate, acceptance_rate vs. training step for both
@@ -570,8 +584,9 @@ class GaussianMixtureModel(object):
             'plt_stle': 'ggplot'
         }
 
+        #  def out_file(f, s): return self.figs_dir + f'{f}_{s+1}.pdf'
         def out_file(f, s): return self.figs_dir + f'{f}_{s+1}.pdf'
-        #  out_file = lambda file, step: self.figs_dir + f'{file}_{step+1}.pdf'
+
         out_file0 = out_file('tr_ar_dist_steps_lowT', step)
         out_file1 = out_file('tr_ar_dist_steps_highT', step)
         out_file2 = out_file('tr_ar_dist_temps_lowT', step)
@@ -760,11 +775,10 @@ class GaussianMixtureModel(object):
 
                         # want the tunneling to either increase or remain
                         # constant (within margin of error)
-                        delta_tr0 = tr0_new - tr0_old
-                        delta_tr1 = tr1_new - tr1_old
-
-                        condition0 = (delta_tr0 >= tr0_old_err)
-                        condition1 = (delta_tr1 >= tr1_old_err)
+                        delta_tr0 = ((tr0_new + tr0_new_err)
+                                     - (tr0_old - tr0_old_err))
+                        delta_tr1 = ((tr1_new + tr1_new_err)
+                                     - (tr1_old - tr1_old_err))
 
                         # if either of the tunneling rates decreased we want
                         # to slow down the annealing schedule. In order to do
@@ -777,11 +791,31 @@ class GaussianMixtureModel(object):
                             #      annealing factor itself to bring it closer
                             #      to 1.)
                             #  3.) Reset the temperature to a higher value?? 
-                        if condition0 or condition1:
-                            print('Tunneling rate decreased. Slowing down'
+                        if (delta_tr0 > 0) or (delta_tr1 > 0):
+                            as_old = self.annealing_steps
+                            temp_old = self.temp
+                            print('\nTunneling rate decreased. Slowing down'
                                   ' annealing schedule.')
-                            self.annealing_steps /= self.annealing_factor
-                            self.annealing_factor /= self.annealing_factor
+                            print(f'Change in tunneling rate (temp = 1):'
+                                  f' {delta_tr0}')
+                            print(f'Change in tunneling rate (temp ='
+                                  f' {self.temp:.3g}): {delta_tr1}')
+                            #  print('Old annealing steps:'
+                            #        f' {self.annealing_steps}')
+                            #  print(f'Old temperature: {self.temp}')
+                                  #  ' Old annealing factor: '
+                                  #  f' {self.annealing_factor}.\n')
+                            self.annealing_steps = int((self.annealing_steps
+                                                        / self.annealing_factor)
+                                                       / self.annealing_factor)
+                            self.temp = ((self.temp / self.annealing_factor)
+                                         / self.annealing_factor)
+                            #  self.annealing_factor /= self.annealing_factor
+                            print(f'Annealing steps: {as_old} -->'
+                                  f' {self.annealing_steps}')
+                            print(f'Temperature: {temp_old:.3g} -->'
+                                  f' {self.temp:.3g}\n')
+                        self._print_header()
 
             writer.close()
             self.sess.close()

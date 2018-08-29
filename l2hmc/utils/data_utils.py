@@ -71,13 +71,13 @@ def jackknife_err(y_i, y_full, num_blocks):
     if isinstance(y_full, list):
         y_full = np.array(y_full)
     try:
-        err = np.sqrt((num_blocks - 1) * np.sum((y_i - y_full)**2) / num_blocks)
+        err = np.sqrt(np.sum((y_i - y_full)**2) / (num_blocks-1)*(num_blocks))
     except ValueError:
         print(f"y_i.shape: {y_i.shape}, y_full.shape: {y_full.shape}")
         raise
     return err
 
-def calc_avg_vals_errors(data, num_blocks=50):
+def calc_avg_vals_errors(data, num_blocks=100):
     """ 
     Calculate average values and errors of using block jackknife
     resampling method.

@@ -2,9 +2,10 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
-colors = ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8']
-markers = ['o', 's', 'v', 'h', '^', 'p', '<', 'd', '>']
-linestyles = ['-', '--', ':', '-.']
+colors = ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9']
+markers = ['o', 's', 'v', 'h', '^', 'p', '<', 'd', '>', 'o']
+linestyles = ['-', '--', ':', '-.', '-', '--', ':', '-.', '-', '--']
+markersize = 3
 
 
 def errorbar_plot(x_data, y_data, y_errors, out_file=None, **kwargs):
@@ -23,6 +24,7 @@ def errorbar_plot(x_data, y_data, y_errors, out_file=None, **kwargs):
     #  x_label = axes_labels.get('x_label', '')
     #  y_label = axes_labels.get('y_label', '')
     if kwargs is not None:
+        markersize = kwargs.get('markersize', 3)
         x_label = kwargs.get('x_label', '')
         y_label = kwargs.get('y_label', '')
         title = kwargs.get('title', '')
@@ -37,9 +39,10 @@ def errorbar_plot(x_data, y_data, y_errors, out_file=None, **kwargs):
     if num_entries > 1:
         for idx in range(num_entries):
             ax.errorbar(x[idx], y[idx], yerr=y_err[idx],
-                        color=colors[idx], marker=markers[idx],
-                        ls=linestyles[idx], fillstyle='full',
-                        capsize=1.5, capthick=1.5, alpha=0.8,
+                        color=colors[idx], ls=linestyles[idx],
+                        marker=markers[idx], markersize=markersize,
+                        fillstyle='full', capsize=1.5,
+                        capthick=1.5, alpha=0.8,
                         label=legend_labels[idx])
     else:
         ax.errorbar(x, y, yerr=y_err[idx],
