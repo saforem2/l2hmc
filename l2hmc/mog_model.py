@@ -115,23 +115,23 @@ def network(x_dim, scope, factor):
     with tf.variable_scope(scope):
         net = Sequential([
             Zip([
-                Linear(x_dim, 10, scope='embed_1', factor=1.0 / 3),
-                Linear(x_dim, 10, scope='embed_2', factor=factor * 1.0 / 3),
-                Linear(2, 10, scope='embed_3', factor=1.0 / 3),
+                Linear(x_dim, 20, scope='embed_1', factor=1.0 / 3),
+                Linear(x_dim, 20, scope='embed_2', factor=factor * 1.0 / 3),
+                Linear(2, 20, scope='embed_3', factor=1.0 / 3),
                 lambda _: 0.,
             ]),
             sum,
             tf.nn.relu,
-            Linear(10, 10, scope='linear_1'),
+            Linear(20, 20, scope='linear_1'),
             tf.nn.relu,
             Parallel([
                 Sequential([
-                    Linear(10, x_dim, scope='linear_s', factor=0.001),
+                    Linear(20, x_dim, scope='linear_s', factor=0.001),
                     ScaleTanh(x_dim, scope='scale_s')
                 ]),
-                Linear(10, x_dim, scope='linear_t', factor=0.001),
+                Linear(20, x_dim, scope='linear_t', factor=0.001),
                 Sequential([
-                    Linear(10, x_dim, scope='linear_f', factor=0.001),
+                    Linear(20, x_dim, scope='linear_f', factor=0.001),
                     ScaleTanh(x_dim, scope='scale_f'),
                 ])
             ])
@@ -442,7 +442,7 @@ class GaussianMixtureModel(object):
         self._create_summaries()
         self._save_variables()
 
-    def generate_trajectories(self, temp=1., num_samples=500, num_steps=None):
+    def generate_trajectories(self, temp=1., num_samples=500, num_steps=100):
         """ Generate trajectories using current values from L2HMC update
         method.  """
         if num_steps is None:
@@ -509,15 +509,17 @@ class GaussianMixtureModel(object):
 
         return tunn_avg_err, accept_avg_err
 
-    def get_tunneling_rates(self, step, temp, num_samples, num_steps):
+    def get_tunneling_rates(self, step, temp, num_samples, num_steps,
+                            trajectory_data=None):
         """Main method for generating trajectories, and calculating the
         tunneling rates with errors."""
         # trajectory_data[0] = trajectories, of shape [ttl, ns, x_dim]
         # trajectory_data[1] = loss_arr, the loss from each trajectory
         # trajectory_data[3] = acceptance_arr, the acceptance rate from each
-        trajectory_data = self.generate_trajectories(temp=temp,
-                                                     num_samples=num_samples,
-                                                     num_steps=num_steps)
+        if trajectory_data is None:
+            trajectory_data = self.generate_trajectories(temp=temp,
+                                                         num_samples=num_samples,
+                                                         num_steps=num_steps)
         # tunn_rates[0] = average tunneling rate from td
         # tunn_rates[1] = average tunneling rate error from td
         # accept_rates[0] = average acceptance rate from ar
@@ -633,7 +635,7 @@ class GaussianMixtureModel(object):
                           f' {self.temp:.3g}): {delta_tr1_inc}')
 
                     as_new = self.annealing_steps - 50
-                    self.anneling_steps = min(50, as_new)
+                    self.anneling_steps = max(50, as_new)
                     #  new_as = (self.annealing_steps
                     #            * self.annealing_factor)
 
@@ -858,22 +860,16 @@ class GaussianMixtureModel(object):
             print('Model restored.\n')
             self.global_step = tf.train.get_global_step()
             initial_step = self.sess.run(self.global_step)
-
         writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
+        _samples = self.distribution.get_samples(self.num_samples)
         t0 = time.time()
-        #  tr0_arr = []
-        #  tr0_err_arr = []
-        #  tr1_arr = []
-        #  tr1_err_arr = []
         try:
             self._print_header()
             for step in range(initial_step, initial_step + num_train_steps):
                 t00 = time.time()
-                #  _samples = self.distribution.get_samples(self.num_samples)
-                feed_dict = {self.x: self.samples,
+
+                feed_dict = {self.x: _samples,
                              self.dynamics.temperature: self.temp}
-                #  feed_dict = {self.x: self.samples,
-                #               self.dynamics.temperature: self.temp}
 
                 #  _, loss_, self.samples, px_, lr_, = self.sess.run([
                 _, loss_, _samples, px_, lr_, = self.sess.run([
@@ -884,6 +880,13 @@ class GaussianMixtureModel(object):
                     self.learning_rate
                 ], feed_dict=feed_dict)
 
+
+                #  ns = self.num_samples
+                #  ttl = self.trajectory_length
+                #  _tdata = [_samples, loss_, px_]
+                #  _ret_vals = self.get_tunneling_rates(step, self.temp, ns, ttl,
+                #                                       trajectory_data=_tdata)
+                #  _td, _tr, _ar, _ad = _ret_vals
 
                 #  self.losses.append(loss_)
                 self.losses_arr.append(loss_)
@@ -909,9 +912,13 @@ class GaussianMixtureModel(object):
                     last_step = initial_step + num_train_steps
 
                     col_str = (f'{step:>5g}/{last_step:<7g}'
-                               + f'{self.temp:^8.4g}{loss_:^13.4g}'
-                               + f'{np.mean(px_):^13.4g}{lr_:^13.4g}'
-                               + f'{eps:^13.4g}{self.trajectory_length:^13g}')
+                               + f'{self.temp:^8.4g}'
+                               + f'{loss_:^13.4g}'
+                               + f'{np.mean(px_):^13.4g}'
+                               + f'{lr_:^13.4g}'
+                               + f'{eps:^13.4g}'
+                               + f'{self.trajectory_length:^13g}')
+
                     print(col_str)
 
                 if (step + 1) % self.tunneling_rate_steps == 0:
