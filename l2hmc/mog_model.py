@@ -207,28 +207,36 @@ class GaussianMixtureModel(object):
 
         self.build_graph()
         self.sess = tf.Session(config=config)
+        print(80*'#')
+        print('Model parameters:')
+        for key, val in self.__dict__.items():
+            if isinstance(val, (int, float, str)):
+                print(f'{key}: {val}\n')
+        print(80*'#')
+        print('\n')
+
 
     def _init_params(self, params):
         """Parse keys in params dictionary to be used for setting instance
         parameters."""
-        self.x_dim = None
-        self.num_distributions = None
-        self.eps = None
-        self.scale = None
-        self.num_samples = None
+        self.x_dim = 2
+        self.num_distributions = 2
+        self.eps = 0.2
+        self.scale = 0.1
+        self.num_samples = 200
         self.means = None
         self.sigma = None
         self.small_pi = None
-        self.lr_init = None
-        self.temp_init = None
-        self.annealing_steps = None
-        self.annealing_factor = None
-        self.num_training_steps = None
-        self.tunneling_rate_steps = None
-        self.lr_decay_steps = None
-        self.lr_decay_rate = None
-        self.logging_steps = None
-        self.save_steps = None
+        self.lr_init = 1E-2
+        self.temp_init = 20
+        self.annealing_steps = 200
+        self.annealing_factor = 0.98
+        self.num_training_steps = 20000
+        self.tunneling_rate_steps = 1000
+        self.lr_decay_steps = 1000
+        self.lr_decay_rate = 0.96
+        self.logging_steps = 100
+        self.save_steps = 1000
         self.tunneling_rates = {}
         self.acceptance_rates = {}
         self.distances = {}
@@ -406,7 +414,7 @@ class GaussianMixtureModel(object):
     def _update_trajectory_length(self, temp):
         """Update the trajectory length to be roughly equal to half the period
         of evolution. """
-        new_trajectory_length = max([3, int(3 * np.sqrt(self.sigma * temp))])
+        new_trajectory_length = max([2, int(3 * np.sqrt(self.sigma * temp))])
         #  if new_trajectory_length < 2:
         #      new_trajectory_length = 3
         self.trajectory_length = new_trajectory_length
@@ -426,13 +434,14 @@ class GaussianMixtureModel(object):
         """ Generate trajectories using current values from L2HMC update
         method.  """
         if num_steps is None:
-            num_steps = 5 * self.trajectory_length
+            #  num_steps = int(5 * self.trajectory_length)
+            num_steps = int(self.trajectory_length)
         _samples = self.distribution.get_samples(num_samples)
         _trajectories = []
         _loss_arr = []
         _px_arr = []
         #  for step in range(self.params['trajectory_length']):
-        for step in range(num_steps):
+        for step in range(int(num_steps)):
             _trajectories.append(np.copy(_samples))
             _feed_dict = {self.x: _samples,
                           #  self.dynamics.trajectory_length: num_steps,
@@ -487,6 +496,146 @@ class GaussianMixtureModel(object):
                                               num_blocks=100)
 
         return tunn_avg_err, accept_avg_err
+
+    def get_tunneling_rates(self, step, temp, num_samples, num_steps):
+        """Main method for generating trajectories, and calculating the
+        tunneling rates with errors."""
+        # trajectory_data[0] = trajectories, of shape [ttl, ns, x_dim]
+        # trajectory_data[1] = loss_arr, the loss from each trajectory
+        # trajectory_data[3] = acceptance_arr, the acceptance rate from each
+        trajectory_data = self.generate_trajectories(temp=temp,
+                                                     num_samples=num_samples,
+                                                     num_steps=num_steps)
+        # tunn_rates[0] = average tunneling rate from td
+        # tunn_rates[1] = average tunneling rate error from td
+        # accept_rates[0] = average acceptance rate from ar
+        # accept_rates[1] = average acceptance rate error from ar
+        tunn_rates, accept_rates = self._calc_tunneling_info(trajectory_data)
+
+        # avg_distances[0] = average distance traveled over all trajectories
+        # avg_distances[1] = error in average distance 
+        # NOTE: we swap axes 0 and 1 of the trajectories to reshape
+        # them as [num_samples, num_steps, x_dim]
+        trajectories = trajectory_data[0].transpose([1, 0, 2])
+        avg_distances = calc_avg_distances(trajectories)
+
+        return trajectory_data, tunn_rates, accept_rates, avg_distances
+
+    def _update_annealing_schedule(self):
+        """Update the annealing schedule dynamically based on the changes in
+        the tunneling rate.
+
+        If the tunneling rate decreases during training, we want to slow down
+        the annealing schedule. (?? Might delete) However if the tunneling rate
+        stays the same or increases we can speed the annealing schedule up.
+        """
+        if len(list(self.tunneling_rates.values())) > 1:
+            previous_step = self.steps_arr[-2]
+            previous_temp = self.temp_arr[-2]
+
+            current_step = self.steps_arr[-1]
+            current_temp = self.temp_arr[-1]
+
+            def get_val(step, temp):
+                if temp == 1.0:
+                    return self.tunneling_rates[(step, temp)]
+                else:
+                    return self.tunneling_rates_highT[(step, temp)]
+
+            tr0_old, tr0_old_err = get_val(previous_step, 1.0)
+            tr0_new, tr0_new_err = get_val(current_step, 1.0)
+            tr1_old, tr1_old_err = get_val(previous_step, previous_temp)
+            tr1_new, tr1_new_err = get_val(current_step, current_temp)
+
+            #  tr0_old = tr0_arr[-2]
+            #  tr0_old_err = tr0_err_arr[-2]
+            #  tr0_new = tr0_arr[-1]
+            #  tr0_new_err = tr0_err_arr[-1]
+
+            #  tr1_old = tr1_arr[-2]
+            #  tr1_old_err = tr1_err_arr[-2]
+            #  tr1_new = tr1_arr[-1]
+            #  tr1_new_err = tr1_err_arr[-1]
+            #
+            # want the tunneling to either increase or remain
+            # constant (within margin of error)
+            delta_tr0_dec = ((tr0_old - tr0_old_err)
+                             - (tr0_new + tr0_new_err))
+            delta_tr1_dec = ((tr1_old - tr1_old_err)
+                             - (tr1_new + tr1_new_err))
+
+            delta_tr0_inc = ((tr0_new - tr0_new_err)
+                             - (tr0_old + tr0_old_err))
+            delta_tr1_inc = ((tr1_new - tr1_new_err)
+                             - (tr1_old + tr1_old_err))
+
+            # if either of the tunneling rates decreased we want
+            # to slow down the annealing schedule. In order to do
+            # this, we can:
+                #  1.) Increase the number of annealing steps
+                #      old way: (divide by the annealing factor) 
+                #      new way: (Increase by 50)
+                #  2.) Increase the annealing factor to reduce the
+                #      amount by which the temperature decreases
+                #      with each annealing step (divide the 
+                #      annealing factor itself to bring it closer
+                #      to 1.)
+                #  3.) Reset the temperature to a higher value?? 
+            if (delta_tr0_dec > 0) or (delta_tr1_dec > 0):
+                as_old = self.annealing_steps
+                temp_old = self.temp
+                print('\nTunneling rate decreased.')
+                print(f'Change in tunneling rate (temp = 1):'
+                      f' {delta_tr0_dec}')
+                print(f'Change in tunneling rate (temp ='
+                      f' {self.temp:.3g}): {delta_tr1_dec}')
+                self.annealing_steps += 50
+
+                #  self.annealing_steps = int(self.annealing_steps /
+                #                             self.annealing_factor)
+                                           #  / self.annealing_factor)
+                self.temp = self.temp_arr[-2]
+                             #  * self.annealing_factor)
+                #  self.temp = (self.temp / self.annealing_factor)
+                             #  / self.annealing_factor)
+                #  self.annealing_factor /= self.annealing_factor
+
+                print('Slowing down annealing schedule and resetting'
+                      ' temperature.')
+                print(f'Annealing steps: {as_old} -->'
+                      f' {self.annealing_steps}')
+                print(f'Temperature: {temp_old:.3g} -->'
+                      f' {self.temp:.3g}\n')
+
+            if (delta_tr0_inc > 0) or (delta_tr1_inc > 0):
+                if not (delta_tr0_dec > 0 or delta_tr1_dec > 0):
+                    # Only speed up the annealing schedule if NEITHER the high
+                    # or low temperature tunneling rates have decreased.
+                    as_old = self.annealing_steps
+                    temp_old = self.temp
+                    print('\nTunneling rate increased. Speeding up'
+                          ' annealing schedule.')
+                    print(f'Change in tunneling rate (temp = 1):'
+                          f' {delta_tr0_inc}')
+                    print(f'Change in tunneling rate (temp ='
+                          f' {self.temp:.3g}): {delta_tr1_inc}')
+
+                    self.annealing_steps -= 50
+                    #  new_as = (self.annealing_steps
+                    #            * self.annealing_factor)
+
+                    #  self.annealing_steps = int(new_as)
+                                               #  / self.annealing_factor)
+                    #self.temp = (self.temp * self.annealing_factor)
+                                 #  / self.annealing_factor)
+                    #  self.annealing_factor /= self.annealing_factor
+                    print(f'Annealing steps: {as_old} -->'
+                          f' {self.annealing_steps}')
+                    print(f'Temperature: {temp_old:.3g} -->'
+                          f' {self.temp:.3g}\n')
+
+        else:
+            print("Nothing to compare to!")
 
     def _print_header(self, test_flag=False):
         if test_flag:
@@ -562,7 +711,7 @@ class GaussianMixtureModel(object):
                  + f'{dist_info[0]:^10.4g}'
                  + f'{dist_info[1]:^8.4g}'
                  + f'{eps:^11.4g}'
-                 + f'{5 * int(self.trajectory_length):^6.4g}')
+                 + f'{int(self.trajectory_length):^6.4g}')
         print(i_str)
         dash1 = (len(i_str) + 1) * '-'
         print(dash1)
@@ -692,10 +841,10 @@ class GaussianMixtureModel(object):
 
         writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
         t0 = time.time()
-        tr0_arr = []
-        tr0_err_arr = []
-        tr1_arr = []
-        tr1_err_arr = []
+        #  tr0_arr = []
+        #  tr0_err_arr = []
+        #  tr1_arr = []
+        #  tr1_err_arr = []
         try:
             self._print_header()
             for step in range(initial_step, initial_step + num_train_steps):
@@ -731,8 +880,6 @@ class GaussianMixtureModel(object):
                         self._update_trajectory_length(temp_)
 
                 if step % self.logging_steps == 0:
-                    #  dash = '-' * 100
-                    #  print(dash)
                     summary_str = self.sess.run(self.summary_op,
                                            feed_dict=feed_dict)
                     writer.add_summary(summary_str, global_step=step)
@@ -751,45 +898,21 @@ class GaussianMixtureModel(object):
                     self.steps_arr.append(step + 1)
 
                     ns = self.num_samples
-                    #ttl = self.trajectory_length
                     ttl = self.trajectory_length
 
-                    # td0 = trajectory_data
-                    # td0[0] = trajectories, of shape [ttl, ns, x_dim]
-                    # td0[1] = loss_arr, the loss from each trajectory
-                    # td0[3] = acceptance_arr, the acceptance rate from each
-                    #          trajectory
-                    td0 = self.generate_trajectories(temp=1.,
-                                                     num_samples=ns,
-                                                     num_steps=ttl)
-                    # tr0 = tunneling_rates0
-                    # tr0[0] = average tunneling rate from td0
-                    # tr0[1] = average tunneling rate error from td0
-                    # ar0 = acceptance_rates0
-                    # ar0[0] = average acceptance rate from ar0
-                    # ar0[1] = average acceptance rate error from ar0
-                    tr0, ar0 = self._calc_tunneling_info(td0)
-                    tr0_arr.append(tr0[0])
-                    tr0_err_arr.append(tr0[1])
+                    td0, tr0, ar0, ad0 = self.get_tunneling_rates(step, 1.,
+                                                                  ns, ttl)
+                    self.tunneling_rates[(step+1, 1.)] = tr0
+                    self.acceptance_rates[(step+1, 1.)] = ar0
+                    self.distances[(step+1, 1.)] = ad0
 
-                    # ad0 = average distances0
-                    # ad0[0] = average distance traveled over all trajectories
-                    # ad0[1] = error in average distance 
-                    # NOTE: we swap axes 0 and 1 of the trajectories to reshape
-                    # them as [num_samples, num_steps, x_dim]
-                    ad0 = calc_avg_distances(td0[0].transpose([1, 0, 2]))
-                    # td1 = trajectory_data1, elements are the same as td0
-                    td1 = self.generate_trajectories(temp=self.temp,
-                                                     num_samples=ns,
-                                                     num_steps=ttl)
-                    # tr1 = tunneling_rates1, same elements as tr0
-                    # ar0 = acceptance_rates0, same elements as ar0
-                    tr1, ar1 = self._calc_tunneling_info(td1)
-                    tr1_arr.append(tr1[0])
-                    tr1_err_arr.append(tr1[1])
+                    td1, tr1, ar1, ad1 = self.get_tunneling_rates(step,
+                                                                  self.temp,
+                                                                  ns, ttl)
 
-                    # ad1 = average distances1, same elements as ad0
-                    ad1 = calc_avg_distances(td1[0].transpose([1, 0, 2]))
+                    self.tunneling_rates_highT[(step+1, self.temp)] = tr1
+                    self.acceptance_rates_highT[(step+1, self.temp)] = ar1
+                    self.distances_highT[(step+1, self.temp)] = ad1
 
                     self._print_header(test_flag=True)
                     self._print_tunneling_info(step, eps, tr0, ar0,
@@ -797,103 +920,11 @@ class GaussianMixtureModel(object):
                     self._print_tunneling_info(step, eps, tr1, ar1,
                                                ad1, td1[1], temp=self.temp)
 
-                    self.tunneling_rates[(step, 1.)] = tr0
-                    self.acceptance_rates[(step, 1.)] = ar0
-                    self.distances[(step, 1.)] = ad0
-
-                    temp_key = round(self.temp, 3)
-                    self.tunneling_rates_highT[(step, temp_key)] = tr1
-                    self.acceptance_rates_highT[(step, temp_key)] = ar1
-                    self.distances_highT[(step, temp_key)] = ad1
-
                     self._print_time_info(t0, t1, step)
                     self._generate_plots(step)
 
-                    if len(tr0_arr) > 1:
-                        # tunneling_rate at temp = 1
-                        tr0_old = tr0_arr[-2]
-                        tr0_old_err = tr0_err_arr[-2]
-                        tr0_new = tr0_arr[-1]
-                        tr0_new_err = tr0_err_arr[-1]
-
-                        tr1_old = tr1_arr[-2]
-                        tr1_old_err = tr1_err_arr[-2]
-                        tr1_new = tr1_arr[-1]
-                        tr1_new_err = tr1_err_arr[-1]
-
-                        # want the tunneling to either increase or remain
-                        # constant (within margin of error)
-                        delta_tr0_dec = ((tr0_old - tr0_old_err)
-                                         - (tr0_new + tr0_new_err))
-                        delta_tr1_dec = ((tr1_old - tr1_old_err)
-                                         - (tr1_new + tr1_new_err))
-
-                        delta_tr0_inc = ((tr0_new - tr0_new_err)
-                                         - (tr0_old + tr0_old_err))
-                        delta_tr1_inc = ((tr1_new - tr1_new_err)
-                                         - (tr1_old + tr1_old_err))
-
-                        # if either of the tunneling rates decreased we want
-                        # to slow down the annealing schedule. In order to do
-                        # this, we can:
-                            #  1.) Increase the number of annealing steps
-                            #      (divide by the annealing factor) 
-                            #  2.) Increase the annealing factor to reduce the
-                            #      amount by which the temperature decreases
-                            #      with each annealing step (divide the 
-                            #      annealing factor itself to bring it closer
-                            #      to 1.)
-                            #  3.) Reset the temperature to a higher value?? 
-                        if (delta_tr0_dec > 0) or (delta_tr1_dec > 0):
-                            as_old = self.annealing_steps
-                            temp_old = self.temp
-                            print('\nTunneling rate decreased. Slowing down'
-                                  ' annealing schedule.')
-                            print(f'Change in tunneling rate (temp = 1):'
-                                  f' {delta_tr0_dec}')
-                            print(f'Change in tunneling rate (temp ='
-                                  f' {self.temp:.3g}): {delta_tr1_dec}')
-
-                            self.annealing_steps = int(self.annealing_steps /
-                                                       self.annealing_factor)
-                                                       #  / self.annealing_factor)
-                            self.temp = self.temp_arr[-2]
-                                         #  * self.annealing_factor)
-                            #  self.temp = (self.temp / self.annealing_factor)
-                                         #  / self.annealing_factor)
-                            #  self.annealing_factor /= self.annealing_factor
-                            print(f'Annealing steps: {as_old} -->'
-                                  f' {self.annealing_steps}')
-                            print(f'Temperature: {temp_old:.3g} -->'
-                                  f' {self.temp:.3g}\n')
-
-                        if (delta_tr0_inc > 0) or (delta_tr1_inc > 0):
-                            if delta_tr0_dec > 0 or delta_tr1_dec > 1:
-                                continue
-                            else:
-                                as_old = self.annealing_steps
-                                temp_old = self.temp
-                                print('\nTunneling rate increased. Speeding up'
-                                      ' annealing schedule.')
-                                print(f'Change in tunneling rate (temp = 1):'
-                                      f' {delta_tr0_inc}')
-                                print(f'Change in tunneling rate (temp ='
-                                      f' {self.temp:.3g}): {delta_tr1_inc}')
-
-                                new_as = (self.annealing_steps
-                                          * self.annealing_factor)
-
-                                self.annealing_steps = int(new_as)
-                                                           #  / self.annealing_factor)
-                                #self.temp = (self.temp * self.annealing_factor)
-                                             #  / self.annealing_factor)
-                                #  self.annealing_factor /= self.annealing_factor
-                                print(f'Annealing steps: {as_old} -->'
-                                      f' {self.annealing_steps}')
-                                print(f'Temperature: {temp_old:.3g} -->'
-                                      f' {self.temp:.3g}\n')
-
-                        self._print_header()
+                    self._update_annealing_schedule()
+                    self._print_header()
 
             writer.close()
             self.sess.close()
@@ -990,24 +1021,33 @@ def main(args):
 
     if args.step_size:
         params['eps'] = args.step_size
+        #  print(f"eps: {params['eps']}")
     if args.temp_init:
         params['temp_init'] = args.temp_init
+        #  print(f'temp_init: {args.temp_init}')
     if args.num_samples:
         params['num_samples'] = args.num_samples
+        #  print(f'num_samples: {args.num_samples}')
     #  if args.trajectory_length:
     #      params['trajectory_length'] = args.trajectory_length
     #  if args.test_trajectory_length:
     #      params['test_trajectory_length'] = args.test_trajectory_length
     if args.num_steps:
-        params['num_training_steps'] = args.num_steps
+        params['num_training_steps'] = int(args.num_steps)
+        #  print(f'num_training_steps: {args.num_training_steps}')
     if args.annealing_steps:
-        params['annealing_steps'] = args.annealing_steps
+        params['annealing_steps'] = int(args.annealing_steps)
+        #  print(f'annealing_steps: {args.annealing_steps}')
     if args.annealing_factor:
         params['annealing_factor'] = args.annealing_factor
+        #  print(f'annealing_factor: {args.annealing_factor}')
     if args.tunneling_rate_steps:
-        params['tunneling_rate_steps'] = args.tunneling_rate_steps
+        params['tunneling_rate_steps'] = int(args.tunneling_rate_steps)
+        #  print(f'tunneling_rate_steps: {args.tunneling_rate_steps}')
     #  if args.make_plots:
     #      plot = args.make_plots
+    #  for arg in args:
+    #      print(f"{arg}")
 
     config = tf.ConfigProto()
     config.gpu_options.allow_growth = True
@@ -1031,25 +1071,31 @@ if __name__ == '__main__':
         description=('L2HMC model using Mixture of Gaussians '
                      'for target distribution')
     )
-    parser.add_argument("-d", "--dimension", type=int, required=True,
+    parser.add_argument("-d", "--dimension",
+                        type=int, required=True,
                         help="Dimensionality of distribution space.")
 
-    parser.add_argument("-N", "--num_distributions", type=int, required=True,
+    parser.add_argument("-N", "--num_distributions",
+                        type=int, required=True,
                         help="Number of target distributions for GMM model.")
 
-    parser.add_argument("-n", "--num_steps", default=10000, type=int,
-                        required=True, help="Define the number of training "
+    parser.add_argument("-n", "--num_steps",
+                        default=10000, type=int, required=True,
+                        help="Define the number of training "
                         "steps. (Default: 10000)")
 
-    parser.add_argument("-T", "--temp_init", default=20, type=int,
-                        required=False, help="Initial temperature to use for "
+    parser.add_argument("-T", "--temp_init",
+                        default=20, type=int, required=False,
+                        help="Initial temperature to use for "
                         "annealing. (Default: 20)")
 
-    parser.add_argument("--num_samples", default=200, type=int, required=False,
+    parser.add_argument("--num_samples",
+                        default=200, type=int, required=False,
                         help="Number of samples to use for batched training. "
                         "(Default: 200)")
 
-    parser.add_argument("--step_size", default=0.1, type=float, required=False,
+    parser.add_argument("--step_size",
+                        default=0.1, type=float, required=False,
                         help="Initial step size to use in leapfrog update, "
                         "called `eps` in code. (This will be tuned for an "
                         "optimal value during" "training)")
@@ -1062,23 +1108,32 @@ if __name__ == '__main__':
     #                      required=False, help="Trajectory length to be used "
     #                      "during. (Default: 10)")
 
-    parser.add_argument("--annealing_steps", default=100, type=int,
-                        required=False, help="Number of annealing steps."
+    parser.add_argument("--annealing_steps",
+                        default=100, type=int, required=False,
+                        help="Number of annealing steps."
                         "(Default: 100)")
 
-    parser.add_argument("--tunneling_rate_steps", default=1000, type=int,
-                        required=False, help="Number of steps after which to "
+    parser.add_argument("--annealing_factor",
+                        default=0.98, type=float, required=False,
+                        help="Annealing factor by which the temperature is"
+                        " multiplied each time we hit the annealing step.")
+
+    #  parser.add_argument("--annealing_factor",
+    #                      default=0.98, type=float, required=False,
+    #                      help="Annealing factor. (Default: 0.98)")
+
+    parser.add_argument("--tunneling_rate_steps",
+                        default=1000, type=int, required=False,
+                        help="Number of steps after which to "
                         "calculate the tunneling rate."
                         "(Default: 1000)")
-
-    parser.add_argument("--annealing_factor", default=0.98, type=float,
-                        required=False, help="Annealing factor. (Default: 0.98)")
 
     #  parser.add_argument('--make_plots', default=True, required=False,
     #                      help="Whether or not to create plots during training."
     #                      " (Default: True)")
 
-    parser.add_argument("--log_dir", type=str, required=False,
+    parser.add_argument("--log_dir",
+                        type=str, required=False,
                         help="Define the log dir to use if restoring from"
                         "previous run (Default: None)")
 
@@ -1197,37 +1252,3 @@ if __name__ == '__main__':
 
 
 
-## TEMP REFRESH CODE
-#  if 1 < self.temp < 2:
-#      new_tunneling_rate = tunn_avg_err[0]
-#      prev_tunneling_rate = 0
-#      if len(self.tunneling_rates_avg) > 1:
-#          prev_tunneling_rate = self.tunneling_rates_avg[-2]
-#
-#      tunneling_rate_diff = (new_tunneling_rate
-#                             - prev_tunneling_rate
-#                             + 2 * tunn_avg_err[1])
-#
-#      #  if the tunneling rate decreased since the last
-#      #  time it was calculated, restart the temperature
-#      if tunneling_rate_diff < 0:
-#          # the following will revert self.temp to a
-#          # value slightly smaller than the value it had
-#          # previously the last time the tunneling rate
-#          # was calculated
-#          print("\n\tTunneling rate decreased!")
-#          print("\tNew tunneling rate:"
-#                f" {new_tunneling_rate:.3g}, "
-#                "Previous tunneling_rate:"
-#                f" {prev_tunneling_rate:.3g}, "
-#                f"diff: {tunneling_rate_diff:.3g}\n")
-#          print("\tResetting temperature...")
-#          if len(self.temp_arr) > 1:
-#              prev_temp = self.temp_arr[-2]
-#              new_temp = (prev_temp *
-#                          self.params['annealing_factor'])
-#              print(f"\tCurrent temp: {self.temp:.3g}, "
-#                    f"\t Previous temp: {prev_temp:.3g}, "
-#                    f"\t New temp: {new_temp:.3g}\n")
-#              self.temp = new_temp
-#              self.temp_arr[-1] = self.temp
