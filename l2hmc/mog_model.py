@@ -620,7 +620,8 @@ class GaussianMixtureModel(object):
                     print(f'Change in tunneling rate (temp ='
                           f' {self.temp:.3g}): {delta_tr1_inc}')
 
-                    self.annealing_steps -= 50
+                    as_new = self.annealing_steps - 50
+                    self.anneling_steps = min(50, as_new)
                     #  new_as = (self.annealing_steps
                     #            * self.annealing_factor)
 
