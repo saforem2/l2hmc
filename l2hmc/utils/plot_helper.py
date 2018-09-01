@@ -107,3 +107,41 @@ def errorbar_plot(x_data, y_data, y_errors, out_file=None, **kwargs):
         return fig, axes
     else: 
         return fig, ax
+
+def annealing_schedule_plot(**kwargs):
+    num_steps = kwargs.get('num_training_steps')
+    temp_init = kwargs.get('temp_init')
+    annealing_factor = kwargs.get('annealing_factor')
+    annealing_steps = kwargs.get('annealing_steps')
+    tunneling_steps = kwargs.get('tunneling_rate_steps')
+    figs_dir = kwargs.get('figs_dir')
+    steps_arr = kwargs.get('steps_arr')
+    temp_arr = kwargs.get('temp_arr')
+
+    #steps = np.arange(num_steps)
+    temps = []
+    steps = []
+    temp = temp_init
+    for step in range(num_steps):
+        if step % annealing_steps == 0:
+            tt = temp * annealing_factor
+            if tt > 1:
+                temp = tt
+        if (step+1) % tunneling_steps == 0:
+            steps.append(step+1)
+            temps.append(temp)
+
+    fig, ax = plt.subplots()
+    pt = ax.plot(steps, temps, ls='--', label='Fixed schedule', lw=2)
+    pt = ax.plot(steps_arr, temp_arr, label='Dynamic schedule',
+                 lw=2., alpha=0.75)
+    hl = ax.axhline(y=1., color='C6', ls='-', lw=2., label='T=1')
+    xl = ax.set_xlabel('Training step')
+    yl = ax.set_ylabel('Temperature')
+    lg = ax.legend(loc='best')
+    print(f"Saving figure to: {figs_dir}annealing_schedule.pdf")
+
+    plt.savefig(figs_dir + 'annealing_schedule.pdf',
+                dpi=400, bbox_inches='tight')
+    return fig, ax
+

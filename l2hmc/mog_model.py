@@ -26,7 +26,7 @@ from utils.trajectories import calc_tunneling_rate, calc_avg_distances
 #  from utils.jackknife import block_resampling, jackknife_err
 from utils.data_utils import calc_avg_vals_errors, block_resampling,\
         jackknife_err
-from utils.plot_helper import errorbar_plot
+from utils.plot_helper import errorbar_plot, annealing_schedule_plot
 
 ###############################################################################
 #  TODO: 
@@ -246,6 +246,8 @@ class GaussianMixtureModel(object):
         self.temp_arr = []
         self.steps_arr = []
         self.losses_arr = []
+        #  self.annealing_temps_arr = []
+        #  self.annealing_steps_arr = []
 
         for key, val in params.items():
             setattr(self, key, val)
@@ -295,6 +297,10 @@ class GaussianMixtureModel(object):
         np.save(self.info_dir + 'steps_arr.npy', np.array(self.steps_arr))
         np.save(self.info_dir + 'losses_arr.npy', np.array(self.losses_arr))
         np.save(self.info_dir + 'covs_arr.npy', np.array(self.covs))
+        #  np.save(self.info_dir + 'annealing_steps_arr.npy',
+        #          np.array(self.annealing_steps_arr))
+        #  np.save(self.info_dir + 'annealing_temps_arr.npy',
+        #          np.array(self.annealing_temps_arr))
 
     def _save_model(self, saver, writer, step):
         """Save tensorflow model with graph and all quantities of interest."""
@@ -326,6 +332,12 @@ class GaussianMixtureModel(object):
         self.temp_arr = list(np.load(self.info_dir + 'temp_arr.npy'))
         self.steps_arr = list(np.load(self.info_dir + 'steps_arr.npy'))
         self.losses_arr = list(np.load(self.info_dir + 'losses_arr.npy'))
+        #  self.annealing_steps_arr = np.load((self.info_dir
+        #                                      + 'annealing_steps_arr.npy'),
+        #                                     np.array(self.annealing_steps_arr))
+        #  self.annealing_temps_arr = np.load((self.info_dir
+        #                                      + 'annealing_temps_arr.npy'),
+        #                                     np.array(self.annealing_steps_arr))
         try:
             self.temp = self.temp_arr[-1]
             self.step_init = self.steps_arr[-1]
@@ -799,7 +811,8 @@ class GaussianMixtureModel(object):
                                     out_file=out_file0, **kwargs)
 
         line_args = {'color': 'C3', 'ls': ':', 'lw': 2.}
-        axes0 = add_vline(axes0, 1, **line_args)
+        #  axes0 = add_vline(axes0, 1, **line_args)
+        #  fig0.savefig(out_file0, dpi=400, bbox_inches='tight')
         #  for ax in axes:
         #      ax.axvline(x=1, color='C3', ls=':', lw=2.)
 
@@ -807,7 +820,8 @@ class GaussianMixtureModel(object):
         kwargs['title'] = title_highT
         fig1, axes1 = errorbar_plot(x_steps, y_data_highT, y_err_highT,
                                     out_file=out_file1, **kwargs)
-        axes1 = add_vline(axes1, 1, **line_args)
+        #  axes1 = add_vline(axes1, 1, **line_args)
+        #  fig1.savefig(out_file1, dpi=400, bbox_inches='tight')
         #  for ax in axes:
         #      ax.axvline(x=1, color='C3', ls=':', lw=2.)
 
@@ -818,12 +832,17 @@ class GaussianMixtureModel(object):
         fig2, axes2 = errorbar_plot(x_temps, y_data, y_err,
                                     out_file=out_file2, **kwargs)
         axes2 = add_vline(axes2, 1, **line_args)
+        fig2.savefig(out_file2, dpi=400, bbox_inches='tight')
 
         # for trajectories with temperature > 1. vs TEMP
         kwargs['title'] = title_highT
         fig3, axes3 = errorbar_plot(x_temps, y_data_highT, y_err_highT,
                                     out_file=out_file3, **kwargs)
         axes3 = add_vline(axes3, 1, **line_args)
+        fig3.savefig(out_file3, dpi=400, bbox_inches='tight')
+
+        fig4, ax4 = annealing_schedule_plot(**self.__dict__)
+
         plt.close('all')
 
     def train(self, num_train_steps):
@@ -878,6 +897,8 @@ class GaussianMixtureModel(object):
                     temp_ = self.temp * self.annealing_factor
                     if temp_ > 1.:
                         self.temp = temp_
+                        #  self.annealing_steps_arr.append(step + 1)
+                        #  self.annealing_temps_arr.append(self.temp)
                         self._update_trajectory_length(temp_)
 
                 if step % self.logging_steps == 0:
@@ -1028,6 +1049,8 @@ def main(args):
         #  print(f'temp_init: {args.temp_init}')
     if args.num_samples:
         params['num_samples'] = args.num_samples
+    if args.scale:
+        params['scale'] = args.scale
         #  print(f'num_samples: {args.num_samples}')
     #  if args.trajectory_length:
     #      params['trajectory_length'] = args.trajectory_length
@@ -1094,6 +1117,12 @@ if __name__ == '__main__':
                         default=200, type=int, required=False,
                         help="Number of samples to use for batched training. "
                         "(Default: 200)")
+
+    parser.add_argument("--scale",
+                        default=0.1, type=float, required=False,
+                        help="Multiplicative factor for scaling hyperbolic"
+                        " tangent activation function in neural network."
+                        " (Default: 0.1)")
 
     parser.add_argument("--step_size",
                         default=0.1, type=float, required=False,
