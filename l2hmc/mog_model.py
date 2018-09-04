@@ -1028,6 +1028,7 @@ def main(args):
     #    [0, -1, 0, ..., 0, 0, 0]
     #--------------------------------------------------------------------------
     if args.single_axis:
+        means = np.zeros((x_dim, x_dim))
         rand_axis = np.random.randint(x_dim)
         centers = np.sqrt(2)
         even_rows = np.arange(0, x_dim, 2)
@@ -1098,7 +1099,7 @@ def main(args):
     #      print(f"{arg}")
 
     config = tf.ConfigProto()
-    config.gpu_options.allow_growth = True
+    #  config.gpu_options.allow_growth = True
 
     t0 = time.time()
     if args.log_dir:

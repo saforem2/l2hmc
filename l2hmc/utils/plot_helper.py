@@ -109,7 +109,7 @@ def errorbar_plot(x_data, y_data, y_errors, out_file=None, **kwargs):
         return fig, ax
 
 def annealing_schedule_plot(**kwargs):
-    #  num_steps = kwargs.get('num_training_steps')
+    train_steps = kwargs.get('num_training_steps')
     temp_init = kwargs.get('temp_init')
     annealing_factor = kwargs.get('annealing_factor')
     annealing_steps = kwargs.get('annealing_steps')
@@ -119,7 +119,8 @@ def annealing_schedule_plot(**kwargs):
     figs_dir = kwargs.get('figs_dir')
     steps_arr = kwargs.get('steps_arr')
     temp_arr = kwargs.get('temp_arr')
-    num_steps = max(steps_arr)
+    #  num_steps = max(steps_arr)
+    num_steps = max(train_steps, steps_arr)
 
     #steps = np.arange(num_steps)
     temps = []
