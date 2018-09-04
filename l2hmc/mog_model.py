@@ -260,6 +260,8 @@ class GaussianMixtureModel(object):
 
         self.temp = self.temp_init
         self.step_init = 0
+        self._annealing_steps_init = self.annealing_steps
+        self._tunneling_rate_steps_init = self.tunneling_rate_steps
 
     def _save_init_variables(self):
         """Since certain parameters (annealing steps, etc.) may change as the
@@ -275,10 +277,9 @@ class GaussianMixtureModel(object):
             pickle.dump(_init_params_dict, f)
         print(f'Initial parameters written to {_init_params_file}.')
 
-
     def _save_variables(self):
         """Save current values of variables."""
-        print(f"Saving parameter values to: {self.info_dir}")
+        #  print(f"Saving parameter values to: {self.info_dir}")
         self._create_params_file()
         for name, file in self.files.items():
             with open(file, 'wb') as f:
@@ -306,7 +307,7 @@ class GaussianMixtureModel(object):
         """Save tensorflow model with graph and all quantities of interest."""
         self._save_variables()
         ckpt_file = os.path.join(self.log_dir, 'model.ckpt')
-        print(f'Saving checkpoint to: {ckpt_file}\n')
+        #  print(f'Saving checkpoint to: {ckpt_file}\n')
         saver.save(self.sess, ckpt_file, global_step=step)
         writer.flush()
 
@@ -409,19 +410,14 @@ class GaussianMixtureModel(object):
     def _create_params_file(self):
         """Write relevant parameters to .txt file for reference."""
         params_txt_file = self.info_dir + 'parameters.txt'
-        #  bad_keys = ['global_step', 'learning_rate', 'dynamics',
-        #              'x', 'z', 'Lx', 'px', 'Lz', 'pz', 'loss',
-        #              'output', 'train_op', 'summary_op', 'sess']
         with open(params_txt_file, 'w') as f:
             #  for key, value in self.params.items():
             for key, val in self.__dict__.items():
-                #  b1 = not isinstance(val, (dict, list, np.ndarray, tf.Variable))
-                #  b2 = key not in bad_keys
                 if isinstance(val, (int, float, str)):
                     f.write(f'\n{key}: {val}\n')
             f.write(f"\nmeans:\n\n {str(self.means)}\n"
                     f"\ncovs:\n\n {str(self.covs)}\n")
-        print(f'params file written to: {params_txt_file}')
+        #  print(f'params file written to: {params_txt_file}')
 
     def _update_trajectory_length(self, temp):
         """Update the trajectory length to be roughly equal to half the period
@@ -604,6 +600,8 @@ class GaussianMixtureModel(object):
                 print(f'Change in tunneling rate (temp ='
                       f' {self.temp:.3g}): {delta_tr1_dec}')
                 self.annealing_steps += 50
+                if self.annealing_steps > self.tunneling_rate_steps:
+                    self.tunneling_rate_steps = self.annealing_steps + 100
 
                 #  self.annealing_steps = int(self.annealing_steps /
                 #                             self.annealing_factor)
@@ -621,33 +619,33 @@ class GaussianMixtureModel(object):
                 print(f'Temperature: {temp_old:.3g} -->'
                       f' {self.temp:.3g}\n')
 
-            if (delta_tr0_inc > 0) or (delta_tr1_inc > 0):
-                if not (delta_tr0_dec > 0 or delta_tr1_dec > 0):
-                    # Only speed up the annealing schedule if NEITHER the high
-                    # or low temperature tunneling rates have decreased.
-                    as_old = self.annealing_steps
-                    temp_old = self.temp
-                    print('\nTunneling rate increased. Speeding up'
-                          ' annealing schedule.')
-                    print(f'Change in tunneling rate (temp = 1):'
-                          f' {delta_tr0_inc}')
-                    print(f'Change in tunneling rate (temp ='
-                          f' {self.temp:.3g}): {delta_tr1_inc}')
-
-                    as_new = self.annealing_steps - 50
-                    self.anneling_steps = max(50, as_new)
-                    #  new_as = (self.annealing_steps
-                    #            * self.annealing_factor)
-
-                    #  self.annealing_steps = int(new_as)
-                                               #  / self.annealing_factor)
-                    #self.temp = (self.temp * self.annealing_factor)
-                                 #  / self.annealing_factor)
-                    #  self.annealing_factor /= self.annealing_factor
-                    print(f'Annealing steps: {as_old} -->'
-                          f' {self.annealing_steps}')
-                    print(f'Temperature: {temp_old:.3g} -->'
-                          f' {self.temp:.3g}\n')
+            #  if (delta_tr0_inc > 0) or (delta_tr1_inc > 0):
+            #      if not (delta_tr0_dec > 0 or delta_tr1_dec > 0):
+            #          # Only speed up the annealing schedule if NEITHER the high
+            #          # or low temperature tunneling rates have decreased.
+            #          as_old = self.annealing_steps
+            #          temp_old = self.temp
+            #          print('\nTunneling rate increased. Speeding up'
+            #                ' annealing schedule.')
+            #          print(f'Change in tunneling rate (temp = 1):'
+            #                f' {delta_tr0_inc}')
+            #          print(f'Change in tunneling rate (temp ='
+            #                f' {self.temp:.3g}): {delta_tr1_inc}')
+            #
+            #          as_new = self.annealing_steps - 50
+            #          self.anneling_steps = max(50, as_new)
+            #          #  new_as = (self.annealing_steps
+            #          #            * self.annealing_factor)
+            #
+            #          #  self.annealing_steps = int(new_as)
+            #                                     #  / self.annealing_factor)
+            #          #self.temp = (self.temp * self.annealing_factor)
+            #                       #  / self.annealing_factor)
+            #          #  self.annealing_factor /= self.annealing_factor
+            #          print(f'Annealing steps: {as_old} -->'
+            #                f' {self.annealing_steps}')
+            #          print(f'Temperature: {temp_old:.3g} -->'
+            #                f' {self.temp:.3g}\n')
 
         else:
             print("Nothing to compare to!")
@@ -980,7 +978,7 @@ def main(args):
     # GMM Model with Gaussians centered along each axis:
     #---------------------------------------------------------------------------
     # If x_dim = num_distributions then we put one along each eaxis as shown
-    # below.
+    # below, where X indicates the position of the center of the Gaussian.
     #    [X, 0, 0, ..., 0, 0, 0]
     #    [0, X, 0, ..., 0, 0, 0]
     #    [0, 0, X, ..., 0, 0, 0]
@@ -988,20 +986,21 @@ def main(args):
     #    [0, 0, 0, ..., X, 0, 0]
     #    [0, 0, 0, ..., 0, X, 0]
     #    [0, 0, 0, ..., 0, 0, X]
+    #---------------------------------------------------------------------------
+    # NOTE: If num_distributions < x_dim we append copies of the first
+    # num_distributions gaussians to the remaining x_dim rows. 
+    # For example, if num_distributions = 2 and x_dim = 4, with two gaussians
+    # located at (1, 0, 0, 0) and (0, 1, 0, 0)
+    # 
+    #    means = [1, 0, 0, 0]
+    #            [0, 1, 0, 0]
+    #            [1, 0, 0, 0]
+    #            [0, 1, 0, 0]
+    #---------------------------------------------------------------------------
     centers = np.sqrt(2)  # center of Gaussian
     for i in range(num_distributions):
         means[i::num_distributions, i] = centers
 
-    # If x_dim = num_distributions then we put one along each eaxis as shown
-    # below.
-    # NOTE: If num_distributions < x_dim then we 
-    #    [X, 0, 0, ..., 0, 0, 0]
-    #    [0, X, 0, ..., 0, 0, 0]
-    #    [0, 0, X, ..., 0, 0, 0]
-    #    [          \          ]    =    diag(x) 
-    #    [0, 0, 0, ..., X, 0, 0]
-    #    [0, 0, 0, ..., 0, X, 0]
-    #    [0, 0, 0, ..., 0, 0, X]
 
     ###########################################################################
     # TODO: 
@@ -1011,18 +1010,36 @@ def main(args):
     #   2.) With Gaussians separated diagonally across all dimensions.
     ###########################################################################
 
-    # Separated gaussians along a single axis chosen randomly from x_dim
-    #    [0, 0, 0, ..., 0, 0, 0]
-    #    [0, 0, 0, ..., 0, 0, 0]
-    #    [0, 0, 0, ..., 0, 0, 0]
-    #    [0, 0, 0, ..., 0, 0, 0]
-    #    [          .          ]
-    #    [          .          ]
-    #    [          .          ]
-    #    [0, 0, 0, ..., x, 0, 0]
-    #    [0, 0, 0, ..., 0, x, 0]
-    #    [0, 0, 0, ..., 0, 0, x]
-    #  centers1 = 1
+
+    #--------------------------------------------------------------------------
+    # Pair of Gaussians both separated along a single axis:
+    #--------------------------------------------------------------------------
+    # Separated Gaussians along a single axis chosen randomly.
+    # For example, if the randomly chosen axis was 1 (i.e. vertical axis),
+    # the `means` array would consist of two Gaussians and would look like (for
+    # each of the Gaussians centered at 1):
+    # 
+    #    [0, +1, 0, ..., 0, 0, 0]
+    #    [0, -1, 0, ..., 0, 0, 0]
+    #    [0, +1, 0, ..., 0, 0, 0]
+    #    [0, -1, 0, ..., 0, 0, 0]
+    #    [          ...         ]
+    #    [0, +1, 0, ..., 0, 0, 0]
+    #    [0, -1, 0, ..., 0, 0, 0]
+    #--------------------------------------------------------------------------
+    if args.single_axis:
+        rand_axis = np.random.randint(x_dim)
+        centers = np.sqrt(2)
+        even_rows = np.arange(0, x_dim, 2)
+        if x_dim % 2 == 1:
+            odd_rows = np.arange(1, x_dim, 2)
+        if x_dim % 2 == 0:
+            odd_rows = np.arange(1, x_dim+1, 2)
+
+        means[even_rows, rand_axis] = centers
+        means[odd_rows, rand_axis] = -1 * centers
+
+
     #  rand_axis = np.random.randint(num_distributions)
     #  means[0, rand_axis] = centers1
     #  means[1, rand_axis] = - centers1
@@ -1164,6 +1181,13 @@ if __name__ == '__main__':
                         help="Number of steps after which to "
                         "calculate the tunneling rate."
                         "(Default: 1000)")
+
+    parser.add_argument("--single_axis",
+                        default=False, type=bool, required=False,
+                        help="Specifies alternate arrangement where the GMM"
+                        " distribution consists of a single pair of Gaussians"
+                        " equidistant from the origin separated along a" 
+                        " randomly chosen axis.")
 
     #  parser.add_argument('--make_plots', default=True, required=False,
     #                      help="Whether or not to create plots during training."
