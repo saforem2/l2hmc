@@ -248,6 +248,7 @@ class GaussianMixtureModel(object):
         self.losses_arr = []
         #  self.annealing_temps_arr = []
         #  self.annealing_steps_arr = []
+        self.arrangement = 'axes'
 
         for key, val in params.items():
             setattr(self, key, val)
@@ -592,7 +593,8 @@ class GaussianMixtureModel(object):
             #      to 1.)
             #  3.) Reset the temperature to a higher value?? 
             if (delta_tr0_dec > 0) or (delta_tr1_dec > 0):
-                if not (tr1_old > 0.8 or tr1_new > 0.8):
+                #  if not (tr1_old > 0.8 or tr1_new > 0.8):
+                if tr1_old < 0.9:
                     as_old = self.annealing_steps
                     temp_old = self.temp
                     print('\nTunneling rate decreased.')
@@ -768,8 +770,16 @@ class GaussianMixtureModel(object):
 
         str0 = (f"{self.num_distributions}"
                 + f" in {self.x_dim} dims; ")
-        str1 = (r'$\mathcal{N}_{\hat \mu}(\sqrt{2}\hat \mu;$'
-                + r'${{{0}}}),$'.format(self.sigma))
+        str1 = ''
+        if self.arrangement == 'axes':
+            str1 = (r'$\mathcal{N}_{\hat \mu}(1\hat \mu;$'
+                    + r'${{{0}}}),$'.format(self.sigma))
+        if self.arrangement == 'single_axis':
+            str1 = (r'$\mathcal{N}_{\hat \mu}(\pm 1\hat \mu;$'
+                    + r'${{{0}}}),$'.format(self.sigma))
+        if self.arrangement == 'diagonal':
+            str1 = (r'$\mathcal{N}_{\hat \mu}(\pm R(\pi/4) 1 \hat \mu;$'
+                    + r'${{{0}}}),$'.format(self.sigma))
         #  prefix = str0 + str1
         title = str0 + str1 + r'$T_{trajectory} = 1$'
         title_highT = str0 + str1 + r'$T_{trajectory} > 1$'
@@ -991,9 +1001,11 @@ def main(args):
     #            [1, 0, 0, 0]
     #            [0, 1, 0, 0]
     #---------------------------------------------------------------------------
-    centers = np.sqrt(2)  # center of Gaussian
+    centers = 1 # center of Gaussian
     for i in range(num_distributions):
         means[i::num_distributions, i] = centers
+    #  params['arrangement'] = 'axes'
+    arrangement = 'axes'
 
 
     ###########################################################################
@@ -1024,30 +1036,29 @@ def main(args):
     if args.single_axis:
         means = np.zeros((x_dim, x_dim))
         rand_axis = np.random.randint(x_dim)
-        centers = np.sqrt(2)
-        even_rows = np.arange(0, x_dim, 2)
-        if x_dim % 2 == 1:
-            odd_rows = np.arange(1, x_dim, 2)
-        if x_dim % 2 == 0:
-            odd_rows = np.arange(1, x_dim+1, 2)
+        centers = 1
+        #  centers = np.sqrt(2)
 
-        means[even_rows, rand_axis] = centers
-        means[odd_rows, rand_axis] = -1 * centers
+        means[::2, rand_axis] = centers
+        means[1::2, rand_axis] = - centers
+        #  params['arrangement'] = 'single_axis'
+        arrangement = 'single_axis'
 
     if args.diagonal:
         means = np.zeros((x_dim, x_dim))
         rand_axis = np.random.randint(x_dim)
-        centers = np.sqrt(2)
-        even_rows = np.arange(0, x_dim, 2)
-        if x_dim % 2 == 1:
-            odd_rows = np.arange(1, x_dim, 2)
-        if x_dim % 2 == 0:
-            odd_rows = np.arange(1, x_dim+1, 2)
+        centers = 1
+        #  centers = np.sqrt(2)
 
-        means[even_rows, rand_axis] = np.cos(np.pi/4) * centers
-        means[even_rows, rand_axis-1] = np.sin(np.pi/4) * centers
-        means[odd_rows, rand_axis] = -1 * np.cos(np.pi/4) * centers
-        means[odd_rows, rand_axis-1] = -1 * np.sin(np.pi/4) * centers
+        means[::2, :] = centers
+        means[1::2, :] = - centers
+        arrangement = 'diagonal'
+        #  params['arrangement'] = 'diagonal'
+
+        #  means[even_rows, rand_axis] = np.cos(np.pi/4) * centers
+        #  means[even_rows, rand_axis-1] = np.sin(np.pi/4) * centers
+        #  means[odd_rows, rand_axis] = -1 * np.cos(np.pi/4) * centers
+        #  means[odd_rows, rand_axis-1] = -1 * np.sin(np.pi/4) * centers
 
 
     #  rand_axis = np.random.randint(num_distributions)
@@ -1073,7 +1084,8 @@ def main(args):
               'save_steps': 1000,
               'lr_decay_steps': 2500,
               'lr_decay_rate': 0.96,
-              'logging_steps': 100}
+              'logging_steps': 100,
+              'arrangement': arrangement}
 
     if args.step_size:
         params['eps'] = args.step_size
