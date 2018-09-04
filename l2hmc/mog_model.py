@@ -115,23 +115,23 @@ def network(x_dim, scope, factor):
     with tf.variable_scope(scope):
         net = Sequential([
             Zip([
-                Linear(x_dim, 20, scope='embed_1', factor=1.0 / 3),
-                Linear(x_dim, 20, scope='embed_2', factor=factor * 1.0 / 3),
-                Linear(2, 20, scope='embed_3', factor=1.0 / 3),
+                Linear(x_dim, 50, scope='embed_1', factor=1.0 / 3),
+                Linear(x_dim, 50, scope='embed_2', factor=factor * 1.0 / 3),
+                Linear(2, 50, scope='embed_3', factor=1.0 / 3),
                 lambda _: 0.,
             ]),
             sum,
             tf.nn.relu,
-            Linear(20, 20, scope='linear_1'),
+            Linear(50, 50, scope='linear_1'),
             tf.nn.relu,
             Parallel([
                 Sequential([
-                    Linear(20, x_dim, scope='linear_s', factor=0.001),
+                    Linear(50, x_dim, scope='linear_s', factor=0.001),
                     ScaleTanh(x_dim, scope='scale_s')
                 ]),
-                Linear(20, x_dim, scope='linear_t', factor=0.001),
+                Linear(50, x_dim, scope='linear_t', factor=0.001),
                 Sequential([
-                    Linear(20, x_dim, scope='linear_f', factor=0.001),
+                    Linear(50, x_dim, scope='linear_f', factor=0.001),
                     ScaleTanh(x_dim, scope='scale_f'),
                 ])
             ])
@@ -956,6 +956,7 @@ class GaussianMixtureModel(object):
 
                     self._update_annealing_schedule()
                     self._print_header()
+                    self._save_model(saver, writer, step)
 
             writer.close()
             self.sess.close()
