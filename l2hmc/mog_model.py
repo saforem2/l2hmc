@@ -582,42 +582,36 @@ class GaussianMixtureModel(object):
             # if either of the tunneling rates decreased we want
             # to slow down the annealing schedule. In order to do
             # this, we can:
-                #  1.) Increase the number of annealing steps
-                #      old way: (divide by the annealing factor) 
-                #      new way: (Increase by 50)
-                #  2.) Increase the annealing factor to reduce the
-                #      amount by which the temperature decreases
-                #      with each annealing step (divide the 
-                #      annealing factor itself to bring it closer
-                #      to 1.)
-                #  3.) Reset the temperature to a higher value?? 
+            #  1.) Increase the number of annealing steps
+            #      old way: (divide by the annealing factor) 
+            #      new way: (Increase by 50)
+            #  2.) Increase the annealing factor to reduce the
+            #      amount by which the temperature decreases
+            #      with each annealing step (divide the 
+            #      annealing factor itself to bring it closer
+            #      to 1.)
+            #  3.) Reset the temperature to a higher value?? 
             if (delta_tr0_dec > 0) or (delta_tr1_dec > 0):
-                as_old = self.annealing_steps
-                temp_old = self.temp
-                print('\nTunneling rate decreased.')
-                print(f'Change in tunneling rate (temp = 1):'
-                      f' {delta_tr0_dec}')
-                print(f'Change in tunneling rate (temp ='
-                      f' {self.temp:.3g}): {delta_tr1_dec}')
-                self.annealing_steps += 50
-                if self.annealing_steps > self.tunneling_rate_steps:
-                    self.tunneling_rate_steps = self.annealing_steps + 100
+                if not (tr1_old > 0.8 or tr1_new > 0.8):
+                    as_old = self.annealing_steps
+                    temp_old = self.temp
+                    print('\nTunneling rate decreased.')
+                    print(f'Change in tunneling rate (temp = 1):'
+                          f' {delta_tr0_dec}')
+                    print(f'Change in tunneling rate (temp ='
+                          f' {self.temp:.3g}): {delta_tr1_dec}')
+                    self.annealing_steps += 50
+                    if self.annealing_steps > self.tunneling_rate_steps:
+                        self.tunneling_rate_steps = self.annealing_steps + 100
 
-                #  self.annealing_steps = int(self.annealing_steps /
-                #                             self.annealing_factor)
-                                           #  / self.annealing_factor)
-                self.temp = self.temp_arr[-2]
-                             #  * self.annealing_factor)
-                #  self.temp = (self.temp / self.annealing_factor)
-                             #  / self.annealing_factor)
-                #  self.annealing_factor /= self.annealing_factor
+                    self.temp = self.temp_arr[-2] * self.annealing_factor
 
-                print('Slowing down annealing schedule and resetting'
-                      ' temperature.')
-                print(f'Annealing steps: {as_old} -->'
-                      f' {self.annealing_steps}')
-                print(f'Temperature: {temp_old:.3g} -->'
-                      f' {self.temp:.3g}\n')
+                    print('Slowing down annealing schedule and resetting'
+                          ' temperature.')
+                    print(f'Annealing steps: {as_old} -->'
+                          f' {self.annealing_steps}')
+                    print(f'Temperature: {temp_old:.3g} -->'
+                          f' {self.temp:.3g}\n')
 
             #  if (delta_tr0_inc > 0) or (delta_tr1_inc > 0):
             #      if not (delta_tr0_dec > 0 or delta_tr1_dec > 0):
@@ -1040,6 +1034,21 @@ def main(args):
         means[even_rows, rand_axis] = centers
         means[odd_rows, rand_axis] = -1 * centers
 
+    if args.diagonal:
+        means = np.zeros((x_dim, x_dim))
+        rand_axis = np.random.randint(x_dim)
+        centers = np.sqrt(2)
+        even_rows = np.arange(0, x_dim, 2)
+        if x_dim % 2 == 1:
+            odd_rows = np.arange(1, x_dim, 2)
+        if x_dim % 2 == 0:
+            odd_rows = np.arange(1, x_dim+1, 2)
+
+        means[even_rows, rand_axis] = np.cos(np.pi/4) * centers
+        means[even_rows, rand_axis-1] = np.sin(np.pi/4) * centers
+        means[odd_rows, rand_axis] = -1 * np.cos(np.pi/4) * centers
+        means[odd_rows, rand_axis-1] = -1 * np.sin(np.pi/4) * centers
+
 
     #  rand_axis = np.random.randint(num_distributions)
     #  means[0, rand_axis] = centers1
@@ -1074,6 +1083,7 @@ def main(args):
         #  print(f'temp_init: {args.temp_init}')
     if args.num_samples:
         params['num_samples'] = args.num_samples
+
     if args.scale:
         params['scale'] = args.scale
         #  print(f'num_samples: {args.num_samples}')
@@ -1092,6 +1102,10 @@ def main(args):
         #  print(f'annealing_factor: {args.annealing_factor}')
     if args.tunneling_rate_steps:
         params['tunneling_rate_steps'] = int(args.tunneling_rate_steps)
+        params['save_steps'] = int(args.tunneling_rate_steps)
+
+    if args.save_steps:
+        params['save_steps'] = int(args.save_steps)
         #  print(f'tunneling_rate_steps: {args.tunneling_rate_steps}')
     #  if args.make_plots:
     #      plot = args.make_plots
@@ -1183,12 +1197,25 @@ if __name__ == '__main__':
                         "calculate the tunneling rate."
                         "(Default: 1000)")
 
+    parser.add_argument("--save_steps",
+                        default=1000, type=int, required=False,
+                        help="Number of steps after which to "
+                        "save the model and all parameters."
+                        "(Default: 1000)")
+
     parser.add_argument("--single_axis",
                         default=False, type=bool, required=False,
                         help="Specifies alternate arrangement where the GMM"
                         " distribution consists of a single pair of Gaussians"
                         " equidistant from the origin separated along a" 
                         " randomly chosen axis.")
+
+    parser.add_argument("--diagonal",
+                        default=False, type=bool, required=False,
+                        help="Specifies alternate arrangement where the GMM"
+                        " distribution consists of a single pair of Gaussians"
+                        " equidistant from the origin separated along a"
+                        " randomly chosen axis, rotated by 45 deg..")
 
     #  parser.add_argument('--make_plots', default=True, required=False,
     #                      help="Whether or not to create plots during training."
@@ -1202,115 +1229,3 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     main(args)
-
-
-
-#  def plot_with_errors(self, x_data, y_data, y_errors,
-#                   x_label, y_label, **kwargs):
-#  #legend_labels=None, **kwargs):
-#  """Method for plotting tunneling rates during training."""
-#  #  tunneling_info_arr = np.array(self.tunneling_info)
-#  #  step_nums = tunneling_info_arr[:, 0]
-#  x = np.array(x_data)
-#  y = np.array(y_data)
-#  y_err = np.array(y_errors)
-#  if not (x.shape == y.shape == y_err.shape):
-#      err_str = ("x, y, and y_errs all must have the same shape.\n"
-#                 f" x_data.shape: {x.shape}"
-#                 f" y_data.shape: {y.shape}"
-#                 f" y_err.shape:" " {y_err.shape}")
-#      raise ValueError(err_str)
-#  #  if legend_labels is not None:
-#  #      if len(legend_labels) != x.shape[0]:
-#  #          err_str = ("If 'legend_labels' is passed, a label must be"
-#  #                     " supplied for each data set in 'x_data'.\n"
-#  #                     f" len_legend_labels: {len(legend_labels)}"
-#  #                     f" x_data.shape[0]: {x.shape[0]}.\n")
-#  #          raise ValueError(err_str)
-#  #  properties = {}
-#  if kwargs is not None:
-#      color = kwargs.get('color', 'C0')
-#      marker = kwargs.get('marker', '.')
-#      ls = kwargs.get('ls', '-')
-#      fillstyle= kwargs.get('fillstyle', 'none')
-#      #  for key, val in kwargs:
-#      #      properties[key] = val
-#  colors = ['C0', 'C1', 'C2', 'C3', 'C4', 'C5']
-#  markers = ['o', 's', 'v', 'h', 'P']
-#  linestyles = ['-', '--', ':', '.-', '-']
-#  #  fig, axes = plt.subplots(len(legend_labels), sharey=True)
-#  fig, ax = plt.subplots()
-#  ax.errorbar(x, y, yerr=y_err, capsize=1.5, capthick=1.5,
-#              color=color, marker=marker, ls=ls, fillstyle=fillstyle)
-#  ax.set_ylabel(y_label, fontsize=16)
-#  ax.set_xlabel(x_label, fontsize=16)
-#              #  label=legend_labels)
-#  #  for idx, row in enumerate(x):
-#  #  for idx, ax in enumerate(axes):
-#      #  axes[idx].errorbar(x[idx], y[idx], yerr=y_err[idx],
-#      #              capsize=1.5, capthick=1.5,
-#      #              color=colors[idx], marker=markers[idx],
-#      #              ls=linestyles[idx], fillstyle=fillstyle,
-#      #              label=legend_label[idx])
-#      #  axes[idx].set_ylabel(y_label[idx])#, fontsize=16)
-#      #  axes[idx].set_xlabel(x_label[idx])
-#      #  axes[idx].legend(loc='best')
-#
-#  str0 = (f"{self.params['num_distributions']}"
-#          + f" in {self.params['x_dim']} dims; ")
-#  str1 = (r'$\mathcal{N}_{\hat \mu}(\sqrt{2}\hat \mu;$'
-#          + r'${{{0}}}),$'.format(self.params['sigma']))
-#  #  axes[0].set_title(str0 + str1)
-#  ax.set_title(str0 + str1)#, y=1.15)
-#  fig.tight_layout()
-#  x_label_ = x_label.replace(' ', '_').lower()
-#  y_label_ = y_label.replace(' ', '_').lower()
-#  out_file = (self.figs_dir +
-#              f'{y_label_}_vs_{x_label_}_{int(self.steps_arr[-1])}.pdf')
-#              #  + f'tunneling_rate_{int(self.steps_arr[-1])}.pdf')
-#  print(f'Saving figure to: {out_file}\n')
-#  fig.savefig(out_file, dpi=400, bbox_inches='tight')
-#  plt.close('all')
-#  return fig, ax
-
-
-
-#  self.params = {}
-#  self.params['x_dim'] = params.get('x_dim', 3)
-#  #  number of Gaussian distributions to use for target distribution
-#  self.params['num_distributions'] = params.get('num_distributions', 2)
-#  self.params['lr_init'] = params.get('lr_init', 1e-3)
-#  self.params['lr_decay_steps'] = params.get('lr_decay_steps', 1000)
-#  self.params['lr_decay_rate'] = params.get('lr_decay_rate', 0.96)
-#  self.params['temp_init'] = params.get('temp_init', 10)
-#  self.params['annealing_steps'] = params.get('annealing_steps', 100)
-#  self.params['annealing_factor'] = params.get('annealing_factor', 0.98)
-#  #  Initial step size (learnable)
-#  self.params['eps'] = params.get('eps', 0.1)
-#  self.params['scale'] = params.get('scale', 0.1)
-#  nts = params.get('num_training_steps', 2e4)
-#  self.params['num_training_steps'] = nts
-#  #  number of samples (minibatch size) to use for training
-#  self.params['num_samples'] = params.get('num_samples', 200)
-#  #  Length of trajectory to use during training
-#  ttl0 = params.get('train_trajectory_length', 10)
-#  self.params['train_trajectory_length'] = ttl0
-#  #  Length of trajectory to use when calculating tunneling rate info
-#  ttl1 = params.get('test_trajectory_length', 2e3)
-#  self.params['test_trajectory_length'] = ttl1
-#  #  Standard deviation of Gaussian distributions in target distribution
-#  self.params['sigma'] = params.get('sigma', 0.05)
-#  #  If num_distributions < x_dim, the likelihood of drawing a sample
-#  #  outside of the target distributions.
-#  self.params['small_pi'] = params.get('small_pi', 2e-16)
-#  self.params['logging_steps'] = params.get('logging_steps', 100)
-#  #  How often tunneling rate info should be calculated
-#  trs = params.get('tunneling_rate_steps', 500)
-#  self.params['tunneling_rate_steps'] = trs
-#  self.params['save_steps'] = params.get('save_steps', 2500)
-#
-#  #  Array containing the position of the Gaussian target distributions
-#  self.means = params.get('means', np.eye(self.params['x_dim']))
-
-
-

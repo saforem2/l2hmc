@@ -4,7 +4,7 @@
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#           https://www.apache.org/licenses/LICENSE-2.0
+#     https://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -28,9 +28,11 @@ import tensorflow as tf
 import numpy as np
 from scipy.stats import multivariate_normal, ortho_group
 
+
 def quadratic_gaussian(x, mu, S):
     return tf.diag_part(0.5 * tf.matmul(tf.matmul(x - mu, S), tf.transpose(x -
                                                                            mu)))
+
 
 def random_tilted_gaussian(dim, log_min=-2., log_max=2.):
     mu = np.zeros((dim,))
@@ -45,18 +47,14 @@ class Gaussian(object):
     def __init__(self, mu, sigma):
         self.mu = mu
         self.sigma = sigma
-
         print(np.linalg.det(self.sigma), self.sigma.dtype)
-
         self.i_sigma = np.linalg.inv(np.copy(sigma))
 
     def get_energy_function(self):
         def fn(x, *args, **kwargs):
             S = tf.constant(self.i_sigma.astype('float32'))
             mu = tf.constant(self.mu.astype('float32'))
-
             return quadratic_gaussian(x, mu, S)
-
         return fn
 
     def get_samples(self, n):
@@ -69,6 +67,7 @@ class Gaussian(object):
 
     def log_density(self, X):
         return multivariate_normal(mean=self.mu, cov=self.sigma).logpdf(X)
+
 
 class TiltedGaussian(Gaussian):
     def __init__(self, dim, log_min, log_max):
@@ -87,6 +86,7 @@ class TiltedGaussian(Gaussian):
         X = X.dot(self.R)
         return X
 
+
 class RoughWell(object):
     def __init__(self, dim, eps, easy=False):
         self.dim = dim
@@ -102,7 +102,8 @@ class RoughWell(object):
                                                                       self.eps)),
                                                           1)
             else:
-                return 0.5 * n + self.eps * tf.reduce_sum(tf.cos(x/self.eps), 1)
+                return 0.5 * n + self.eps * tf.reduce_sum(tf.cos(x / self.eps),
+                                                          1)
         return fn
 
     def get_samples(self, n):
@@ -113,10 +114,11 @@ class RoughWell(object):
 class GMM(object):
     def __init__(self, mus, sigmas, pis):
         assert len(mus) == len(sigmas)
+        if not isinstance(pis, np.ndarray):
+            pis = np.array(pis)
         pis /= pis.sum()  # normalize to achieve tolerance for np.random.choice
         assert round(np.sum(pis), len(pis) - 1) == 1.0
-        #  assert np.around(np.sum(pis), len(pis)-1) == 1.0
-
+        #  assert sum(pis) == 1.0
         self.mus = mus
         self.sigmas = sigmas
         self.pis = pis
@@ -136,14 +138,11 @@ class GMM(object):
 
     def get_energy_function(self):
         def fn(x):
-            V = tf.concat([
-                    tf.expand_dims(-quadratic_gaussian(x,
-                                                       self.mus[i],
-                                                       self.i_sigmas[i])
-                                   + tf.log(self.constants[i]), 1)
-                for i in range(self.nb_mixtures)
-            ], axis=1)
-
+            V = tf.concat([ tf.expand_dims(-quadratic_gaussian(x,
+                                                               self.mus[i],
+                                                               self.i_sigmas[i])
+                                           + tf.log(self.constants[i]), 1) 
+                           for i in range(self.nb_mixtures) ], axis=1)
             return -tf.reduce_logsumexp(V, axis=1)
         return fn
 
@@ -165,11 +164,9 @@ class GMM(object):
         return samples
 
     def log_density(self, X):
-        return np.log(sum([
-            self.pis[i] * multivariate_normal(mean=self.mus[i],
-                                              cov=self.sigmas[i]).pdf(X)
-            for i in range(self.nb_mixtures)
-        ]))
+        return np.log(sum([self.pis[i] * multivariate_normal(mean=self.mus[i],
+                                                             cov=self.sigmas[i]).pdf(X)
+                           for i in range(self.nb_mixtures)]))
 
 
 class GaussianFunnel(object):
@@ -208,7 +205,6 @@ class GaussianFunnel(object):
             s = np.exp(v / 2)
             samples[t, 0] = v
             samples[t, 1:] = s * np.random.randn(self.dim-1)
-
         return samples
 
     def log_density(self, x):
@@ -217,8 +213,7 @@ class GaussianFunnel(object):
         s = np.exp(v)
         sum_sq = np.square(x[:, 1:]).sum(axis=1)
         n = tf.shape(x)[1] - 1
-        #  return 0.5 * (log_p_v + sum_sq / s + (n / 2) * tf.log(2 * tf.pi * s))
-        return 0.5 * (log_p_v + sum_sq / s + (n / 2) * tf.log(2 * np.pi * s))
+        return 0.5 * (log_p_v + sum_sq / s + (n / 2) * tf.log(2 * tf.pi * s))
 
 
 def gen_ring(r=1.0, var=1.0, nb_mixtures=2):

@@ -120,7 +120,8 @@ def annealing_schedule_plot(**kwargs):
     steps_arr = kwargs.get('steps_arr')
     temp_arr = kwargs.get('temp_arr')
     #  num_steps = max(steps_arr)
-    num_steps = max(train_steps, steps_arr)
+    max_steps_arr = max(steps_arr)
+    num_steps = max(train_steps, max_steps_arr)
 
     #steps = np.arange(num_steps)
     temps = []
