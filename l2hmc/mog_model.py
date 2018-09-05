@@ -115,23 +115,23 @@ def network(x_dim, scope, factor):
     with tf.variable_scope(scope):
         net = Sequential([
             Zip([
-                Linear(x_dim, 50, scope='embed_1', factor=1.0 / 3),
-                Linear(x_dim, 50, scope='embed_2', factor=factor * 1.0 / 3),
-                Linear(2, 50, scope='embed_3', factor=1.0 / 3),
+                Linear(x_dim, 20, scope='embed_1', factor=1.0 / 3),
+                Linear(x_dim, 20, scope='embed_2', factor=factor * 1.0 / 3),
+                Linear(2, 20, scope='embed_3', factor=1.0 / 3),
                 lambda _: 0.,
             ]),
             sum,
             tf.nn.relu,
-            Linear(50, 50, scope='linear_1'),
+            Linear(20, 20, scope='linear_1'),
             tf.nn.relu,
             Parallel([
                 Sequential([
-                    Linear(50, x_dim, scope='linear_s', factor=0.001),
+                    Linear(20, x_dim, scope='linear_s', factor=0.001),
                     ScaleTanh(x_dim, scope='scale_s')
                 ]),
-                Linear(50, x_dim, scope='linear_t', factor=0.001),
+                Linear(20, x_dim, scope='linear_t', factor=0.001),
                 Sequential([
-                    Linear(50, x_dim, scope='linear_f', factor=0.001),
+                    Linear(20, x_dim, scope='linear_f', factor=0.001),
                     ScaleTanh(x_dim, scope='scale_f'),
                 ])
             ])
@@ -423,7 +423,10 @@ class GaussianMixtureModel(object):
     def _update_trajectory_length(self, temp):
         """Update the trajectory length to be roughly equal to half the period
         of evolution. """
-        new_trajectory_length = max([2, int(3 * np.sqrt(self.sigma * temp))])
+        #  ttl = int(np.ceil(3 * np.sqrt(self.sigma * temp)))
+        #  new_trajectory_length = max([2, ttl])
+        new_trajectory_length = 3
+
         #  if new_trajectory_length < 2:
         #      new_trajectory_length = 3
         self.trajectory_length = new_trajectory_length
@@ -592,9 +595,15 @@ class GaussianMixtureModel(object):
             #      annealing factor itself to bring it closer
             #      to 1.)
             #  3.) Reset the temperature to a higher value?? 
-            if (delta_tr0_dec > 0) or (delta_tr1_dec > 0):
+            c1 = delta_tr0_dec > 0
+            c2 = delta_tr1_dec > 0
+            c3 = tr1_old > 0.9
+            c4 = tr1_new > 0.9
+            #  if (delta_tr0_dec > 0) or (delta_tr1_dec > 0):
+            if c1 or c2:
+                #  if not c3 and c4
                 #  if not (tr1_old > 0.8 or tr1_new > 0.8):
-                if tr1_old < 0.9:
+                #  if tr1_old < 0.9 or :
                     as_old = self.annealing_steps
                     temp_old = self.temp
                     print('\nTunneling rate decreased.')
@@ -602,7 +611,10 @@ class GaussianMixtureModel(object):
                           f' {delta_tr0_dec}')
                     print(f'Change in tunneling rate (temp ='
                           f' {self.temp:.3g}): {delta_tr1_dec}')
-                    self.annealing_steps += 50
+                    #  self.annealing_steps += 50
+                    # If tunneling rate decreases, increase the number of
+                    # annealing steps by 10% of its current value
+                    self.annealing_steps += int(0.1 * self.annealing_steps)
                     if self.annealing_steps > self.tunneling_rate_steps:
                         self.tunneling_rate_steps = self.annealing_steps + 100
 
@@ -616,32 +628,47 @@ class GaussianMixtureModel(object):
                           f' {self.temp:.3g}\n')
 
             #  if (delta_tr0_inc > 0) or (delta_tr1_inc > 0):
-            #      if not (delta_tr0_dec > 0 or delta_tr1_dec > 0):
-            #          # Only speed up the annealing schedule if NEITHER the high
-            #          # or low temperature tunneling rates have decreased.
-            #          as_old = self.annealing_steps
-            #          temp_old = self.temp
-            #          print('\nTunneling rate increased. Speeding up'
-            #                ' annealing schedule.')
-            #          print(f'Change in tunneling rate (temp = 1):'
-            #                f' {delta_tr0_inc}')
-            #          print(f'Change in tunneling rate (temp ='
-            #                f' {self.temp:.3g}): {delta_tr1_inc}')
-            #
-            #          as_new = self.annealing_steps - 50
-            #          self.anneling_steps = max(50, as_new)
-            #          #  new_as = (self.annealing_steps
-            #          #            * self.annealing_factor)
-            #
-            #          #  self.annealing_steps = int(new_as)
-            #                                     #  / self.annealing_factor)
-            #          #self.temp = (self.temp * self.annealing_factor)
-            #                       #  / self.annealing_factor)
-            #          #  self.annealing_factor /= self.annealing_factor
-            #          print(f'Annealing steps: {as_old} -->'
-            #                f' {self.annealing_steps}')
-            #          print(f'Temperature: {temp_old:.3g} -->'
-            #                f' {self.temp:.3g}\n')
+            c1 = delta_tr0_inc > 0 # if the tunneling rate for T = 1 increased
+            c2 = delta_tr1_inc > 0 # if the tunneling rate for T > 1 increased
+            c3 = tr1_old > 0.95 # if the old tunneling rate for T > 1 is > 0.95
+            c4 = tr1_new > 0.95 # if the new tunneling rate for T > 1 is > 0.95
+            ###################################################################
+            # If the tunneling rate for either T = 1 or T > 1 has increased,
+            # OR 
+            # both the old and the new tunneling rates for T > 1 are greater
+            # than 0.95, we will speed up the annealing schedule to avoid
+            # performing unnecessary calculations when the tunneling rate is
+            # already very high. 
+            ###################################################################
+            if c1 or c2 or (c3 and c4):
+                if not (delta_tr0_dec > 0 or delta_tr1_dec > 0):
+                    # Only speed up the annealing schedule if NEITHER the high
+                    # or low temperature tunneling rates have decreased.
+                    as_old = self.annealing_steps
+                    temp_old = self.temp
+                    print('\nTunneling rate increased. Speeding up'
+                          ' annealing schedule.')
+                    print(f'Change in tunneling rate (temp = 1):'
+                          f' {delta_tr0_inc}')
+                    print(f'Change in tunneling rate (temp ='
+                          f' {self.temp:.3g}): {delta_tr1_inc}')
+
+                    #  as_new = self.annealing_steps - 50
+                    as_new = (self.annealing_steps
+                              - int(0.1 * self.annealing_steps))
+                    self.anneling_steps = max(50, as_new)
+                    #  new_as = (self.annealing_steps
+                    #            * self.annealing_factor)
+
+                    #  self.annealing_steps = int(new_as)
+                                               #  / self.annealing_factor)
+                    #self.temp = (self.temp * self.annealing_factor)
+                                 #  / self.annealing_factor)
+                    #  self.annealing_factor /= self.annealing_factor
+                    print(f'Annealing steps: {as_old} -->'
+                          f' {self.annealing_steps}')
+                    print(f'Temperature: {temp_old:.3g} -->'
+                          f' {self.temp:.3g}\n')
 
         else:
             print("Nothing to compare to!")
@@ -849,6 +876,17 @@ class GaussianMixtureModel(object):
 
         plt.close('all')
 
+    def _restore_model(self):
+        saver = tf.train.Saver(max_to_keep=3)
+        self.sess.run(tf.global_variables_initializer())
+        ckpt = tf.train.get_checkpoint_state(self.log_dir)
+        if ckpt and ckpt.model_checkpoint_path:
+            print('Restoring previous model from: '
+                  f'{ckpt.model_checkpoint_path}')
+            saver.restore(self.sess, ckpt.model_checkpoint_path)
+            print('Model restored.\n')
+            self.global_step = tf.train.get_global_step()
+
     def train(self, num_train_steps):
         """Train the model."""
         saver = tf.train.Saver(max_to_keep=3)
@@ -932,14 +970,14 @@ class GaussianMixtureModel(object):
                     ttl = self.trajectory_length
 
                     td0, tr0, ar0, ad0 = self.get_tunneling_rates(step, 1.,
-                                                                  ns, ttl)
+                                                                  500, ttl)
                     self.tunneling_rates[(step+1, 1.)] = tr0
                     self.acceptance_rates[(step+1, 1.)] = ar0
                     self.distances[(step+1, 1.)] = ad0
 
                     td1, tr1, ar1, ad1 = self.get_tunneling_rates(step,
                                                                   self.temp,
-                                                                  ns, ttl)
+                                                                  500, ttl)
 
                     self.tunneling_rates_highT[(step+1, self.temp)] = tr1
                     self.acceptance_rates_highT[(step+1, self.temp)] = ar1
