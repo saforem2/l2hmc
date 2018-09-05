@@ -158,9 +158,13 @@ def plot_trajectory_and_distribution(samples, trajectory, x_dim=None):
 
 class GaussianMixtureModel(object):
     """Model for training L2HMC using multiple Gaussian distributions."""
-    def __init__(self, params, config, log_dir=None, distribution=None):
+    def __init__(self, params,
+                 config,
+                 log_dir=None,
+                 distribution=None,
+                 covs=None):
         """Initialize parameters and define relevant directories."""
-        self._init_params(params, distribution)
+        self._init_params(params, covs, distribution)
         #  self._params = params
 
         if log_dir is not None:
@@ -216,7 +220,7 @@ class GaussianMixtureModel(object):
         print('\n')
 
 
-    def _init_params(self, params, distribution=None):
+    def _init_params(self, params, covs=None, distribution=None):
         """Parse keys in params dictionary to be used for setting instance
         parameters."""
         self.x_dim = 2
@@ -256,6 +260,8 @@ class GaussianMixtureModel(object):
         if distribution is None:
             self.covs, self.distribution = self._distribution(self.sigma,
                                                               self.means)
+        else:
+            self.covs, self.distribution = covs, distribution
         # Initial samples drawn from Normal distribution
         self.samples = np.random.randn(self.num_samples,
                                        self.x_dim)
