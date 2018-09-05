@@ -161,8 +161,8 @@ class GaussianMixtureModel(object):
     def __init__(self, params,
                  config,
                  log_dir=None,
-                 distribution=None,
-                 covs=None):
+                 covs=None,
+                 distribution=None):
         """Initialize parameters and define relevant directories."""
         self._init_params(params, covs, distribution)
         #  self._params = params
