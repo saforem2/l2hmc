@@ -228,4 +228,4 @@ def gen_ring(r=1.0, var=1.0, nb_mixtures=2):
 
     pis = [1. / nb_mixtures] * nb_mixtures
     pis[0] += 1-sum(pis)
-    return GMM(base_points, sigmas, pis)
+    return GMM(base_points, sigmas, pis), sigmas
