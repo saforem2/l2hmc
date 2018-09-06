@@ -664,8 +664,6 @@ class GaussianMixtureModel(object):
                     self.annealing_steps = max(50, as_new)
                     print(f'Annealing steps: {as_old} -->'
                           f' {self.annealing_steps}')
-                    #  print(f'Temperature: {temp_old:.3g} -->'
-                    #        f' {self.temp:.3g}\n')
 
         else:
             print("Nothing to compare to!")
