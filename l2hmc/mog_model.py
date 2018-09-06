@@ -115,23 +115,23 @@ def network(x_dim, scope, factor):
     with tf.variable_scope(scope):
         net = Sequential([
             Zip([
-                Linear(x_dim, 20, scope='embed_1', factor=1.0 / 3),
-                Linear(x_dim, 20, scope='embed_2', factor=factor * 1.0 / 3),
-                Linear(2, 20, scope='embed_3', factor=1.0 / 3),
+                Linear(x_dim, 50, scope='embed_1', factor=1.0 / 3),
+                Linear(x_dim, 50, scope='embed_2', factor=factor * 1.0 / 3),
+                Linear(2, 50, scope='embed_3', factor=1.0 / 3),
                 lambda _: 0.,
             ]),
             sum,
             tf.nn.relu,
-            Linear(20, 20, scope='linear_1'),
+            Linear(50, 50, scope='linear_1'),
             tf.nn.relu,
             Parallel([
                 Sequential([
-                    Linear(20, x_dim, scope='linear_s', factor=0.001),
+                    Linear(50, x_dim, scope='linear_s', factor=0.001),
                     ScaleTanh(x_dim, scope='scale_s')
                 ]),
-                Linear(20, x_dim, scope='linear_t', factor=0.001),
+                Linear(50, x_dim, scope='linear_t', factor=0.001),
                 Sequential([
-                    Linear(20, x_dim, scope='linear_f', factor=0.001),
+                    Linear(50, x_dim, scope='linear_f', factor=0.001),
                     ScaleTanh(x_dim, scope='scale_f'),
                 ])
             ])
@@ -648,9 +648,9 @@ class GaussianMixtureModel(object):
             # already very high. 
             ###################################################################
             if c1 or c2 or (c3 and c4):
+                # Only speed up the annealing schedule if NEITHER the high
+                # or low temperature tunneling rates have decreased.
                 if not (delta_tr0_dec > 0 or delta_tr1_dec > 0):
-                    # Only speed up the annealing schedule if NEITHER the high
-                    # or low temperature tunneling rates have decreased.
                     as_old = self.annealing_steps
                     temp_old = self.temp
                     print('\nTunneling rate increased. Speeding up'
@@ -660,22 +660,12 @@ class GaussianMixtureModel(object):
                     print(f'Change in tunneling rate (temp ='
                           f' {self.temp:.3g}): {delta_tr1_inc}')
 
-                    #  as_new = self.annealing_steps - 50
-                    as_new = (self.annealing_steps
-                              - int(0.1 * self.annealing_steps))
-                    self.anneling_steps = max(50, as_new)
-                    #  new_as = (self.annealing_steps
-                    #            * self.annealing_factor)
-
-                    #  self.annealing_steps = int(new_as)
-                                               #  / self.annealing_factor)
-                    #self.temp = (self.temp * self.annealing_factor)
-                                 #  / self.annealing_factor)
-                    #  self.annealing_factor /= self.annealing_factor
+                    as_new = as_old - int(0.1 * as_old)
+                    self.annealing_steps = max(50, as_new)
                     print(f'Annealing steps: {as_old} -->'
                           f' {self.annealing_steps}')
-                    print(f'Temperature: {temp_old:.3g} -->'
-                          f' {self.temp:.3g}\n')
+                    #  print(f'Temperature: {temp_old:.3g} -->'
+                    #        f' {self.temp:.3g}\n')
 
         else:
             print("Nothing to compare to!")
@@ -950,6 +940,16 @@ class GaussianMixtureModel(object):
                         #  self.annealing_steps_arr.append(step + 1)
                         #  self.annealing_temps_arr.append(self.temp)
                         self._update_trajectory_length(temp_)
+                    else:
+                        print("Annealing schedule completed. Saving current"
+                              " state and exiting.")
+                        self._save_variables()
+                        self._save_model(saver, writer, step)
+                        writer.close()
+                        self.sess.close()
+                        print('Done!')
+                        return 0
+
 
                 if step % self.logging_steps == 0:
                     summary_str = self.sess.run(self.summary_op,

@@ -16,7 +16,7 @@ class SU3(np.matrix):
         np.matrix([ # lambda_3
             [+1, 0, 0],
             [0, -1, 0],
-            [0, 0, 0],
+            [0,  0, 0],
         ], dtype=np.complex),
         np.matrix([ # lambda_4
             [0, 0, 1],
