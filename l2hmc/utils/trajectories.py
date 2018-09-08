@@ -2,7 +2,7 @@ import numpy as np
 from .data_utils import calc_avg_vals_errors
 
 
-def _calc_distances(trajectories):
+def _calc_distances(trajectories, normalize=True):
     """Caclulate the (Euclidean) distance traveled for each
     trajectory.
 
@@ -21,15 +21,18 @@ def _calc_distances(trajectories):
         diffs = trajectory[:-1, :] - trajectory[1:, :]
         distance = sum([np.sqrt(np.dot(d, d.T)) for d in diffs])
         # normalize to calculate distance / step
-        distances_arr.append(distance / len(trajectory))
+        if normalize:
+            distances_arr.append(distance / len(trajectory))
+        else:
+            distances_arr.append(distance)
     return np.array(distances_arr)
 
 
-def calc_avg_distances(trajectories):
+def calc_avg_distances(trajectories, normalize=True):
     """Calculate average (Euclidean) distance traveled by each trajectory
     (with errors) using block jackknife resampling from
     self.calc_avg_vals_errors method. """
-    distances = _calc_distances(trajectories)
+    distances = _calc_distances(trajectories, normalize)
     distances_avg_err = calc_avg_vals_errors(distances)
     return distances_avg_err
 

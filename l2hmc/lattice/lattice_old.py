@@ -1,7 +1,6 @@
 import numpy as np
 
 
-
 class Lattice(object):
     """Lattice object."""
     def __init__(self, time_size, space_size, dim, beta, link_type, a=1):
@@ -21,7 +20,7 @@ class Lattice(object):
             np.array([1, 0, 0, 0]),
             np.array([0, 1, 0, 0]),
             np.array([0, 0, 1, 0]),
-            np.array([0, 0, 0 , 1]),
+            np.array([0, 0, 0, 1]),
         ])
         self.num_sites = reduce(lambda a, b: a*b, self.links.shape)
 

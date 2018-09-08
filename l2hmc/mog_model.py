@@ -432,7 +432,8 @@ class GaussianMixtureModel(object):
         of evolution. """
         #  ttl = int(np.ceil(3 * np.sqrt(self.sigma * temp)))
         #  new_trajectory_length = max([2, ttl])
-        new_trajectory_length = 3
+        #  new_trajectory_length = 3
+        new_trajectory_length = 2
 
         #  if new_trajectory_length < 2:
         #      new_trajectory_length = 3
@@ -517,7 +518,7 @@ class GaussianMixtureModel(object):
         return tunn_avg_err, accept_avg_err
 
     def get_tunneling_rates(self, step, temp, num_samples, num_steps,
-                            trajectory_data=None):
+                            trajectory_data=None, normalize=True):
         """Main method for generating trajectories, and calculating the
         tunneling rates with errors."""
         # trajectory_data[0] = trajectories, of shape [ttl, ns, x_dim]
@@ -538,7 +539,7 @@ class GaussianMixtureModel(object):
         # NOTE: we swap axes 0 and 1 of the trajectories to reshape
         # them as [num_samples, num_steps, x_dim]
         trajectories = trajectory_data[0].transpose([1, 0, 2])
-        avg_distances = calc_avg_distances(trajectories)
+        avg_distances = calc_avg_distances(trajectories, normalize)
 
         return trajectory_data, tunn_rates, accept_rates, avg_distances
 
@@ -625,7 +626,7 @@ class GaussianMixtureModel(object):
                     if self.annealing_steps > self.tunneling_rate_steps:
                         self.tunneling_rate_steps = self.annealing_steps + 100
 
-                    self.temp = self.temp_arr[-2] * self.annealing_factor
+                    #  self.temp = self.temp_arr[-2] * self.annealing_factor
 
                     print('Slowing down annealing schedule and resetting'
                           ' temperature.')
@@ -810,7 +811,7 @@ class GaussianMixtureModel(object):
             'y_label': '',
             'legend_labels': ['Tunneling rate',
                               'Acceptance rate',
-                              'Distance / step'],
+                              'Distance / trajectory'],
             'title': title,
             'grid': True,
             'reverse_x': False,
@@ -975,14 +976,16 @@ class GaussianMixtureModel(object):
                     ttl = self.trajectory_length
 
                     td0, tr0, ar0, ad0 = self.get_tunneling_rates(step, 1.,
-                                                                  500, ttl)
+                                                                  500, ttl,
+                                                                  normalize=False)
                     self.tunneling_rates[(step+1, 1.)] = tr0
                     self.acceptance_rates[(step+1, 1.)] = ar0
                     self.distances[(step+1, 1.)] = ad0
 
                     td1, tr1, ar1, ad1 = self.get_tunneling_rates(step,
                                                                   self.temp,
-                                                                  500, ttl)
+                                                                  500, ttl,
+                                                                  normalize=False)
 
                     self.tunneling_rates_highT[(step+1, self.temp)] = tr1
                     self.acceptance_rates_highT[(step+1, self.temp)] = ar1

@@ -141,7 +141,7 @@ class GMM(object):
             V = tf.concat([ tf.expand_dims(-quadratic_gaussian(x,
                                                                self.mus[i],
                                                                self.i_sigmas[i])
-                                           + tf.log(self.constants[i]), 1) 
+                                           + tf.log(self.constants[i]), 1)
                            for i in range(self.nb_mixtures) ], axis=1)
             return -tf.reduce_logsumexp(V, axis=1)
         return fn
