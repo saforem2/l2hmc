@@ -1,6 +1,29 @@
 import numpy as np
 from scipy.linalg import expm
 
+class SU2(np.matrix):
+    GENERATOR_MATRICES = np.array([
+        np.matrix([
+            [0, 1j],
+            [1j, 0],
+        ], dtype=np.complex),
+        np.matrix([
+            [0, -1],
+            [+1, 0],
+        ], dtype=np.complex),
+        np.matrix([
+            [+1j, 0],
+            [0, -1j],
+        ], dtype=np.complex)
+    ])
+
+    @classmethod
+    def get_random_element(self):
+        # exp(alpha_i * A_i) should be randomly distributed 
+        # over SU(2) for random alpha_i, A_i generators of SU(2)
+        return expm(1j * self.GENERATOR_MATRICES.T.dot(np.random.rand(3)))
+
+
 class SU3(np.matrix):
     GELLMANN_MATRICES = np.array([
         np.matrix([ # lambda_1
