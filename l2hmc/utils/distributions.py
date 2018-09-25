@@ -138,10 +138,9 @@ class GMM(object):
 
     def get_energy_function(self):
         def fn(x):
-            V = tf.concat([ tf.expand_dims(-quadratic_gaussian(x,
-                                                               self.mus[i],
-                                                               self.i_sigmas[i])
-                                           + tf.log(self.constants[i]), 1)
+            V = tf.concat([tf.expand_dims(-quadratic_gaussian(x, self.mus[i],
+                                                              self.i_sigmas[i])
+                                          + tf.log(self.constants[i]), 1)
                            for i in range(self.nb_mixtures) ], axis=1)
             return -tf.reduce_logsumexp(V, axis=1)
         return fn
@@ -164,8 +163,9 @@ class GMM(object):
         return samples
 
     def log_density(self, X):
-        return np.log(sum([self.pis[i] * multivariate_normal(mean=self.mus[i],
-                                                             cov=self.sigmas[i]).pdf(X)
+        return np.log(sum([self.pis[i]
+                           * multivariate_normal(mean=self.mus[i],
+                                                 cov=self.sigmas[i]).pdf(X)
                            for i in range(self.nb_mixtures)]))
 
 

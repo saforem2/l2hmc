@@ -28,7 +28,7 @@ import numpy as np
 from utils.func_utils import accept, jacobian, autocovariance, get_log_likelihood, get_data,\
     var_from_scope, binarize, normal_kl, binarize_and_shuffle
 from utils.distributions import Gaussian, GMM, GaussianFunnel, gen_ring
-from utils.layers import Linear, Parallel, Sequential, Zip, ScaleTanh
+from utils.network import Linear, Parallel, Sequential, Zip, ScaleTanh
 from utils.dynamics import Dynamics
 from utils.sampler import propose, tf_accept, chain_operator
 from utils.losses import get_loss, loss_mixed

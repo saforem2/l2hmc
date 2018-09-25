@@ -1,4 +1,5 @@
 import numpy as np
+from functools import reduce
 
 
 class Lattice(object):
@@ -37,7 +38,7 @@ class Lattice(object):
             indices = list()
             for dim in self.sites.shape:
                 indices.append(i % dim)
-                i = i / dim
+                i = i // dim
             yield tuple(indices)
 
     def get_neighbors(self, site):

@@ -82,7 +82,6 @@ class Dynamics(object):
             # self.Sv, self.Tv, self.Fv = self.VNet.S, self.VNet.T, self.VNet.F
             # self.Sx, self.Tx, self.Fx = self.XNet.S, self.XNet.T, self.XNet.F
 
-
     def _init_mask(self):
         mask_per_step = []
 
@@ -93,7 +92,11 @@ class Dynamics(object):
             m[ind] = 1
             mask_per_step.append(m)
 
-        self.mask = tf.constant(np.stack(mask_per_step), dtype=TF_FLOAT)
+        #  try:
+            self.mask = tf.constant(np.stack(mask_per_step), dtype=TF_FLOAT)
+        #  except ValueError:
+        #      import pdb
+        #      pdb.set_trace()
 
     def _get_mask(self, step):
         m = tf.gather(self.mask, tf.cast(step, dtype=tf.int32))
@@ -138,9 +141,9 @@ class Dynamics(object):
         tx1 = X1[1]
         fx1 = self.eps * X1[2]
 
-        y = (m * x + mb * (tf.multiply(x, safe_exp(sx1, name='sx1F'))
-                           + self.eps * (tf.multiply(safe_exp(fx1, name='fx1F'),
-                                                     v_h) + tx1)))
+        y = (m * x + mb * (tf.multiply(x, safe_exp(sx1, name='sx1F')) +
+                           self.eps * (tf.multiply(safe_exp(fx1, name='fx1F'),
+                                                   v_h) + tx1)))
 
         X2 = self.XNet([v_h, mb * y, t, aux])
 
@@ -148,9 +151,9 @@ class Dynamics(object):
         tx2 = X2[1]
         fx2 = self.eps * X2[2]
 
-        x_o = (mb * y + m * (tf.multiply(y, safe_exp(sx2, name='sx2F'))
-                             + self.eps * (tf.multiply(safe_exp(fx2, name='fx2F'),
-                                                       v_h) + tx2)))
+        x_o = (mb * y + m * (tf.multiply(y, safe_exp(sx2, name='sx2F')) +
+                             self.eps * (tf.multiply(safe_exp(fx2, name='fx2F'),
+                                                     v_h) + tx2)))
 
         S2 = self.VNet([x_o, self.grad_energy(x_o, aux=aux), t, aux])
         sv2 = (0.5 * self.eps * S2[0])
@@ -248,21 +251,6 @@ class Dynamics(object):
                 nb = np.logical_not(b)
 
         return b.astype(NP_FLOAT), nb.astype(NP_FLOAT)
-#
-#       def forward(self, x, init_v=None):
-    #           if init_v is None:
-        #               v = tf.random_normal(tf.shape(x))
-        #           else:
-            #               v = init_v
-            #
-            #           dN = tf.shape(x)[0]
-            #           j = tf.zeros((dN,))
-            #           curr_x, curr_v = x, v
-            #           for t in range(self.T):
-                #               curr_x, curr_v, log_j = self._forward_step(curr_x, curr_v, t)
-                #               j += log_j
-                #
-                #           return curr_x, curr_v, self.p_accept(x, v, curr_x, curr_v, j)
 
     def forward(self, x, init_v=None, aux=None, log_path=False, log_jac=False):
         if init_v is None:

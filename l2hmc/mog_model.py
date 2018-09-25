@@ -16,8 +16,8 @@ from mpl_toolkits.mplot3d import Axes3D
 
 from utils.func_utils import accept, jacobian, autocovariance,\
         get_log_likelihood, binarize, normal_kl, acl_spectrum, ESS
-from utils.distributions import GMM
-from utils.layers import Linear, Sequential, Zip, Parallel, ScaleTanh
+from utils.distributions import GMM, gen_ring
+from utils.network import network, Linear, Sequential, Zip, Parallel, ScaleTanh
 from utils.dynamics import Dynamics
 from utils.sampler import propose
 from utils.notebook_utils import get_hmc_samples
@@ -53,8 +53,6 @@ from utils.plot_helper import errorbar_plot, annealing_schedule_plot
 #            (x)  * In 2D start with higher initial temp to get around 50%
 #                   acceptance rate.
 ###############################################################################
-
-
 
 def lazy_property(function):
     attribute = '_cache_' + function.__name__
@@ -111,33 +109,6 @@ def distribution_arr(x_dim, n_distributions):
         arr.extend((x_dim - n_distributions) * [small_pi])
         return np.array(arr, dtype=np.float32)
 
-def network(x_dim, scope, factor):
-    with tf.variable_scope(scope):
-        net = Sequential([
-            Zip([
-                Linear(x_dim, 50, scope='embed_1', factor=1.0 / 3),
-                Linear(x_dim, 50, scope='embed_2', factor=factor * 1.0 / 3),
-                Linear(2, 50, scope='embed_3', factor=1.0 / 3),
-                lambda _: 0.,
-            ]),
-            sum,
-            tf.nn.relu,
-            Linear(50, 50, scope='linear_1'),
-            tf.nn.relu,
-            Parallel([
-                Sequential([
-                    Linear(50, x_dim, scope='linear_s', factor=0.001),
-                    ScaleTanh(x_dim, scope='scale_s')
-                ]),
-                Linear(50, x_dim, scope='linear_t', factor=0.001),
-                Sequential([
-                    Linear(50, x_dim, scope='linear_f', factor=0.001),
-                    ScaleTanh(x_dim, scope='scale_f'),
-                ])
-            ])
-        ])
-    return net
-
 
 def plot_trajectory_and_distribution(samples, trajectory, x_dim=None):
     if samples.shape[1] == 3:
@@ -162,9 +133,10 @@ class GaussianMixtureModel(object):
                  config,
                  log_dir=None,
                  covs=None,
-                 distribution=None):
+                 distribution=None,
+                 **kwargs):
         """Initialize parameters and define relevant directories."""
-        self._init_params(params, covs, distribution)
+        self._init_params(params, covs, distribution, **kwargs)
         #  self._params = params
 
         if log_dir is not None:
@@ -197,7 +169,8 @@ class GaussianMixtureModel(object):
         else:
             self.step_init = self.steps_arr[-1]
 
-        self.trajectory_length = 3 * np.sqrt(self.sigma * self.temp_init)
+        trajectory_length = 3 * np.sqrt(self.sigma * self.temp_init)
+        self.trajectory_length = max(2, trajectory_length)
         self.global_step = tf.Variable(0, name='global_step', trainable=False)
         tf.add_to_collection('global_step', self.global_step)
 
@@ -220,7 +193,7 @@ class GaussianMixtureModel(object):
         print('\n')
 
 
-    def _init_params(self, params, covs=None, distribution=None):
+    def _init_params(self, params, covs=None, distribution=None, **kwargs):
         """Parse keys in params dictionary to be used for setting instance
         parameters."""
         self.x_dim = 2
@@ -253,6 +226,10 @@ class GaussianMixtureModel(object):
         #  self.annealing_temps_arr = []
         #  self.annealing_steps_arr = []
         self.arrangement = 'axes'
+        if kwargs is not None:
+            self.radius = kwargs.get('r', 1.0)
+            self.sigma = kwargs.get('sigma', 0.05)
+            self.num_distributions = kwargs.get('num_distributions', 2)
 
         for key, val in params.items():
             setattr(self, key, val)
@@ -296,7 +273,7 @@ class GaussianMixtureModel(object):
         _params_file = self.info_dir + '_params.pkl'
         _params_dict = {}
         for key, val in self.__dict__.items():
-            if isinstance(val, (int, float)) or key=='means':
+            if isinstance(val, (int, float)) or key == 'means':
                 _params_dict[key] = val
 
         with open(_params_file, 'wb') as f:
@@ -306,10 +283,6 @@ class GaussianMixtureModel(object):
         np.save(self.info_dir + 'steps_arr.npy', np.array(self.steps_arr))
         np.save(self.info_dir + 'losses_arr.npy', np.array(self.losses_arr))
         np.save(self.info_dir + 'covs_arr.npy', np.array(self.covs))
-        #  np.save(self.info_dir + 'annealing_steps_arr.npy',
-        #          np.array(self.annealing_steps_arr))
-        #  np.save(self.info_dir + 'annealing_temps_arr.npy',
-        #          np.array(self.annealing_temps_arr))
 
     def _save_model(self, saver, writer, step):
         """Save tensorflow model with graph and all quantities of interest."""
@@ -368,9 +341,10 @@ class GaussianMixtureModel(object):
         """ Create dynamics object using 'utils/dynamics.py'. """
         energy_function = self.distribution.get_energy_function()
         tl = 3 * np.sqrt(self.sigma * self.temp_init)
+        traj_len = max(trajectory_length, tl, 2)
         self.dynamics = Dynamics(self.x_dim,
                                  energy_function,
-                                 tl,
+                                 traj_len,
                                  eps,
                                  net_factory=network,
                                  use_temperature=use_temperature)
@@ -379,8 +353,7 @@ class GaussianMixtureModel(object):
         """ Initialize loss and build recipe for calculating it during
         training. """
         with tf.name_scope('loss'):
-            self.x = tf.placeholder(tf.float32, shape=(None,
-                                                       self.x_dim),
+            self.x = tf.placeholder(tf.float32, shape=(None, self.x_dim),
                                     name='x')
             self.z = tf.random_normal(tf.shape(self.x), name='z')
             self.Lx, _, self.px, self.output = propose(self.x, self.dynamics,
@@ -748,7 +721,7 @@ class GaussianMixtureModel(object):
         dash1 = (len(i_str) + 1) * '-'
         print(dash1)
 
-    def _generate_plots(self, step):
+    def _generate_plots(self, step, normalize_distance=True):
         """ Plot tunneling rate, acceptance_rate vs. training step for both
         sets of trajectories. 
 
@@ -803,28 +776,34 @@ class GaussianMixtureModel(object):
         if self.arrangement == 'diagonal':
             str1 = (r'$\mathcal{N}_{\hat \mu}(\pm R(\pi/4) 1 \hat \mu;$'
                     + r'${{{0}}}),$'.format(self.sigma))
+        if self.arrangement == 'ring':
+            str1 = (f'radius: {self.radius}, sigma: {self.sigma}; ')
         #  prefix = str0 + str1
         title = str0 + str1 + r'$T_{trajectory} = 1$'
         title_highT = str0 + str1 + r'$T_{trajectory} > 1$'
+        if normalize_distance:
+            norm_label = 'Distance / step'
+        else:
+            norm_label = 'Distance / trajectory'
         kwargs = {
             'x_label': 'Training step',
             'y_label': '',
             'legend_labels': ['Tunneling rate',
                               'Acceptance rate',
-                              'Distance / trajectory'],
+                              norm_label],
             'title': title,
             'grid': True,
             'reverse_x': False,
             'plt_stle': '~/.config/matplotlib/stylelib/ggplot_sam.mplstyle'
         }
 
-        #  def out_file(f, s): return self.figs_dir + f'{f}_{s+1}.pdf'
-        def out_file(f): return self.figs_dir + f'{f}.pdf'
+        def out_file(f):
+            return self.figs_dir + f'{f}.pdf'
 
-        out_file0 = out_file('tr_ar_dist_steps_lowT')#, step)
-        out_file1 = out_file('tr_ar_dist_steps_highT')#, step)
-        out_file2 = out_file('tr_ar_dist_temps_lowT')#, step)
-        out_file3 = out_file('tr_ar_dist_temps_highT')#, step)
+        out_file0 = out_file('tr_ar_dist_steps_lowT')   # , step)
+        out_file1 = out_file('tr_ar_dist_steps_highT')  # , step)
+        out_file2 = out_file('tr_ar_dist_temps_lowT')   # , step)
+        out_file3 = out_file('tr_ar_dist_temps_highT')  # , step)
 
         def add_vline(axes, x, **kwargs):
             if len(axes) > 1:
@@ -974,10 +953,12 @@ class GaussianMixtureModel(object):
 
                     ns = self.num_samples
                     ttl = self.trajectory_length
+                    nd = True  # normalize distance by dividing by trajectory
+                               # length
 
                     td0, tr0, ar0, ad0 = self.get_tunneling_rates(step, 1.,
                                                                   500, ttl,
-                                                                  normalize=False)
+                                                                  normalize=nd)
                     self.tunneling_rates[(step+1, 1.)] = tr0
                     self.acceptance_rates[(step+1, 1.)] = ar0
                     self.distances[(step+1, 1.)] = ad0
@@ -985,7 +966,7 @@ class GaussianMixtureModel(object):
                     td1, tr1, ar1, ad1 = self.get_tunneling_rates(step,
                                                                   self.temp,
                                                                   500, ttl,
-                                                                  normalize=False)
+                                                                  normalize=nd)
 
                     self.tunneling_rates_highT[(step+1, self.temp)] = tr1
                     self.acceptance_rates_highT[(step+1, self.temp)] = ar1
@@ -998,7 +979,7 @@ class GaussianMixtureModel(object):
                                                ad1, td1[1], temp=self.temp)
 
                     self._print_time_info(t0, t1, step)
-                    self._generate_plots(step)
+                    self._generate_plots(step, normalize_distance=nd)
 
                     self._update_annealing_schedule()
                     self._print_header()
@@ -1047,12 +1028,13 @@ def main(args):
     #            [0, 1, 0, 0]
     #            [1, 0, 0, 0]
     #            [0, 1, 0, 0]
-    #---------------------------------------------------------------------------
-    centers = 1 # center of Gaussian
-    for i in range(num_distributions):
-        means[i::num_distributions, i] = centers
-    #  params['arrangement'] = 'axes'
-    arrangement = 'axes'
+    #--------------------------------------------------------------------------
+    if not args.gen_ring:
+        centers = 1  # center of Gaussian
+        for i in range(num_distributions):
+            means[i::num_distributions, i] = centers
+        #  params['arrangement'] = 'axes'
+        arrangement = 'axes'
 
 
     ###########################################################################
@@ -1100,19 +1082,16 @@ def main(args):
         means[::2, :] = centers
         means[1::2, :] = - centers
         arrangement = 'diagonal'
-        #  params['arrangement'] = 'diagonal'
 
-        #  means[even_rows, rand_axis] = np.cos(np.pi/4) * centers
-        #  means[even_rows, rand_axis-1] = np.sin(np.pi/4) * centers
-        #  means[odd_rows, rand_axis] = -1 * np.cos(np.pi/4) * centers
-        #  means[odd_rows, rand_axis-1] = -1 * np.sin(np.pi/4) * centers
-
-
-    #  rand_axis = np.random.randint(num_distributions)
-    #  means[0, rand_axis] = centers1
-    #  means[1, rand_axis] = - centers1
-    #  for i in range(num_distributions):
-    #      means[]
+    if args.gen_ring:
+        distribution = None
+        if args.radius:
+            radius = args.radius
+        if args.sigma:
+            sigma = args.sigma
+        sigmas, distribution = gen_ring(radius, sigma, num_distributions)
+        means = distribution.mus
+        arrangement = 'ring'
 
     params = {'x_dim': args.dimension,
               'num_distributions': num_distributions,
@@ -1136,51 +1115,47 @@ def main(args):
 
     if args.step_size:
         params['eps'] = args.step_size
-        #  print(f"eps: {params['eps']}")
     if args.temp_init:
         params['temp_init'] = args.temp_init
-        #  print(f'temp_init: {args.temp_init}')
     if args.num_samples:
         params['num_samples'] = args.num_samples
-
     if args.scale:
         params['scale'] = args.scale
-        #  print(f'num_samples: {args.num_samples}')
-    #  if args.trajectory_length:
-    #      params['trajectory_length'] = args.trajectory_length
-    #  if args.test_trajectory_length:
-    #      params['test_trajectory_length'] = args.test_trajectory_length
     if args.num_steps:
         params['num_training_steps'] = int(args.num_steps)
-        #  print(f'num_training_steps: {args.num_training_steps}')
     if args.annealing_steps:
         params['annealing_steps'] = int(args.annealing_steps)
-        #  print(f'annealing_steps: {args.annealing_steps}')
     if args.annealing_factor:
         params['annealing_factor'] = args.annealing_factor
-        #  print(f'annealing_factor: {args.annealing_factor}')
     if args.tunneling_rate_steps:
         params['tunneling_rate_steps'] = int(args.tunneling_rate_steps)
         params['save_steps'] = int(args.tunneling_rate_steps)
-
     if args.save_steps:
         params['save_steps'] = int(args.save_steps)
-        #  print(f'tunneling_rate_steps: {args.tunneling_rate_steps}')
-    #  if args.make_plots:
-    #      plot = args.make_plots
-    #  for arg in args:
-    #      print(f"{arg}")
+    if args.sigma:
+        params['sigma'] = args.sigma
+
+    log_dir = None
+    if args.log_dir:
+        log_dir = args.log_dir
 
     config = tf.ConfigProto()
-    #  config.gpu_options.allow_growth = True
 
     t0 = time.time()
-    if args.log_dir:
+    if distribution is not None:
+        kwargs = {'radius': radius,
+                  'sigma': sigma,
+                  'num_distributions': num_distributions}
         model = GaussianMixtureModel(params,
                                      config=config,
-                                     log_dir=args.log_dir)
+                                     log_dir=log_dir,
+                                     covs=sigmas,
+                                     distribution=distribution,
+                                     **kwargs)
     else:
-        model = GaussianMixtureModel(params, config=config)
+        model = GaussianMixtureModel(params,
+                                     config=config,
+                                     log_dir=log_dir)
 
     t1 = time.time()
     print(f'Time to build and populate graph: {t1 - t0:.4g}s\n')
@@ -1228,13 +1203,20 @@ if __name__ == '__main__':
                         "called `eps` in code. (This will be tuned for an "
                         "optimal value during" "training)")
 
-    #  parser.add_argument("--t_trajectory_length", default=2000, type=int,
-    #                      required=False, help="Trajectory length to be used "
-    #                      "during testing. (Default: 2000)")
+    parser.add_argument("--gen_ring",
+                        default=False, type=bool, required=False,
+                        help="Flag for alternate distribution consisting of "
+                        " equidistant Gaussians arranged in a ring around the "
+                        " origin.")
 
-    #  parser.add_argument("--trajectory_length", default=10, type=int,
-    #                      required=False, help="Trajectory length to be used "
-    #                      "during. (Default: 10)")
+    parser.add_argument("--radius",
+                        default=None, type=float, required=False,
+                        help="Radius of ring if using --'gen_ring' flag.")
+
+    parser.add_argument("--sigma",
+                        default=0.05, type=float, required=False,
+                        help="Standard deviation to use for creating "
+                        "Gaussians. (Default: 0.05")
 
     parser.add_argument("--annealing_steps",
                         default=100, type=int, required=False,
@@ -1245,10 +1227,6 @@ if __name__ == '__main__':
                         default=0.98, type=float, required=False,
                         help="Annealing factor by which the temperature is"
                         " multiplied each time we hit the annealing step.")
-
-    #  parser.add_argument("--annealing_factor",
-    #                      default=0.98, type=float, required=False,
-    #                      help="Annealing factor. (Default: 0.98)")
 
     parser.add_argument("--tunneling_rate_steps",
                         default=1000, type=int, required=False,
@@ -1275,10 +1253,6 @@ if __name__ == '__main__':
                         " distribution consists of a single pair of Gaussians"
                         " equidistant from the origin separated along a"
                         " randomly chosen axis, rotated by 45 deg..")
-
-    #  parser.add_argument('--make_plots', default=True, required=False,
-    #                      help="Whether or not to create plots during training."
-    #                      " (Default: True)")
 
     parser.add_argument("--log_dir",
                         type=str, required=False,

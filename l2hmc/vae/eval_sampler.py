@@ -28,7 +28,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-from utils.layers import Sequential, Zip, Parallel, Linear, ScaleTanh
+from utils.network import Sequential, Zip, Parallel, Linear, ScaleTanh
 from utils.dynamics import Dynamics
 from utils.func_utils import get_data, binarize, tf_accept, autocovariance
 from utils.sampler import propose, chain_operator

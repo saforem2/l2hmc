@@ -25,7 +25,7 @@ import time, argparse
 import tensorflow as tf
 import numpy as np
 
-from utils.layers import Sequential, Linear
+from utils.network import Sequential, Linear
 from utils.distributions import Gaussian
 from utils.ais import ais_estimate
 from utils.func_utils import get_data, binarize

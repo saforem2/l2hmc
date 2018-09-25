@@ -28,7 +28,7 @@ import matplotlib.pyplot as plt
 
 from utils.func_utils import accept, jacobian, autocovariance, get_log_likelihood, get_data, binarize, normal_kl
 from utils.distributions import Gaussian, GMM, GaussianFunnel, gen_ring
-from utils.layers import Linear, Parallel, Sequential, Zip, ScaleTanh
+from utils.network import Linear, Parallel, Sequential, Zip, ScaleTanh
 from utils.dynamics import Dynamics
 
 from tensorflow.examples.tutorials.mnist import input_data
