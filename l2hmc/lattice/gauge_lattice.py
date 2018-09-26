@@ -9,15 +9,11 @@ from .gauge_generators import generate_SU2, generate_SU3_array
 
 EPS = 0.1
 
-
-#  def get_random_element(link_type):
-#      # exp(alpha_i * A_i) should be randomly distributed
-#      # over SU(3) for random alpha_i, A_i generators of SU(3)
-#      if link_type == 'SU3':
-#          return expm(1j * GELLMANN_MATRICES.T.dot(np.random.rand(8)))
-#      elif link_type == 'SU2':
-#          return expm(1j * PAULI_MATRICES.T.dot(np.random.rand(3)))
-
+##############################################################################
+#  TODO:
+#    * Implement U(1) gauge model.
+#    * Look at how tensorflow handles gradients for force function in update.
+##############################################################################
 
 class GaugeLattice(object):
     """Lattice with Gauge field existing on links."""
@@ -29,29 +25,25 @@ class GaugeLattice(object):
         if link_type == 'SU3':
             link_shape = (3, 3)
 
+        if link_type == 'U1':
+            link_shape = (1,)
+
         self.link_type = link_type
         self.link_shape = link_shape
 
         self._sites_shape = tuple([time_size]
-                                 + [space_size for _ in range(dim-1)]
-                                 + list(link_shape))
+                                  + [space_size for _ in range(dim-1)]
+                                  + list(link_shape))
 
         self.sites = np.zeros(self._sites_shape, dtype=np.complex64)
         self.site_idxs = self.sites.shape[:-2]
 
         self._links_shape = tuple(list(self.site_idxs)
-                                 + [dim]
-                                 + list(link_shape))
+                                  + [dim]
+                                  + list(link_shape))
 
         self.links = np.zeros(self._links_shape, dtype=np.complex64)
         self.link_idxs = self.links.shape[:-2]
-
-        ph_shape = tuple([None] + list(self.links.shape))
-        self.links_ph = tf.placeholder(dtype=tf.complex64, shape=ph_shape)
-        #  self.links = np.zeros(
-        #      list(self.sites.shape) + [dim],
-        #      dtype=link_type
-        #  )
 
         self.dim = dim
         #  self.num_sites = reduce(lambda a, b: a * b, self.site_idxs)
@@ -67,6 +59,10 @@ class GaugeLattice(object):
         if link_type == 'SU3':
             self.links = generate_SU3_array(self.num_links // 2,
                                             EPS).reshape(self.links.shape)
+
+        if link_type == 'U1':
+            for link in self.iter_links():
+                self.links[link] = 
 
     def _get_random_links(self, link_type=None):
         """Method for obtaning an array of randomly initialized link variables.
@@ -176,9 +172,6 @@ class GaugeLattice(object):
 
         if links.shape[-1] == self.num_links:
             links = tf.reshape(links, [-1] + list(self.links.shape))
-            #  links = tf.resahpe(links, links_ph.shape)
-            #  links = tf.reshape(links, tuple([None] + list(self.links.shape)))
-            #  links = tf.reshape(links, tuple([-1] + list(self.links.shape)))
 
         S = 0.0
         for site in self.iter_sites():

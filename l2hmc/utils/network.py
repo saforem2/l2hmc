@@ -1,5 +1,5 @@
 # Copyright 2017 Google Inc.
-#
+
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -29,6 +29,7 @@ from .unitary_utils import *
 TF_FLOAT = tf.float32
 NP_FLOAT = np.float32
 
+
 def flatten(tup):
     output = []
     for i in tup:
@@ -36,9 +37,8 @@ def flatten(tup):
             output += flatten(i)
         else:
             output += [i]
-        #  output += flatten(i) if hasattr(i, "__iter__") or hasattr(i, "__len__")
-        #  else[i]
     return tuple(output)
+
 
 def complex_network(x_dim, scope, factor, num_nodes=100):
     with tf.variable_scope(scope):
@@ -77,6 +77,7 @@ def complex_network(x_dim, scope, factor, num_nodes=100):
 #    * Each of Q, S, T are neural networks with 2 hidden layers with nh nodes
 ###############################################################################
 
+
 def network(x_dim, scope, factor, num_nodes=100):
     with tf.variable_scope(scope):
         net = Sequential([
@@ -103,6 +104,7 @@ def network(x_dim, scope, factor, num_nodes=100):
             ])
         ])
         return net
+
 
 def _network(x_dim, scope, factor, num_nodes=100):
     with tf.variable_scope(scope):
@@ -241,3 +243,4 @@ class Zip(object):
         assert len(x) == len(self.layers)
         n = len(self.layers)
         return [self.layers[i](x[i]) for i in range(n)]
+

@@ -275,7 +275,7 @@ class GaugeDynamics(object):
 
     def grad_energy(self, x, aux=None):
         #  grad_ys = tf.constant(1.0, dtype=tf.complex64, shape=())
-        return tf.gradients(self.energy(x, aux=aux), x)[0]
+        return tf.gradients(self.energy(x, self.batch_size), x)[0]
         #  return tf.gradients(self.energy(x, aux=aux), x, grad_ys=grad_ys)[0]
         #  try:
         #      _energy = tf.cast(self.energy(x, aux=aux), TF_FLOAT)

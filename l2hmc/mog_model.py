@@ -1045,6 +1045,8 @@ def main(args):
     #   2.) With Gaussians separated diagonally across all dimensions.
     ###########################################################################
 
+    distribution = None
+
 
     #--------------------------------------------------------------------------
     # Pair of Gaussians both separated along a single axis:

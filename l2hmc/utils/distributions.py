@@ -30,8 +30,18 @@ from scipy.stats import multivariate_normal, ortho_group
 
 
 def quadratic_gaussian(x, mu, S):
-    return tf.diag_part(0.5 * tf.matmul(tf.matmul(x - mu, S), tf.transpose(x -
-                                                                           mu)))
+    x = tf.cast(x, tf.float32)
+    mu = tf.cast(mu, tf.float32)
+    S = tf.cast(S, tf.float32)
+    return tf.diag_part(0.5 * tf.matmul(
+        tf.matmul(x - mu, S),
+        tf.transpose(x - mu)
+    ))
+    #  except:
+    #      _x = tf.cast(x, tf.float32)
+    #      _mu = tf.cast(mu, tf.float32)
+    #      _S = tf.cast(S, tf.float32)
+    #      quadratic_gaussian(_x, _mu, _S)
 
 
 def random_tilted_gaussian(dim, log_min=-2., log_max=2.):

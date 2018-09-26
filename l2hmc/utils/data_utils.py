@@ -10,6 +10,7 @@ def next_power_two(n):
         i = i << 1
     return i
 
+
 def autocorr_func_1d(x, norm=True):
     x = np.atleast_1d(x)
     if len(x.shape) != 1:
@@ -42,7 +43,7 @@ def block_resampling(data, num_blocks):
     if num_samples < num_blocks:
         num_blocks = max(2, num_samples)
 
-    kf = KFold(n_splits = num_blocks)
+    kf = KFold(n_splits=num_blocks)
     resampled_data = []
     for i, j in kf.split(data):
         resampled_data.append(data[i])

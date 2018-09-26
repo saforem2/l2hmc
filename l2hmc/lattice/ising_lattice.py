@@ -88,10 +88,39 @@ class IsingLattice(object):
         return energy
 
     def calc_energy(self, batch, batch_size):
+        """Calculate the energy for each element in batch.
+
+        Args:
+            batch (np.ndarray or list):
+                Array containing `batch_size` samples of lattice.sites arrays.
+                For example, each sample in batch would be a unique random
+                configuration of sites.
+            batch_size (int):
+                Number of samples in batch
+        Returns:
+            energies (list):
+                List containing the energy of each sample in batch.
+        """
         energies = []
-        #for sample in batch:
-        for idx in range(batch_size):
-            energies.append(self._calc_energy(batch[idx]))
+        try:
+            if tf.executing_eagerly():
+                #  if len(batch.numpy().shape) == 1:
+                #      return self._calc_energy(batch)
+                #  else:
+                num_samples = batch.numpy().shape[0]
+        except AttributeError:
+            num_samples = batch_size
+
+        for idx in range(min(num_samples, batch_size)):
+            sites = batch[idx]
+            energy = 0
+            for site in self.iter_sites():
+                S = sites[site]
+                S_nbrs = [S * sites[nbr] for nbr in self.get_neighbors(site)]
+                energy += sum(S_nbrs)
+
+            energies.append(energy)
+
         return energies
 
     def calc_magnetization(self):
