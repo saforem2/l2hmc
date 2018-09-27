@@ -157,7 +157,8 @@ class GaussianMixtureModel(object):
             'acceptance_rates': os.path.join(self.info_dir,
                                              'acceptance_rates.pkl'),
             'acceptance_rates_highT': os.path.join(self.info_dir,
-                                                   'acceptance_rates_highT.pkl')
+                                                   'acceptance_rates_highT.pkl'),
+            'train_times': os.path.join(self.info_dir, 'train_time.pkl')
         }
         self._save_init_variables()
 
@@ -220,6 +221,7 @@ class GaussianMixtureModel(object):
         self.tunneling_rates_highT = {}
         self.acceptance_rates_highT = {}
         self.distances_highT = {}
+        self.train_times = {}
         self.temp_arr = []
         self.steps_arr = []
         self.losses_arr = []
@@ -866,6 +868,7 @@ class GaussianMixtureModel(object):
         """Train the model."""
         saver = tf.train.Saver(max_to_keep=3)
         initial_step = 0
+        start_time = time.time()
         self.sess.run(tf.global_variables_initializer())
         ckpt = tf.train.get_checkpoint_state(self.log_dir)
         if ckpt and ckpt.model_checkpoint_path:
@@ -877,7 +880,6 @@ class GaussianMixtureModel(object):
             initial_step = self.sess.run(self.global_step)
         writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
         _samples = self.distribution.get_samples(self.num_samples)
-        t0 = time.time()
         try:
             self._print_header()
             for step in range(initial_step, initial_step + num_train_steps):
@@ -908,6 +910,8 @@ class GaussianMixtureModel(object):
                 eps = self.sess.run(self.dynamics.eps)
 
                 if (step + 1) % self.save_steps == 0:
+                    self.train_times[step+1] = time.time()
+                    #  self.train_times[step+1] = time.time() -
                     self._print_header()
                     self._save_model(saver, writer, step)
 
@@ -1014,7 +1018,7 @@ def main(args):
     #    [X, 0, 0, ..., 0, 0, 0]
     #    [0, X, 0, ..., 0, 0, 0]
     #    [0, 0, X, ..., 0, 0, 0]
-    #    [          \          ]    =    diag(x) 
+    #    [         ...,        ]    =    diag(x) 
     #    [0, 0, 0, ..., X, 0, 0]
     #    [0, 0, 0, ..., 0, X, 0]
     #    [0, 0, 0, ..., 0, 0, X]
@@ -1066,7 +1070,8 @@ def main(args):
     #--------------------------------------------------------------------------
     if args.single_axis:
         means = np.zeros((x_dim, x_dim))
-        rand_axis = np.random.randint(x_dim)
+        #  rand_axis = np.random.randint(x_dim)
+        rand_axis = 0
         centers = 1
         #  centers = np.sqrt(2)
 
@@ -1101,7 +1106,7 @@ def main(args):
               'scale': 0.1,
               'num_samples': 200,
               'means': means,
-              'sigma': 0.05,
+              'sigma': 0.025,
               'small_pi': 2E-16,
               'lr_init': 1e-2,
               'temp_init': 20,
@@ -1216,7 +1221,7 @@ if __name__ == '__main__':
                         help="Radius of ring if using --'gen_ring' flag.")
 
     parser.add_argument("--sigma",
-                        default=0.05, type=float, required=False,
+                        default=0.025, type=float, required=False,
                         help="Standard deviation to use for creating "
                         "Gaussians. (Default: 0.05")
 
