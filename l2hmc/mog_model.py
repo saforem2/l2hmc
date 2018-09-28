@@ -94,6 +94,7 @@ def create_log_dir():
         os.makedirs(figs_dir)
     return log_dir, info_dir, figs_dir
 
+
 def distribution_arr(x_dim, n_distributions):
     """Create array describing likelihood of drawing from distributions."""
     assert x_dim >= n_distributions, ("n_distributions must be less than or"
@@ -103,6 +104,8 @@ def distribution_arr(x_dim, n_distributions):
         arr = n_distributions * [big_pi]
         return np.array(arr, dtype=np.float32)
     else:
+        #  pis = [1. / nb_mixtures] * nb_mixtures
+        #  pis[0] += 1-sum(pis)
         big_pi = (1.0 / n_distributions) - x_dim * 1E-16
         arr = n_distributions * [big_pi]
         small_pi = (1. - sum(arr)) / (x_dim - n_distributions)
@@ -170,8 +173,9 @@ class GaussianMixtureModel(object):
         else:
             self.step_init = self.steps_arr[-1]
 
-        trajectory_length = 3 * np.sqrt(self.sigma * self.temp_init)
-        self.trajectory_length = max(2, trajectory_length)
+        #  trajectory_length = 3 * np.sqrt(self.sigma * self.temp_init)
+        #  self.trajectory_length = max(2, trajectory_length)
+        self.trajectory_length = 5
         self.global_step = tf.Variable(0, name='global_step', trainable=False)
         tf.add_to_collection('global_step', self.global_step)
 
@@ -342,11 +346,11 @@ class GaussianMixtureModel(object):
     def _create_dynamics(self, trajectory_length, eps, use_temperature=True):
         """ Create dynamics object using 'utils/dynamics.py'. """
         energy_function = self.distribution.get_energy_function()
-        tl = 3 * np.sqrt(self.sigma * self.temp_init)
-        traj_len = max(trajectory_length, tl, 2)
+        #  tl = 3 * np.sqrt(self.sigma * self.temp_init)
+        #  traj_len = max(trajectory_length, tl, 2)
         self.dynamics = Dynamics(self.x_dim,
                                  energy_function,
-                                 traj_len,
+                                 trajectory_length,
                                  eps,
                                  net_factory=network,
                                  use_temperature=use_temperature)
@@ -405,15 +409,16 @@ class GaussianMixtureModel(object):
     def _update_trajectory_length(self, temp):
         """Update the trajectory length to be roughly equal to half the period
         of evolution. """
+        pass
         #  ttl = int(np.ceil(3 * np.sqrt(self.sigma * temp)))
         #  new_trajectory_length = max([2, ttl])
         #  new_trajectory_length = 3
-        new_trajectory_length = 2
+        #  new_trajectory_length = 2
 
         #  if new_trajectory_length < 2:
         #      new_trajectory_length = 3
-        self.trajectory_length = new_trajectory_length
-        self.dynamics.T = new_trajectory_length
+        #  self.trajectory_length = new_trajectory_length
+        #  self.dynamics.T = new_trajectory_length
 
     def build_graph(self):
         """Build the graph for our model."""
@@ -578,12 +583,14 @@ class GaussianMixtureModel(object):
             #      annealing factor itself to bring it closer
             #      to 1.)
             #  3.) Reset the temperature to a higher value?? 
-            c1 = delta_tr0_dec > 0
-            c2 = delta_tr1_dec > 0
-            c3 = tr1_old > 0.9
-            c4 = tr1_new > 0.9
-            #  if (delta_tr0_dec > 0) or (delta_tr1_dec > 0):
-            if c1 or c2:
+            tr0_dec = delta_tr0_dec > 0   # tunn rate at T = 1 decreased
+            tr1_dec = delta_tr1_dec > 0   # tunn rate at T > 1 decreased
+            tr0_inc = delta_tr0_inc > 0  # if the tunn rate for T = 1 increased
+            tr1_inc = delta_tr1_inc > 0  # if the tunn rate for T > 1 increased
+            tr1_old_high = tr1_old > 0.9  # old tunn rate at T > 1 is > 0.9
+            tr1_new_high = tr1_new > 0.9  # new tunn rate at T > 1 is > 0.9
+
+            if tr0_dec or tr1_dec:  # if either tunneling rates decreased
                 #  if not c3 and c4
                 #  if not (tr1_old > 0.8 or tr1_new > 0.8):
                 #  if tr1_old < 0.9 or :
@@ -611,10 +618,6 @@ class GaussianMixtureModel(object):
                           f' {self.temp:.3g}\n')
 
             #  if (delta_tr0_inc > 0) or (delta_tr1_inc > 0):
-            c1 = delta_tr0_inc > 0 # if the tunneling rate for T = 1 increased
-            c2 = delta_tr1_inc > 0 # if the tunneling rate for T > 1 increased
-            c3 = tr1_old > 0.95 # if the old tunneling rate for T > 1 is > 0.95
-            c4 = tr1_new > 0.95 # if the new tunneling rate for T > 1 is > 0.95
             ###################################################################
             # If the tunneling rate for either T = 1 or T > 1 has increased,
             # OR 
@@ -623,7 +626,7 @@ class GaussianMixtureModel(object):
             # performing unnecessary calculations when the tunneling rate is
             # already very high. 
             ###################################################################
-            if c1 or c2 or (c3 and c4):
+            if tr0_inc or tr1_inc or (tr1_old_high and tr1_new_high):
                 # Only speed up the annealing schedule if NEITHER the high
                 # or low temperature tunneling rates have decreased.
                 if not (delta_tr0_dec > 0 or delta_tr1_dec > 0):
@@ -868,7 +871,6 @@ class GaussianMixtureModel(object):
         """Train the model."""
         saver = tf.train.Saver(max_to_keep=3)
         initial_step = 0
-        start_time = time.time()
         self.sess.run(tf.global_variables_initializer())
         ckpt = tf.train.get_checkpoint_state(self.log_dir)
         if ckpt and ckpt.model_checkpoint_path:
@@ -880,10 +882,12 @@ class GaussianMixtureModel(object):
             initial_step = self.sess.run(self.global_step)
         writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
         _samples = self.distribution.get_samples(self.num_samples)
+        start_time = time.time()
+        self.train_times[initial_step] = start_time
         try:
             self._print_header()
             for step in range(initial_step, initial_step + num_train_steps):
-                t00 = time.time()
+                #  t00 = time.time()
 
                 feed_dict = {self.x: _samples,
                              self.dynamics.temperature: self.temp}
@@ -921,7 +925,7 @@ class GaussianMixtureModel(object):
                         self.temp = temp_
                         #  self.annealing_steps_arr.append(step + 1)
                         #  self.annealing_temps_arr.append(self.temp)
-                        self._update_trajectory_length(temp_)
+                        #  self._update_trajectory_length(temp_)
                     else:
                         print("Annealing schedule completed. Saving current"
                               " state and exiting.")
@@ -951,7 +955,7 @@ class GaussianMixtureModel(object):
                     print(col_str)
 
                 if (step + 1) % self.tunneling_rate_steps == 0:
-                    t1 = time.time()
+                    tunn_rate_start_time = time.time()
                     self.temp_arr.append(self.temp)
                     self.steps_arr.append(step + 1)
 
@@ -982,7 +986,9 @@ class GaussianMixtureModel(object):
                     self._print_tunneling_info(step, eps, tr1, ar1,
                                                ad1, td1[1], temp=self.temp)
 
-                    self._print_time_info(t0, t1, step)
+                    self._print_time_info(start_time,
+                                          tunn_rate_start_time,
+                                          step)
                     self._generate_plots(step, normalize_distance=nd)
 
                     self._update_annealing_schedule()
