@@ -78,7 +78,7 @@ def complex_network(x_dim, scope, factor, num_nodes=100):
 ###############################################################################
 
 
-def network(x_dim, scope, factor, num_nodes=100):
+def network(x_dim, scope, factor, num_nodes=50):
     with tf.variable_scope(scope):
         net = Sequential([
             Zip([

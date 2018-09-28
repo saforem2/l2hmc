@@ -1,5 +1,6 @@
 import numpy as np
 import tensorflow as tf
+import tensorflow.contrib.eager as tfe
 import random
 from functools import reduce
 from scipy.linalg import expm
@@ -175,8 +176,8 @@ class GaugeLattice(object):
             for nu in range(self.dim):
                 if nu != mu:
                     site2 = np.array(site1) - self.bases[nu]
-                    plaq1 = self.plaquette_operator(all_links, site1, mu, nu)
-                    plaq2 = self.plaquette_operator(all_links, site2, mu, nu)
+                    plaq1, _ = self.plaquette_operator(all_links, site1, mu, nu)
+                    plaq2, _ = self.plaquette_operator(all_links, site2, mu, nu)
                     S += (5.0 / 3.0) * (plaq1 + plaq2)
         return S
 
@@ -187,8 +188,10 @@ class GaugeLattice(object):
         if len(links.shape) == 1:
             links = tf.reshape(links, self.links.shape)
 
-        #  if links.shape[-1] == self.num_links:
-        #      links = tf.reshape(links, [-1] + list(self.links.shape))
+        #  if tf.executing_eagerly():
+        #      S = tfe.Variable([0.0], dtype=tf.float32)
+        #  else:
+        #      S = tf.Variable([0.0], dtype=tf.float32)
 
         S = 0.0
         if self.link_shape != ():
@@ -200,15 +203,64 @@ class GaugeLattice(object):
             for mu in range(self.dim):
                 for nu in range(self.dim):
                     if nu > mu:
-                        S += const * self.plaquette_operator(links, site,
-                                                             mu, nu)
-        return np.float32(S)
+                        #  _S, _ = const * self.plaquette_operator(links, site,
+                        #                                          mu, nu)
+                        #  S.assign_add(_S)
+                        plaq, _ = self.plaquette_operator(links, site, mu, nu)
+                        S += const * plaq
+        return S
 
     def total_action(self, batch, batch_size):
         action_arr = []
         for idx in range(batch_size):
-            action_arr.append(self._total_action(batch[idx]))
-        return np.array(action_arr, dtype=np.float32)
+            _action = self._total_action(batch[idx])
+            action_arr.append(_action)
+            #  action_arr[idx] = self._total_action(batch[idx])
+            #  if tf.executing_eagerly():
+            #      action_arr.append(self.total_action(batch[idx]).numpy())
+            #  action_arr.extend(self._total_action(batch[idx]))
+        #  return tf.convert_to_tensor(action_arr, dtype=tf.float32)
+        #  return np.array(action_arr, dtype=np.float32)
+        return action_arr
+        #  return tf.constant(np.stack(action_arr), dtype=tf.float32)
+
+    def _local_grad_action(self, links, site, mu):
+        shape = self.site_idxs
+        force = np.float32(0.0)
+        #  for mu in range(self.dim):
+        for nu in range(self.dim):
+            if nu != mu:
+                shifted_site = np.mod((site - self.bases[nu]), shape)
+                _, plaq_shifted = self.plaquette_operator(links,
+                                                          shifted_site,
+                                                          mu, nu)
+                _, plaq = self.plaquette_operator(links, site, mu, nu)
+                force += np.sin(plaq_shifted) - np.sin(plaq)
+        return force
+
+    def _grad_action(self, links=None):
+        if links is None:
+            links = self.links
+
+        if len(links.shape) == 1:
+            links = tf.reshape(links, self.links.shape)
+
+        grad_arr = np.zeros(links.shape)
+        for site in self.iter_sites():
+            for mu in range(self.dim):
+                grad_arr[site][mu] = self._local_grad_action(links, site, mu)
+        return grad_arr
+
+    def grad_action(self, batch, batch_size):
+        grad_arr = []
+        for idx in range(batch_size):
+            _grad_action = self._grad_action(batch[idx])
+            grad_arr.append(_grad_action.flatten())
+        return grad_arr
+        #  return tf.convert_to_tensor(grad_arr, dtype=tf.float32)
+        #  return np.array(grad_arr, dtype=np.float32)
+        #  return tf.constant(np.stack(grad_arr), )
+        #  return grad_arr
 
     def plaquette_operator(self, links, site, mu, nu):
         """Local (counter-clockwise) plaquette operator calculated at `site`
@@ -232,11 +284,11 @@ class GaugeLattice(object):
                                tf.transpose(tf.conj(links[l4])))
             prod1234 = tf.matmul(prod12, prod34)
 
-            return 1.0 * tf.real(tf.trace(prod1234)) / 3.0
+            return 1.0 * tf.real(tf.trace(prod1234)) / 3.0, prod1234
 
         else:
             _sum = links[l1] + links[l2] - links[l3] - links[l4]
-            return np.cos(_sum) / 6.  # each site has 6 plaquettes
+            return np.cos(_sum) / 6., _sum  # each site has 6 plaquettes
 
     def rect_operator(self, links, site, mu, nu):
         shape = self.sites.shape
