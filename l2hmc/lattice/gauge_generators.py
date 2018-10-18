@@ -19,24 +19,31 @@ def generate_SU2(eps):
 
     return np.array([[r11, r12], [r21, r22]])
 
+def generate_SU3(eps):
+    """Generates a single SU(3) matrix, where eps controls the distance from
+    the identity."""
+    R_su3 = np.identity(3, dtype=np.complex64)
+    S_su3 = np.identity(3, dtype=np.complex64)
+    T_su3 = np.identity(3, dtype=np.complex64)
+
+    R_su3[:2, :2] = generate_SU2(eps)
+    S_su3[0:3:2, 0:3:2] = generate_SU2(eps)
+    T_su3[1:, 1:] = generate_SU2(eps)
+
+    X_su3 = np.dot(np.dot(R_su3, S_su3), T_su3)
+
+    return X_su3
+
+
 def generate_SU3_array(n, eps):
     """Generates a 2*n array of SU(3) matrices where eps controls the
     distance from the identity."""
     su3_array = np.zeros((2*n, 3, 3), dtype=np.complex64)
 
     for i in range(n):
-        R_su3 = np.identity(3, dtype=np.complex64)
-        S_su3 = np.identity(3, dtype=np.complex64)
-        T_su3 = np.identity(3, dtype=np.complex64)
-
-        R_su3[:2, :2] = generate_SU2(eps)
-        S_su3[0:3:2, 0:3:2] = generate_SU2(eps)
-        T_su3[1:, 1:] = generate_SU2(eps)
-
-        X_su3 = np.dot(np.dot(R_su3, S_su3), T_su3)
-
-        su3_array[2*i, :, :] = X_su3
-        su3_array[2*i+1, :, :] = X_su3.conj().T
+        su3_mtx = generate_SU3(eps)
+        su3_array[2*i, :, :] = su3_mtx
+        su3_array[2*i+1, :, :] = su3_mtx.conj().T
 
     return su3_array
 

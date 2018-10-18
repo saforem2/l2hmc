@@ -1,32 +1,8 @@
-import tensorflow as tf
-import numpy as np
-import matplotlib.pyplot as plt
-import time
-import functools
-import argparse
-import sys
-import os
-import signal
-import pickle
-#  frm pathlib import Path
-#  os.environ['TF_CPP_MIN_LOG_LEVEL']='2'
+"""
+Gaussian mixture model, sample application of L2HMC algorithm. 
 
-from mpl_toolkits.mplot3d import Axes3D
-#  from tensorflow.python import debug as tf_debug
-
-from utils.func_utils import accept, jacobian, autocovariance,\
-        get_log_likelihood, binarize, normal_kl, acl_spectrum, ESS
-from utils.distributions import GMM, gen_ring
-from utils.network import network, Linear, Sequential, Zip, Parallel, ScaleTanh
-from utils.dynamics import Dynamics
-from utils.sampler import propose
-from utils.notebook_utils import get_hmc_samples
-from utils.tf_logging import variable_summaries, get_run_num, make_run_dir
-from utils.trajectories import calc_tunneling_rate, calc_avg_distances
-#  from utils.jackknife import block_resampling, jackknife_err
-from utils.data_utils import calc_avg_vals_errors, block_resampling,\
-        jackknife_err
-from utils.plot_helper import errorbar_plot, annealing_schedule_plot
+Using the L2HMC algorithm, this module learns to effectively sample from a
+mixture of Gaussians target distribution.
 
 ###############################################################################
 #  TODO: 
@@ -39,11 +15,10 @@ from utils.plot_helper import errorbar_plot, annealing_schedule_plot
 #          - Try to get network to be compatible with complex numbers and
 #            eventually complex matrices.
 # -----------------------------------------------------------------------------
-#   (!)  * Implement model with pair of Gaussians both separated along a single
-#          axis, and separated diagonally across all dimensions.
-#   (~)  * Look at using pathlib to deal with paths.
-#------------------------------------------------------------------------------
 #        * COMPLETED: 
+#            (x)  * Implement model with pair of Gaussians both separated along
+#                   a single axis, and separated diagonally across all 
+#                   dimensions.
 #            (x)  * Look at replacing self.params['...'] with setattr for
 #                   initalization.
 #            (x)  * Go back to 2D case and look at different starting
@@ -53,6 +28,38 @@ from utils.plot_helper import errorbar_plot, annealing_schedule_plot
 #            (x)  * In 2D start with higher initial temp to get around 50%
 #                   acceptance rate.
 ###############################################################################
+"""
+
+import time
+import functools
+import argparse
+import os
+import pickle
+
+import tensorflow as tf
+import numpy as np
+import matplotlib.pyplot as plt
+#  from pathlib import Path
+#  os.environ['TF_CPP_MIN_LOG_LEVEL']='2'
+
+#  from mpl_toolkits.mplot3d import Axes3D
+#  from tensorflow.python import debug as tf_debug
+
+from definitions import ROOT_DIR
+
+from utils.distributions import GMM, gen_ring
+from utils.network import network
+from utils.dynamics import Dynamics
+from utils.sampler import propose
+from utils.notebook_utils import get_hmc_samples
+from utils.tf_logging import variable_summaries, get_run_num, make_run_dir
+from utils.trajectories import calc_tunneling_rate, calc_avg_distances
+from utils.plot_helper import errorbar_plot, annealing_schedule_plot
+from utils.func_utils import accept, jacobian, autocovariance,\
+        get_log_likelihood, binarize, normal_kl, acl_spectrum, ESS
+from utils.data_utils import calc_avg_vals_errors, block_resampling,\
+        jackknife_err
+
 
 def lazy_property(function):
     attribute = '_cache_' + function.__name__
@@ -66,7 +73,6 @@ def lazy_property(function):
 
     return decorator
 
-#  TODO: Look at using pathlib to deal with paths
 
 def check_log_dir(log_dir):
     if not os.path.isdir(log_dir):
@@ -82,9 +88,12 @@ def check_log_dir(log_dir):
             os.makedirs(figs_dir)
     return log_dir, info_dir, figs_dir
 
+
 def create_log_dir():
     """Create directory for storing information about experiment."""
-    root_log_dir = '../log_mog_tf/'
+    #  root_log_dir = '../../log_mog_tf/'
+    #  root_log_dir = os.path.join(ROOT_DIR, log_mog_tf)
+    root_log_dir = os.path.join(os.path.split(ROOT_DIR)[0], 'log_mog_tf')
     log_dir = make_run_dir(root_log_dir)
     info_dir = log_dir + 'run_info/'
     figs_dir = log_dir + 'figures/'
@@ -130,6 +139,20 @@ def plot_trajectory_and_distribution(samples, trajectory, x_dim=None):
     return fig, ax
 
 
+def calc_derivative(y, x, order=2):
+    if not isinstance(y, np.ndarray):
+        y = np.array(y)
+    if not isinstance(x, np.ndarray):
+        x = np.array(x)
+    dy_dx = np.zeros_like(y)
+    dy = y[2:] - y[:-2]
+    dx = x[2:] - x[:-2]
+    dy_dx[1:-1] = dy / dx
+    dy_dx[0] = (y[1] - y[0]) / (x[1] - x[0])
+    dy_dx[-1] = (y[-1] - y[-2]) / (x[-1] - x[-2])
+    return dy_dx
+
+
 class GaussianMixtureModel(object):
     """Model for training L2HMC using multiple Gaussian distributions."""
     def __init__(self, params,
@@ -163,10 +186,11 @@ class GaussianMixtureModel(object):
                                                    'acceptance_rates_highT.pkl'),
             'train_times': os.path.join(self.info_dir, 'train_time.pkl')
         }
-        self._save_init_variables()
 
         if os.path.isfile(os.path.join(self.info_dir, 'parameters.txt')):
             self._load_variables()
+
+        #  self._save_init_variables()
 
         if not self.steps_arr:
             self.step_init = 0
@@ -175,7 +199,7 @@ class GaussianMixtureModel(object):
 
         #  trajectory_length = 3 * np.sqrt(self.sigma * self.temp_init)
         #  self.trajectory_length = max(2, trajectory_length)
-        self.trajectory_length = 5
+        self.trajectory_length = 2
         self.global_step = tf.Variable(0, name='global_step', trainable=False)
         tf.add_to_collection('global_step', self.global_step)
 
@@ -254,19 +278,13 @@ class GaussianMixtureModel(object):
         self._annealing_steps_init = self.annealing_steps
         self._tunneling_rate_steps_init = self.tunneling_rate_steps
 
-    def _save_init_variables(self):
-        """Since certain parameters (annealing steps, etc.) may change as the
-        training proceeds, we create an additional file `_init_params.pkl` that
-        stores the initial values of all parameters just for safekeeping."""
-        _init_params_dict = {}
-        for key, val in self.__dict__.items():
-            if isinstance(val, (int, float)) or key=='means':
-                _init_params_dict[key] = val
-
-        _init_params_file = self.info_dir + '_init_params.pkl'
-        with open(_init_params_file, 'wb') as f:
-            pickle.dump(_init_params_dict, f)
-        print(f'Initial parameters written to {_init_params_file}.')
+    def _save_model(self, saver, writer, step):
+        """Save tensorflow model with graph and all quantities of interest."""
+        self._save_variables()
+        ckpt_file = os.path.join(self.log_dir, 'model.ckpt')
+        #  print(f'Saving checkpoint to: {ckpt_file}\n')
+        saver.save(self.sess, ckpt_file, global_step=step)
+        writer.flush()
 
     def _save_variables(self):
         """Save current values of variables."""
@@ -290,13 +308,29 @@ class GaussianMixtureModel(object):
         np.save(self.info_dir + 'losses_arr.npy', np.array(self.losses_arr))
         np.save(self.info_dir + 'covs_arr.npy', np.array(self.covs))
 
-    def _save_model(self, saver, writer, step):
-        """Save tensorflow model with graph and all quantities of interest."""
-        self._save_variables()
-        ckpt_file = os.path.join(self.log_dir, 'model.ckpt')
-        #  print(f'Saving checkpoint to: {ckpt_file}\n')
-        saver.save(self.sess, ckpt_file, global_step=step)
-        writer.flush()
+    #  def _save_init_variables(self):
+    #      """Since certain parameters (annealing steps, etc.) may change as the
+    #      training proceeds, we create an additional file `_init_params.pkl` that
+    #      stores the initial values of all parameters just for safekeeping."""
+    #      _init_params_dict = {}
+    #      for key, val in self.__dict__.items():
+    #          if isinstance(val, (int, float)) or key=='means':
+    #              _init_params_dict[key] = val
+    #
+    #      _init_params_file = self.info_dir + '_init_params.pkl'
+    #      with open(_init_params_file, 'wb') as f:
+    #          pickle.dump(_init_params_dict, f)
+    #      print(f'Initial parameters written to {_init_params_file}.')
+    #
+    #  def _load_init_variables(self):
+    #      """Load initial values of variables of interest."""
+    #      _init_params_file = self.info_dir + '_init_params.pkl'
+    #      with open(_init_params_file, 'rb') as f:
+    #          _init_params_dict = pickle.load(f)
+    #
+    #      for key, val in _init_params_dict.items():
+    #          if isinstance(val, (int, float)) or key =='means':
+    #              setattr(self, key, val)
 
     def _load_variables(self):
         """Load variables from previously ran experiment."""
@@ -356,41 +390,52 @@ class GaussianMixtureModel(object):
                                  use_temperature=use_temperature)
 
     def _create_loss(self):
-        """ Initialize loss and build recipe for calculating it during
-        training. """
+        """ 
+        Initialize loss and build recipe for calculating it during training. 
+        
+        NOTE: The loss is a combination of a term averaged over samples from
+        the initial distribution and the target distribution.
+        """
         with tf.name_scope('loss'):
-            self.x = tf.placeholder(tf.float32, shape=(None, self.x_dim),
+            self.x = tf.placeholder(tf.float32,
+                                    shape=(None, self.x_dim),
                                     name='x')
             self.z = tf.random_normal(tf.shape(self.x), name='z')
-            self.Lx, _, self.px, self.output = propose(self.x, self.dynamics,
+
+            self.Lx, _, self.px, self.output = propose(self.x,
+                                                       self.dynamics,
                                                        do_mh_step=True)
-            self.Lz, _, self.pz, _ = propose(self.z, self.dynamics,
+            self.Lz, _, self.pz, _ = propose(self.z,
+                                             self.dynamics,
                                              do_mh_step=False)
-            self.loss = tf.Variable(0., trainable=False, name='loss')
+
+            self.loss_op = tf.Variable(0., trainable=False, name='loss')
+            # Squared jump distance
             v1 = ((tf.reduce_sum(tf.square(self.x - self.Lx), axis=1) * self.px)
                   + 1e-4)
             v2 = ((tf.reduce_sum(tf.square(self.z - self.Lz), axis=1) * self.pz)
                   + 1e-4)
             scale = self.scale
 
-            self.loss = self.loss + scale * (tf.reduce_mean(1.0 / v1)
-                                             + tf.reduce_mean(1.0 / v2))
-            self.loss = self.loss + ((- tf.reduce_mean(v1, name='v1')
-                                      - tf.reduce_mean(v2, name='v2')) / scale)
+            self.loss_op = (self.loss_op + scale * (tf.reduce_mean(1.0 / v1)
+                                                    + tf.reduce_mean(1.0 / v2)))
+            self.loss_op = (self.loss_op + ((- tf.reduce_mean(v1, name='v1')
+                                            - tf.reduce_mean(v2, name='v2')) /
+                                            scale))
 
     def _create_optimizer(self):
         """Initialize optimizer to be used during training."""
         with tf.name_scope('train'):
             optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
-            self.train_op = optimizer.minimize(self.loss,
+            self.train_op = optimizer.minimize(self.loss_op,
                                                global_step=self.global_step,
                                                name='train_op')
 
     def _create_summaries(self):
         """Create summary objects for logging in tensorboard."""
         with tf.name_scope('summaries'):
-            tf.summary.scalar('loss', self.loss)
-            tf.summary.histogram('histogram_loss', self.loss)
+            tf.summary.scalar('loss', self.loss_op)
+            tf.summary.histogram('histogram_loss', self.loss_op)
             #  variable_summaries(self.loss)
             self.summary_op = tf.summary.merge_all()
 
@@ -441,15 +486,20 @@ class GaussianMixtureModel(object):
         _loss_arr = []
         _px_arr = []
         #  for step in range(self.params['trajectory_length']):
+        # Move attributes outside of for loop to improve performance
+        loss_op = self.loss_op
+        output = self.output
+        px = self.px
+
         for step in range(int(num_steps)):
             _trajectories.append(np.copy(_samples))
             _feed_dict = {self.x: _samples,
                           #  self.dynamics.trajectory_length: num_steps,
                           self.dynamics.temperature: temp}
             _loss, _samples, _px = self.sess.run([
-                self.loss,
-                self.output[0],
-                self.px
+                loss_op,
+                output[0],
+                px
             ], feed_dict=_feed_dict)
             _loss_arr.append(np.copy(_loss))
             _px_arr.append(np.copy(_px))
@@ -549,6 +599,24 @@ class GaussianMixtureModel(object):
             tr1_old, tr1_old_err = get_val(previous_step, previous_temp)
             tr1_new, tr1_new_err = get_val(current_step, current_temp)
 
+            steps_arr0 = np.array(list(self.tunneling_rates.keys()))[:,0]
+            temps_arr0 = np.array(list(self.tunneling_rates.keys()))[:,1]
+            tunn_rates0 = np.array(list(self.tunneling_rates.values()))[:,0]
+            tunn_rates0_err =np.array(list(self.tunneling_rates.values()))[:,1]
+
+            steps_arr1 = np.array(list(self.tunneling_rates_highT.keys()))[:,0]
+            temps_arr1 = np.array(list(self.tunneling_rates_highT.keys()))[:,1]
+            tunn_rates1 = np.array(list(
+                self.tunneling_rates_highT.values()
+            ))[:,0]
+            tunn_rates1_err =np.array(list(
+                self.tunneling_rates_highT.values()
+            ))[:,1]
+
+            #  dtr_dsteps0 = calc_derivative(tunn_rates0, steps_arr0)
+            #  dtr_dtemps1 = calc_derivative(tunn_rates1, temps_arr1)
+            #  dtr_dsteps1 = calc_derivative(tunn_rates1, steps_arr1)
+
             #  tr0_old = tr0_arr[-2]
             #  tr0_old_err = tr0_err_arr[-2]
             #  tr0_new = tr0_arr[-1]
@@ -589,11 +657,52 @@ class GaussianMixtureModel(object):
             tr1_inc = delta_tr1_inc > 0  # if the tunn rate for T > 1 increased
             tr1_old_high = tr1_old > 0.9  # old tunn rate at T > 1 is > 0.9
             tr1_new_high = tr1_new > 0.9  # new tunn rate at T > 1 is > 0.9
+            #  tr0_old_high = tr0_old > 0.9
+            #  tr0_new_high = tr0_new > 0.9
+            #  tr1_old_low = tr1_old < 0.9
+            #  tr1_new_low = tr1_new < 0.9
+            #  tr0_old_low = tr0_old < 0.9
+            #  tr0_new_low = tr0_new < 0.9
+            #  tr1_high = tr1_old > 0.9 and tr1_new > 0.9
+            #  tr0_high = tr0_old > 0.9 and tr0_new > 0.9
+            #  tr1_low = tr1_old < 0.9 and tr1_new < 0.9
+            #  tr0_low = tr0_old < 0.9 and tr0_new < 0.9
 
-            if tr0_dec or tr1_dec:  # if either tunneling rates decreased
-                #  if not c3 and c4
-                #  if not (tr1_old > 0.8 or tr1_new > 0.8):
-                #  if tr1_old < 0.9 or :
+            ###################################################################
+            # high T tunneling rate decreased and its new value is < 0.9 
+            ###################################################################
+            condition1 = tr1_dec and tr1_new < 0.9
+            ###################################################################
+            # (1.) low T tunneling rate decreased 
+            #               AND 
+            # (2.) the NEW high T tunneling rate is < 0.9
+            #-------------------------------------------------------------------
+            #   This is because the highest attainable tunneling rate at T = 1
+            #   seems to be bound above by the new value of the high T
+            #   tunneling rate. 
+            #   i.e. if the old high T tunneling rate was 0.91 
+            #   and the new high T tunneling rate is 0.89, 
+            #   even if the high T tunneling rate remains at 0.89, the highest
+            #   tunneling rate achievable at T = 1 SEEMS to be 0.89
+            #
+            #   It's possible that this is an obvious limitation that I'm not
+            #   realizing right now for some reason.  (??)
+            ###################################################################
+            condition2 = tr0_dec and tr1_new < 0.9
+            ###################################################################
+            # (1.) low T tunneling rate decreased 
+            #               AND 
+            # (2.) (a.) the previous T=1 tunneling rate was > 0.9 
+            #                   AND
+            #      (b.) the new T=1 tunneling rate is < 0.9 
+            ###################################################################
+            condition3 = tr0_dec and (tr0_old > 0.9 and tr0_new < 0.9)
+            ###################################################################
+            # Previous method (before imposing condition1, condition2,
+            # condition3):
+            #   if (tr0_dec or tr1_dec):  # if either tunneling rates decreased
+            ###################################################################
+            if condition1 or condition2 or condition3:
                     as_old = self.annealing_steps
                     temp_old = self.temp
                     print('\nTunneling rate decreased.')
@@ -626,23 +735,33 @@ class GaussianMixtureModel(object):
             # performing unnecessary calculations when the tunneling rate is
             # already very high. 
             ###################################################################
-            if tr0_inc or tr1_inc or (tr1_old_high and tr1_new_high):
-                # Only speed up the annealing schedule if NEITHER the high
-                # or low temperature tunneling rates have decreased.
-                if not (delta_tr0_dec > 0 or delta_tr1_dec > 0):
-                    as_old = self.annealing_steps
-                    temp_old = self.temp
-                    print('\nTunneling rate increased. Speeding up'
-                          ' annealing schedule.')
-                    print(f'Change in tunneling rate (temp = 1):'
-                          f' {delta_tr0_inc}')
-                    print(f'Change in tunneling rate (temp ='
-                          f' {self.temp:.3g}): {delta_tr1_inc}')
 
-                    as_new = as_old - int(0.1 * as_old)
-                    self.annealing_steps = max(50, as_new)
-                    print(f'Annealing steps: {as_old} -->'
-                          f' {self.annealing_steps}')
+            ###################################################################
+            #    CAUSING PERFORMANCE ISSUES IN FINAL TUNNELING RATE
+            #    TEMPORARILY DISABLED on 09/28/2018
+            #------------------------------------------------------------------    
+            #  * TODO:
+            #      Need to implement derivative to determine changes in
+            #      tunneling rate insteada of relying on difference between
+            #      subsequent values.
+            ###################################################################
+            #  if tr0_inc or tr1_inc or (tr1_old_high and tr1_new_high):
+            #      # Only speed up the annealing schedule if NEITHER the high
+            #      # or low temperature tunneling rates have decreased.
+            #      if not (delta_tr0_dec > 0 or delta_tr1_dec > 0):
+            #          as_old = self.annealing_steps
+            #          temp_old = self.temp
+            #          print('\nTunneling rate increased. Speeding up'
+            #                ' annealing schedule.')
+            #          print(f'Change in tunneling rate (temp = 1):'
+            #                f' {delta_tr0_inc}')
+            #          print(f'Change in tunneling rate (temp ='
+            #                f' {self.temp:.3g}): {delta_tr1_inc}')
+            #
+            #          as_new = as_old - int(0.1 * as_old)
+            #          self.annealing_steps = max(50, as_new)
+            #          print(f'Annealing steps: {as_old} -->'
+            #                f' {self.annealing_steps}')
 
         else:
             print("Nothing to compare to!")
@@ -884,6 +1003,18 @@ class GaussianMixtureModel(object):
         _samples = self.distribution.get_samples(self.num_samples)
         start_time = time.time()
         self.train_times[initial_step] = start_time
+
+        # Move attribute look ups outside loop to improve performance
+        loss_op = self.loss_op
+        train_op = self.train_op
+        summary_op = self.summary_op
+        output = self.output
+        px = self.px
+        learning_rate = self.learning_rate
+        dynamics = self.dynamics
+
+
+
         try:
             self._print_header()
             for step in range(initial_step, initial_step + num_train_steps):
@@ -892,13 +1023,12 @@ class GaussianMixtureModel(object):
                 feed_dict = {self.x: _samples,
                              self.dynamics.temperature: self.temp}
 
-                #  _, loss_, self.samples, px_, lr_, = self.sess.run([
                 _, loss_, _samples, px_, lr_, = self.sess.run([
-                    self.train_op,
-                    self.loss,
-                    self.output[0],
-                    self.px,
-                    self.learning_rate
+                    train_op,
+                    loss_op,
+                    output[0],
+                    px,
+                    learning_rate
                 ], feed_dict=feed_dict)
 
 
@@ -911,7 +1041,7 @@ class GaussianMixtureModel(object):
 
                 #  self.losses.append(loss_)
                 self.losses_arr.append(loss_)
-                eps = self.sess.run(self.dynamics.eps)
+                eps = self.sess.run(dynamics.eps)
 
                 if (step + 1) % self.save_steps == 0:
                     self.train_times[step+1] = time.time()
@@ -938,8 +1068,8 @@ class GaussianMixtureModel(object):
 
 
                 if step % self.logging_steps == 0:
-                    summary_str = self.sess.run(self.summary_op,
-                                           feed_dict=feed_dict)
+                    summary_str = self.sess.run(summary_op,
+                                                feed_dict=feed_dict)
                     writer.add_summary(summary_str, global_step=step)
                     writer.flush()
                     last_step = initial_step + num_train_steps

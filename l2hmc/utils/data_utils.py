@@ -49,6 +49,7 @@ def block_resampling(data, num_blocks):
         resampled_data.append(data[i])
     return resampled_data
 
+
 def jackknife(x, func, num_blocks=100):
     """Jackknife estimate of the estimator function."""
     n = len(x)
@@ -80,12 +81,18 @@ def jackknife_err(y_i, y_full, num_blocks):
 
 def calc_avg_vals_errors(data, num_blocks=100):
     """ 
-    Calculate average values and errors of using block jackknife
+    Calculate average values and errors of `data` using block jackknife
     resampling method.
 
     Args:
+        data (array-like): Array containing data for which statistics are
+            desired.
         num_blocks (int): Number of blocks to use for block jackknife
-        resampling.
+            resampling.
+    Returns:
+        avg_val: The block jackknifed average of `data`
+        error: The standard error obtained from the block jaccknifed resampling
+            of `data`.
     """
     arr = np.array(data)
     avg_val = np.mean(arr)
@@ -135,7 +142,8 @@ def load_data(data_dir):
             pkl_files.append(data_dir + file)
 
     #  np_load = lambda file: np.load(data_dir + file)
-    def get_name(file): return file.split('/')[-1][:-4]
+    def get_name(file): 
+        return file.split('/')[-1][:-4]
 
     arrays_dict = {}
     for file in np_files:

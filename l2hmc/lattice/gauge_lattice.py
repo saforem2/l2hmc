@@ -1,12 +1,12 @@
 import numpy as np
 import tensorflow as tf
-import tensorflow.contrib.eager as tfe
 import random
 from functools import reduce
 from scipy.linalg import expm
 #  from matrices import GELLMANN_MATRICES, PAULI_MATRICES
-from .gauge_generators import generate_SU2, generate_SU3_array
+from .gauge_generators import generate_SU2, generate_SU3, generate_SU3_array
 
+import tensorflow.contrib.eager as tfe
 
 EPS = 0.1
 
@@ -15,23 +15,49 @@ EPS = 0.1
 #    * Implement U(1) gauge model.
 #    * Look at how tensorflow handles gradients for force function in update.
 ##############################################################################
-
 class GaugeLattice(object):
     """Lattice with Gauge field existing on links."""
-    def __init__(self, time_size, space_size, dim, beta, link_type):
+    def __init__(self, 
+                 time_size, 
+                 space_size, 
+                 dim, 
+                 beta, 
+                 link_type,
+                 num_samples=None,
+                 rand=False):
+        """
+            Args:
+                time_size (int): Temporal extent of lattice.
+                space_size (int): Spatial extent of lattice.
+                dim (int): Dimensionality
+                link_type (str): 
+                    String representing the type of gauge group for the link
+                    variables. Must be either 'U1', 'SU2', or 'SU3'
+        """
+        assert link_type.upper() in ['U1', 'SU2', 'SU3'], ("Invalid link_type."
+                                                           "Possible values:"
+                                                           "'U1', 'SU2', 'SU3'")
         self.time_size = time_size
         self.space_size = space_size
         self.dim = dim
         self.beta = beta
         self.link_type = link_type
+        self.link_shape = None
 
-        self._init_lattice(link_type)
+        self._init_lattice(link_type, rand)
+        self.samples = None
 
         self.num_sites = np.cumproduct(self.site_idxs)[-1]
-        self.num_links = self.dim * self.num_sites
+        self.num_links = int(self.dim * self.num_sites)
         self.bases = np.eye(dim, dtype=np.int)
 
-    def _init_lattice(self, link_type):
+        if num_samples is not None:
+            #  Create `num_samples` randomized instances of links array
+            self.num_samples = num_samples
+            self.samples = self.get_links_samples(num_samples, rand=rand,
+                                                  link_type=self.link_type)
+
+    def _init_lattice(self, link_type, rand):
         """Initialize lattice by creating self.sites and sites.links variables.
         
         Link variables are randomly initialized to elements in their respective
@@ -62,32 +88,26 @@ class GaugeLattice(object):
 
         self.sites = np.zeros(sites_shape, dtype=np.complex64)
         self.links = np.zeros(links_shape, dtype=np.complex64)
+        #  self.links = self._generate_links(rand, link_type)
+        self.num_sites = np.cumprod(self.sites.shape)[-1]
+        self.num_links = self.num_sites * self.dim
 
-        if self.link_shape != ():
+        #  if self.link_shape != ():
+        if self.link_type != 'U1':
             # Indices for individual sites and links
             self.site_idxs = self.sites.shape[:-2]
             self.link_idxs = self.links.shape[:-2]
+            self.links = np.zeros(links_shape, dtype=np.complex64)
         else:
             self.site_idxs = self.sites.shape
             self.link_idxs = self.links.shape
-
-        if link_type == 'SU2':
-            for link in self.iter_links():
-                self.links[link] = generate_SU2(EPS)
-
-        if link_type == 'SU3':
-            self.links = generate_SU3_array(self.num_links // 2,
-                                            EPS).reshape(self.links.shape)
-
-        if link_type == 'U1':
+            #  self.links = np.zeros(links_shape, dtype=np.float32)
             self.links = 2 * np.pi * np.random.rand(*self.link_idxs)
 
         self.sites_flat = self.sites.flatten()
         self.links_flat = self.links.flatten()
 
-
-
-    def _get_random_links(self, link_type=None):
+    def _generate_links(self, rand=False, link_type=None):
         """Method for obtaning an array of randomly initialized link variables.
             Args:
                 link_type (str): 
@@ -102,25 +122,30 @@ class GaugeLattice(object):
             link_type = self.link_type
 
         if link_type == 'SU2':
-            _links = np.zeros(self.links.shape, dtype=tf.complex64)
-            for link in self.iter_links():
-                _links[link] = generate_SU2(EPS)
+            links = np.zeros(self.links.shape, dtype=np.complex64)
+            if rand:
+                for link in self.iter_links():
+                    links[link] = generate_SU2(EPS)
 
         if link_type == 'SU3':
-            _links = generate_SU3_array(self.num_links // 2,
-                                        EPS).reshape(self.links.shape)
+            links = np.zeros(self.links.shape, dtype=np.complex64)
+            if rand:
+                for link in self.iter_links():
+                    links[link] = generate_SU3(EPS)
 
         if link_type == 'U1':
-            _links = np.random.rand(*self.links.shape)
+            if rand:
+                links = 2 * np.pi * np.random.rand(*self.links.shape)
+            else:
+                links = np.zeros(self.links.shape)
+        return links
 
-        return _links
-
-    def get_links_samples(self, num_samples, link_type=None):
-        """Returns `num_samples` randomly initialized links arrays."""
-        samples = [
-            self._get_random_links(link_type) for _ in range(num_samples)
-        ]
-        return np.array(samples)
+    def get_links_samples(self, num_samples, rand=False, link_type=None):
+        """Return `num_samples` randomly initialized links arrays."""
+        samples = np.array([
+            self._generate_links(rand, link_type) for _ in range(num_samples)
+        ])
+        return samples
 
     def iter_sites(self):
         """Iterator for looping over sites."""
@@ -138,37 +163,65 @@ class GaugeLattice(object):
                 yield tuple(list(site) + [mu])
 
     def get_neighbors(self, site):
-        """Returns neighbors of `site`."""
+        """Return neighbors of `site`."""
         shape = self.sites.shape
         neighbors = list()
         for i, dim in enumerate(shape):
-            e = list(site)
+            nbr = list(site)
             if site[i] > 0:
-                e[i] = e[i] - 1
+                nbr[i] = nbr[i] - 1
             else:
-                e[i] = dim - 1
-            neighbors.append(tuple(e))
+                nbr[i] = dim - 1
+            neighbors.append(tuple(nbr))
 
-            e = list(site)
+            nbr = list(site)
             if site[i] < dim - 1:
-                e[i] = e[i] + 1
+                nbr[i] = nbr[i] + 1
             else:
-                e[i] = 0
-            neighbors.append(tuple(e))
+                nbr[i] = 0
+            neighbors.append(tuple(nbr))
         return neighbors
 
     def get_random_site(self):
+        """Return indices of randomly chosen site."""
         return tuple([random.randint(0, d-1) for d in self.site_idxs])
 
     def get_random_link(self):
+        """Return inidices of randomly chosen link."""
         return tuple([random.randint(0, d-1) for d in self.link_idxs])
 
     def get_energy_function(self):
-        def fn(links, batch_size):
-            return self.total_action(links, batch_size)
+        """Return function object used for calculating the energy (action)."""
+        def fn(samples):
+            return self.total_action(samples)
         return fn
 
-    def local_action(self, all_links, *links):
+    def _action_op(self, plaq):
+        """Operator used in calculating the action."""
+        if self.link_type == 'U1':
+            return np.cos(plaq)
+        return 1.0 * tf.real(tf.trace(plaq)) / self.link_shape[0]
+
+    def _grad_action_op(self, plaq):
+        """Operator used in calculating the gradient of the action."""
+        if self.link_type == 'U1':
+            return np.sin(plaq)
+        return tf.imag(tf.trace(plaq)) / self.link_shape[0]
+
+    def local_action(self, *links, all_links):
+        """Compute local action (internal energy) of a collection of `links`
+        that belong to lattice.
+
+        Args:
+            *links (array-like):
+                Collection of links over which to calculate the local action.
+            all_links (array-like):
+                Links array, shape = self.links.shape 
+        """
+        #  assert all_links.shape != self.links.shape, ("`all_links` must have"
+        #                                               " the same shape as"
+        #                                               " self.links.shape.")
+
         S = 0.0
         for link in links:
             site1 = link[:-1]
@@ -176,69 +229,151 @@ class GaugeLattice(object):
             for nu in range(self.dim):
                 if nu != mu:
                     site2 = np.array(site1) - self.bases[nu]
-                    plaq1, _ = self.plaquette_operator(all_links, site1, mu, nu)
-                    plaq2, _ = self.plaquette_operator(all_links, site2, mu, nu)
-                    S += (5.0 / 3.0) * (plaq1 + plaq2)
+                    plaq1 = self.plaquette_operator(site1, mu, nu, all_links)
+                    plaq2 = self.plaquette_operator(site2, mu, nu, all_links)
+                    S += (plaq1 + plaq2)
         return S
 
-    def _total_action(self, links=None):
+    def _staple(self, site, mu, nu, links=None):
+        """Calculate the `staple` at `site` in direction `mu`. """
         if links is None:
             links = self.links
 
-        if len(links.shape) == 1:
-            links = tf.reshape(links, self.links.shape)
+        shape = self.site_idxs
 
-        #  if tf.executing_eagerly():
-        #      S = tfe.Variable([0.0], dtype=tf.float32)
-        #  else:
-        #      S = tf.Variable([0.0], dtype=tf.float32)
+        def pbc(tup):
+            return list(np.mod(tup, shape))
 
-        S = 0.0
+        for nu in range(self.dim):
+            l1 = tuple(pbc(site + self.bases[mu]) + [nu])
+            l2 = tuple(pbc(site + self.bases[nu]) + [mu])
+            l3 = tuple(pbc(site) + [nu])
+            l4 = tuple(pbc(site + self.bases[mu] - self.bases[nu]) + [nu])
+            l5 = tuple(pbc(site - self.bases[nu]) + [mu])
+            l5 = tuple(pbc(site - self.bases[nu]) + [mu])
+            l6 = tuple(pbc(site - self.bases[nu]) + [nu])
+
+            #  l1 = tuple(list(np.mod( (site + self.bases[mu]), shape) + [nu]))
+            #  l2 = tuple(list(np.mod((site + self.bases[nu]), shape)) + [mu])
+            #  l3 = tuple(list(np.mod(site, shape)) + [nu])
+            #  l4 = tuple(list(np.mod((site + self.bases[mu] - self.bases[nu]),
+            #                         shape)) + [nu])
+            #  l5 = tuple(list(np.mod((site -self.bases[nu]), shape)) + [mu])
+            #  l6 = tuple(list(np.mod((site - self.bases[nu]), shape)) + [nu])
+        def mat_adj(mat):
+            return tf.transpose(tf.conj(mat))
+
+        if self.link_type == 'U1':
+            _sum = (links[l1] - links[l2] - links[l3]
+                    - links[l4] - links[l5] - links[l6])
+            return _sum
+        elif self.link_type in ['SU2', 'SU3']:
+            prod1 = tf.matmul(links[l1], mat_adj(links[l2]))
+            prod1 = tf.matmul(prod1, mat_adj(links[l3]))
+
+            prod2 = tf.matmul(mat_adj(links[l3]), mat_adj(links[l4]))
+            prod2 = tf.matmul(prod2, mat_adj(links[l6]))
+
+            #  prod = tf.matmul(links[l1], tf.tranpose(tf.conj(links[l2])))
+            #  prod12 = tf.matmul(links[l1], tf.transpose(tf.conj(links[l2])))
+            #  prod123 = tf.matmul(prod12, tf.transpose(tf.conj(links[l3])))
+            #
+            #  prod45 = tf.matmul(tf.transpose(tf.conj(links[l3])),
+            #                     tf.transpose(tf.conj(links[l4])))
+            #  prod456 = tf.matmul(prod45, tf.transpose(tf.conj(links[l6])))
+            #  return prod123 + prod456
+            return prod1 + prod2
+
+    def _total_action(self, links=None):
+        """
+        Computes the total action of an individual lattice by summing the
+        internal energy of each plaquette over all plaquettes.
+
+        * For SU(N) (N = 2, 3), the action of a single plaquette is
+        calculated as:
+            Sp = 1 - Re{Tr(Up)}, where Up is the plaquette_operator defined as
+            the product of the gauge fields around an elementary plaquette.
+
+        * For U(1), the action of a sinigle plaquette is calculated as:
+            Sp = 1 - cos(Qp), where Qp is the plaquette operator defined as the
+            sum of the angles (phases) around an elementary plaquette.
+        """
+        if links is None:
+            links = self.links
+
+        action = 0.0
         if self.link_shape != ():
-            const = 5.0 / 3.0  # constant multiplicative factor
+            const = 5.0 / self.link_shape[0]  # constant mult. factor for SU(N)
         else:
-            const = 1.
+            const = 1. # factor for U(1)
 
         for site in self.iter_sites():
             for mu in range(self.dim):
                 for nu in range(self.dim):
                     if nu > mu:
-                        #  _S, _ = const * self.plaquette_operator(links, site,
-                        #                                          mu, nu)
-                        #  S.assign_add(_S)
-                        plaq, _ = self.plaquette_operator(links, site, mu, nu)
-                        S += const * plaq
-        return S
+                        plaq = self.plaquette_operator(site, mu, nu, links)
+                        action += 1 - const * self._action_op(plaq)
+                        #  S += 1 - const * plaq
+        return self.beta * action / self.num_sites
 
-    def total_action(self, batch, batch_size):
-        action_arr = []
-        for idx in range(batch_size):
-            _action = self._total_action(batch[idx])
-            action_arr.append(_action)
-            #  action_arr[idx] = self._total_action(batch[idx])
-            #  if tf.executing_eagerly():
-            #      action_arr.append(self.total_action(batch[idx]).numpy())
-            #  action_arr.extend(self._total_action(batch[idx]))
-        #  return tf.convert_to_tensor(action_arr, dtype=tf.float32)
-        #  return np.array(action_arr, dtype=np.float32)
-        return action_arr
-        #  return tf.constant(np.stack(action_arr), dtype=tf.float32)
+    def total_action(self, samples=None):
+        """Return the total action (sum over all plaquettes) for each sample in
+        samples, at inverse coupling strength `self.beta`. 
 
-    def _local_grad_action(self, links, site, mu):
+        Args:
+            samples (array-like):
+                Array of `links` arrays, each one representing the links of an
+                individual lattice.
+                NOTE: If samples is None, only a single `GaugeLattice` was
+                instantiated during the __init__ method, so this will return
+                the total action of that single lattice.
+        Returns:
+            _ (float or list of floats): 
+                If samples is None, returns action of instantiated lattice as a
+                float. Otherwise, returns list containing the action of each
+                sample in samples.
+        """
+        if samples is None:
+            if self.samples is None:
+                return self._total_action()
+            samples = self.samples
+
+        return [
+            self._total_action(sample) for sample in samples
+        ]
+
+    def _local_grad_action(self, site, mu, links=None):
+        """Compute the local gradient of the action with respect to the link
+        variables for a single lattice instance."""
+        if links is None:
+            links = self.links
+
+        if len(links.shape) == 1:
+            links = tf.reshape(links, self.links.shape)
+            #  links = links.reshape(self.links.shape)
+
+        grad = np.float32(0.0)
         shape = self.site_idxs
-        force = np.float32(0.0)
-        #  for mu in range(self.dim):
         for nu in range(self.dim):
             if nu != mu:
-                shifted_site = np.mod((site - self.bases[nu]), shape)
-                _, plaq_shifted = self.plaquette_operator(links,
-                                                          shifted_site,
-                                                          mu, nu)
-                _, plaq = self.plaquette_operator(links, site, mu, nu)
-                force += np.sin(plaq_shifted) - np.sin(plaq)
-        return force
+                site2 = np.mod((site - self.bases[nu]), shape)
+
+                plaq1 = self.plaquette_operator(site, mu, nu, links)
+                plaq2 = self.plaquette_operator(site2, mu, nu, links)
+                grad += (self._grad_action_op(plaq1)
+                             - self._grad_action_op(plaq2))
+
+                #  staple = self._staple(site, mu, nu, links)
+
+                #  shifted_site = np.mod((site - self.bases[nu]), shape)
+                #  plaq1 = self.plaquette_operator(links, site, mu, nu)
+                #  plaq2 = self.plaquette_operator(links, shifted_site, mu, nu)
+                #  force += np.sin(plaq2) - np.sin(plaq1)
+        return self.beta * grad
 
     def _grad_action(self, links=None):
+        """Compute the gradient of the action for each array of links in
+        `self.samples`."""
         if links is None:
             links = self.links
 
@@ -248,57 +383,94 @@ class GaugeLattice(object):
         grad_arr = np.zeros(links.shape)
         for site in self.iter_sites():
             for mu in range(self.dim):
-                grad_arr[site][mu] = self._local_grad_action(links, site, mu)
-        return grad_arr
+                grad_arr[site][mu] = self._local_grad_action(site, mu)
 
-    def grad_action(self, batch, batch_size):
-        grad_arr = []
-        for idx in range(batch_size):
-            _grad_action = self._grad_action(batch[idx])
-            grad_arr.append(_grad_action.flatten())
-        return grad_arr
-        #  return tf.convert_to_tensor(grad_arr, dtype=tf.float32)
-        #  return np.array(grad_arr, dtype=np.float32)
-        #  return tf.constant(np.stack(grad_arr), )
-        #  return grad_arr
+        return grad_arr.flatten()
 
-    def plaquette_operator(self, links, site, mu, nu):
-        """Local (counter-clockwise) plaquette operator calculated at `site`
+    def grad_action(self, samples=None):
+        """Return the gradient of the action for each sample in samples, at
+        inverse coupling strength `self.beta`.
 
-        Args:
-            links: Array of link variables (shape = self.links.shape)
-            site: Starting point of plaquette loop calculation.
-            mu: First direction (0 <= mu <= self.dim - 1)
-            nu: Second direction (0 <= nu <= self.dim - 1)
+        NOTE: If samples is None, only a single `GaugeLattice` was instantiated
+        during the __init__ method, so this will return the gradient of the
+        action of that single lattice instance.
         """
+        if samples is None:
+            return self._grad_action()
+        return [
+            self._grad_action(sample) for sample in samples
+        ]
+
+    def plaquette_operator(self, site, mu, nu, links=None):
+        """Local (counter-clockwise) plaquette operator calculated at `site`
+            Args:
+                site (tuple): 
+                    Starting point of plaquette loop calculation.
+                mu (int): 
+                    First direction (0 <= mu <= self.dim - 1)
+                nu (int): 
+                    Second direction (0 <= nu <= self.dim - 1)
+                links (array-like): 
+                    Array of link variables (shape = self.links.shape)
+        """
+        if links is None:
+            links = self.links
+
+        if len(links.shape) == 1:
+            links = tf.reshape(links, self.links.shape)
+
         shape = self.site_idxs
 
-        l1 = tuple(list(np.mod(site, shape)) + [mu])
-        l2 = tuple(list(np.mod((site + self.bases[mu]), shape)) + [nu])
-        l3 = tuple(list(np.mod((site + self.bases[nu]), shape)) + [mu])
-        l4 = tuple(list(np.mod(site, shape)) + [nu])
+        def pbc(tup):
+            return list(np.mod(tup, shape))
 
-        if self.link_shape != ():
-            prod12 = tf.matmul(links[l1], links[l2])
-            prod34 = tf.matmul(tf.transpose(tf.conj(links[l3])),
-                               tf.transpose(tf.conj(links[l4])))
-            prod1234 = tf.matmul(prod12, prod34)
+        l1 = tuple(pbc(site) + [mu])  # U_mu(x)
+        l2 = tuple(pbc(site + self.bases[mu]) + [nu])  # U_nu(x + mu)
+        l3 = tuple(pbc(site + self.bases[nu]) + [mu])  # U_mu(x + nu)
+        l4 = tuple(pbc(site) + [nu])  # U_nu(x)
+        #  import pdb
+        #  pdb.set_trace()
 
-            return 1.0 * tf.real(tf.trace(prod1234)) / 3.0, prod1234
+        if self.link_type == 'U1':
+            return links[l1] + links[l2] - links[l3] - links[l4]
+        elif self.link_type in ['SU2', 'SU3']:
+            prod = tf.matmul(links[l1], links[l2])
+            prod = tf.matmul(prod, tf.transpose(tf.conj(links[l3])))
+            prod = tf.matmul(prod, tf.transpose(tf.conj(links[l4])))
+            #  prod12 = tf.matmul(links[l1], links[l2])
+            #  prod34 = tf.matmul(tf.transpose(tf.conj(links[l3])),
+            #                     tf.transpose(tf.conj(links[l4])))
+            #  prod1234 = tf.matmul(prod12, prod34)
 
+            #  return prod1234
+            return prod
         else:
-            _sum = links[l1] + links[l2] - links[l3] - links[l4]
-            return np.cos(_sum) / 6., _sum  # each site has 6 plaquettes
+            #  return 1.0 * tf.real(tf.trace(prod1234)) / 3.0, prod1234
+            #  return np.cos(_sum)., _sum  # each site has 6 plaquettes
+            raise AttributeError('Link type must be one of `U1`, `SU2`, `SU3`')
 
-    def rect_operator(self, links, site, mu, nu):
+    def rect_operator(self, site, mu, nu, links=None):
+        if links is None:
+            links = self.links
+
         shape = self.sites.shape
-        site = np.array(site)
-        l1 = tuple(list(np.mod(site,shape))+[mu])
-        l2 = tuple(list(np.mod((site+self.bases[mu]),shape))+[mu])
-        l3 = tuple(list(np.mod((site+2*self.bases[mu]),shape))+[nu])
-        l4 = tuple(list(np.mod((site+self.bases[mu]+self.bases[nu]),shape))+[mu])
-        l5 = tuple(list(np.mod((site+self.bases[nu]),shape))+[mu])
-        l6 = tuple(list(np.mod(site,shape))+[nu])
+
+        def pbc(tup):
+            return list(np.mod(tup), shape)
+        #  site = np.array(site)
+        l1 = tuple(pbc(site) + [mu])
+        l2 = tuple(pbc(site + self.bases[mu]) + [mu])
+        l3 = tuple(pbc(site + 2 * self.bases[mu]) + [nu])
+        l4 = tuple(pbc(site + self.bases[mu]+self.bases[nu]) + [mu])
+        l5 = tuple(pbc(site + self.bases[nu]) + [mu])
+        l6 = tuple(pbc(site) + [nu])
+
+        #  l1 = tuple(list(np.mod(site,shape))+[mu])
+        #  l2 = tuple(list(np.mod((site+self.bases[mu]),shape))+[mu])
+        #  l3 = tuple(list(np.mod((site+2*self.bases[mu]),shape))+[nu])
+        #  l4 = tuple(list(np.mod((site+self.bases[mu]+self.bases[nu]),shape))+[mu])
+        #  l5 = tuple(list(np.mod((site+self.bases[nu]),shape))+[mu])
+        #  l6 = tuple(list(np.mod(site,shape))+[nu])
         if self.link_shape != ():
             return 1.0 * tf.real(tf.trace(links[l1]
                                           * links[l2]
