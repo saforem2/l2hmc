@@ -6,9 +6,20 @@ from scipy.linalg import expm
 #  from matrices import GELLMANN_MATRICES, PAULI_MATRICES
 from .gauge_generators import generate_SU2, generate_SU3, generate_SU3_array
 
+from HMC.hmc import HMC
+
 import tensorflow.contrib.eager as tfe
 
 EPS = 0.1
+
+NUM_SAMPLES = 500
+PHASE_MEAN = 0
+PHASE_SIGMA = 0.5
+PHASE_SAMPLES = np.random.normal(PHASE_MEAN, PHASE_SIGMA, NUM_SAMPLES // 2)
+
+RANDOM_PHASES = np.append(PHASE_SAMPLES, -PHASE_SAMPLES)
+
+
 
 ##############################################################################
 #  TODO:
@@ -234,7 +245,7 @@ class GaugeLattice(object):
                     S += (plaq1 + plaq2)
         return S
 
-    def _staple(self, site, mu, nu, links=None):
+    def _staple(self, site, mu, links=None):
         """Calculate the `staple` at `site` in direction `mu`. """
         if links is None:
             links = self.links
