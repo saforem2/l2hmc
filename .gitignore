@@ -1,5 +1,7 @@
 *.pyc
+tags
 logs/
+log_mog_tf_extras/*
 MNIST_data/
 gpu*
 .ipynb_checkpoints/
@@ -8,9 +10,17 @@ toy_tasks/
 *.npy
 log_mog_tf/*
 U1_logs/
-l2hmc/
 old_logs/
+good_logs/*
+l2hmc/HMC/__init__.py
+l2hmc/HMC/run_hmc.py
+l2hmc/HMC_alt/
+l2hmc/__init__.py
+l2hmc/global
+l2hmc/lattice/lattice_ising.py
+l2hmc/lattice/old/
+l2hmc/models/
+l2hmc/notebooks/Untitled.ipynb
 run_2_20_380/
 tf_eager_log/
 timing_logs/
-
