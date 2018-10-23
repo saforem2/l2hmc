@@ -106,20 +106,21 @@ def create_log_dir():
 
 def distribution_arr(x_dim, n_distributions):
     """Create array describing likelihood of drawing from distributions."""
-    assert x_dim >= n_distributions, ("n_distributions must be less than or"
-                                      " equal to x_dim.")
+    if n_distributions > x_dim:
+        pis = [1. / n_distributions] * n_distributions
+        pis[0] += 1 - sum(pis)
     if x_dim == n_distributions:
         big_pi = round(1.0 / n_distributions, x_dim)
-        arr = n_distributions * [big_pi]
-        return np.array(arr, dtype=np.float32)
+        pis = n_distributions * [big_pi]
     else:
         #  pis = [1. / nb_mixtures] * nb_mixtures
         #  pis[0] += 1-sum(pis)
         big_pi = (1.0 / n_distributions) - x_dim * 1E-16
-        arr = n_distributions * [big_pi]
-        small_pi = (1. - sum(arr)) / (x_dim - n_distributions)
-        arr.extend((x_dim - n_distributions) * [small_pi])
-        return np.array(arr, dtype=np.float32)
+        pis = n_distributions * [big_pi]
+        small_pi = (1. - sum(pis)) / (x_dim - n_distributions)
+        pis.extend((x_dim - n_distributions) * [small_pi])
+
+    return np.array(pis, dtype=np.float32)
 
 
 def plot_trajectory_and_distribution(samples, trajectory, x_dim=None):
@@ -225,24 +226,6 @@ class GaussianMixtureModel(object):
     def _init_params(self, params, covs=None, distribution=None, **kwargs):
         """Parse keys in params dictionary to be used for setting instance
         parameters."""
-        self.x_dim = 2
-        self.num_distributions = 2
-        self.eps = 0.2
-        self.scale = 0.1
-        self.num_samples = 200
-        self.means = None
-        self.sigma = None
-        self.small_pi = None
-        self.lr_init = 1E-2
-        self.temp_init = 20
-        self.annealing_steps = 200
-        self.annealing_factor = 0.98
-        self.num_training_steps = 20000
-        self.tunneling_rate_steps = 1000
-        self.lr_decay_steps = 1000
-        self.lr_decay_rate = 0.96
-        self.logging_steps = 100
-        self.save_steps = 1000
         self.tunneling_rates = {}
         self.acceptance_rates = {}
         self.distances = {}
@@ -253,9 +236,6 @@ class GaussianMixtureModel(object):
         self.temp_arr = []
         self.steps_arr = []
         self.losses_arr = []
-        #  self.annealing_temps_arr = []
-        #  self.annealing_steps_arr = []
-        self.arrangement = 'axes'
         if kwargs is not None:
             self.radius = kwargs.get('r', 1.0)
             self.sigma = kwargs.get('sigma', 0.05)
@@ -265,8 +245,12 @@ class GaussianMixtureModel(object):
             setattr(self, key, val)
 
         if distribution is None:
-            self.covs, self.distribution = self._distribution(self.sigma,
-                                                              self.means)
+            try:
+                self.covs, self.distribution = self._distribution(self.sigma,
+                                                                  self.means)
+            except:
+                import pdb
+                pdb.set_trace()
         else:
             self.covs, self.distribution = covs, distribution
         # Initial samples drawn from Normal distribution
@@ -308,30 +292,6 @@ class GaussianMixtureModel(object):
         np.save(self.info_dir + 'losses_arr.npy', np.array(self.losses_arr))
         np.save(self.info_dir + 'covs_arr.npy', np.array(self.covs))
 
-    #  def _save_init_variables(self):
-    #      """Since certain parameters (annealing steps, etc.) may change as the
-    #      training proceeds, we create an additional file `_init_params.pkl` that
-    #      stores the initial values of all parameters just for safekeeping."""
-    #      _init_params_dict = {}
-    #      for key, val in self.__dict__.items():
-    #          if isinstance(val, (int, float)) or key=='means':
-    #              _init_params_dict[key] = val
-    #
-    #      _init_params_file = self.info_dir + '_init_params.pkl'
-    #      with open(_init_params_file, 'wb') as f:
-    #          pickle.dump(_init_params_dict, f)
-    #      print(f'Initial parameters written to {_init_params_file}.')
-    #
-    #  def _load_init_variables(self):
-    #      """Load initial values of variables of interest."""
-    #      _init_params_file = self.info_dir + '_init_params.pkl'
-    #      with open(_init_params_file, 'rb') as f:
-    #          _init_params_dict = pickle.load(f)
-    #
-    #      for key, val in _init_params_dict.items():
-    #          if isinstance(val, (int, float)) or key =='means':
-    #              setattr(self, key, val)
-
     def _load_variables(self):
         """Load variables from previously ran experiment."""
         print(f'Loading from previous parameters in from: {self.info_dir}')
@@ -354,12 +314,7 @@ class GaussianMixtureModel(object):
         self.temp_arr = list(np.load(self.info_dir + 'temp_arr.npy'))
         self.steps_arr = list(np.load(self.info_dir + 'steps_arr.npy'))
         self.losses_arr = list(np.load(self.info_dir + 'losses_arr.npy'))
-        #  self.annealing_steps_arr = np.load((self.info_dir
-        #                                      + 'annealing_steps_arr.npy'),
-        #                                     np.array(self.annealing_steps_arr))
-        #  self.annealing_temps_arr = np.load((self.info_dir
-        #                                      + 'annealing_temps_arr.npy'),
-        #                                     np.array(self.annealing_steps_arr))
+
         try:
             self.temp = self.temp_arr[-1]
             self.step_init = self.steps_arr[-1]
@@ -370,7 +325,7 @@ class GaussianMixtureModel(object):
     def _distribution(self, sigma, means):
         """Initialize distribution using utils/distributions.py"""
         means = np.array(means).astype(np.float32)
-        cov_mtx = sigma * np.eye(self.x_dim).astype(np.float32)
+        cov_mtx = sigma * np.eye(self.x_dim).astype(np.float32) 
         covs = np.array([cov_mtx] * self.x_dim).astype(np.float32)
         dist_arr = distribution_arr(self.x_dim,
                                     self.num_distributions)
@@ -435,7 +390,7 @@ class GaussianMixtureModel(object):
         """Create summary objects for logging in tensorboard."""
         with tf.name_scope('summaries'):
             tf.summary.scalar('loss', self.loss_op)
-            tf.summary.histogram('histogram_loss', self.loss_op)
+            #  tf.summary.histogram('histogram_loss', self.loss_op)
             #  variable_summaries(self.loss)
             self.summary_op = tf.summary.merge_all()
 
@@ -992,6 +947,7 @@ class GaussianMixtureModel(object):
         initial_step = 0
         self.sess.run(tf.global_variables_initializer())
         ckpt = tf.train.get_checkpoint_state(self.log_dir)
+        time_delay = 0.
         if ckpt and ckpt.model_checkpoint_path:
             print('Restoring previous model from: '
                   f'{ckpt.model_checkpoint_path}')
@@ -999,10 +955,12 @@ class GaussianMixtureModel(object):
             print('Model restored.\n')
             self.global_step = tf.train.get_global_step()
             initial_step = self.sess.run(self.global_step)
+            previous_time = self.train_times[initial_step]
+            time_delay = time.time() - previous_time
         writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
         _samples = self.distribution.get_samples(self.num_samples)
         start_time = time.time()
-        self.train_times[initial_step] = start_time
+        self.train_times[initial_step] = start_time - time_delay
 
         # Move attribute look ups outside loop to improve performance
         loss_op = self.loss_op
@@ -1012,13 +970,12 @@ class GaussianMixtureModel(object):
         px = self.px
         learning_rate = self.learning_rate
         dynamics = self.dynamics
-
-
-
         try:
             self._print_header()
+            #  step = initial_step
+            #  tot_steps = initial_step + num_train_steps
+            #  while step < tot_steps and self.temp > 1:
             for step in range(initial_step, initial_step + num_train_steps):
-                #  t00 = time.time()
 
                 feed_dict = {self.x: _samples,
                              self.dynamics.temperature: self.temp}
@@ -1032,19 +989,11 @@ class GaussianMixtureModel(object):
                 ], feed_dict=feed_dict)
 
 
-                #  ns = self.num_samples
-                #  ttl = self.trajectory_length
-                #  _tdata = [_samples, loss_, px_]
-                #  _ret_vals = self.get_tunneling_rates(step, self.temp, ns, ttl,
-                #                                       trajectory_data=_tdata)
-                #  _td, _tr, _ar, _ad = _ret_vals
-
-                #  self.losses.append(loss_)
                 self.losses_arr.append(loss_)
                 eps = self.sess.run(dynamics.eps)
 
                 if (step + 1) % self.save_steps == 0:
-                    self.train_times[step+1] = time.time()
+                    self.train_times[step+1] = time.time() - time_delay
                     #  self.train_times[step+1] = time.time() -
                     self._print_header()
                     self._save_model(saver, writer, step)
@@ -1053,9 +1002,6 @@ class GaussianMixtureModel(object):
                     temp_ = self.temp * self.annealing_factor
                     if temp_ > 1.:
                         self.temp = temp_
-                        #  self.annealing_steps_arr.append(step + 1)
-                        #  self.annealing_temps_arr.append(self.temp)
-                        #  self._update_trajectory_length(temp_)
                     else:
                         print("Annealing schedule completed. Saving current"
                               " state and exiting.")
@@ -1140,11 +1086,18 @@ class GaussianMixtureModel(object):
 
 def main(args):
     """Main method for running from command-line."""
+    distribution = None
+    log_dir = None
     x_dim = args.dimension
     num_distributions = args.num_distributions
 
     # Create array containing the location of the mean for each Gaussian
     means = np.zeros((x_dim, x_dim), dtype=np.float32)
+
+    if args.centers:
+        centers = args.centers
+    else:
+        centers = 1  # center of Gaussians
 
     #---------------------------------------------------------------------------
     # GMM Model with Gaussians centered along each axis:
@@ -1170,22 +1123,10 @@ def main(args):
     #            [0, 1, 0, 0]
     #--------------------------------------------------------------------------
     if not args.gen_ring:
-        centers = 1  # center of Gaussian
         for i in range(num_distributions):
             means[i::num_distributions, i] = centers
         #  params['arrangement'] = 'axes'
         arrangement = 'axes'
-
-
-    ###########################################################################
-    # TODO: 
-    #--------------------------------------------------------------------------
-    #   1.) Try experiment using pair of Gaussians both separated along a
-    #       single axis, and
-    #   2.) With Gaussians separated diagonally across all dimensions.
-    ###########################################################################
-
-    distribution = None
 
 
     #--------------------------------------------------------------------------
@@ -1208,19 +1149,15 @@ def main(args):
         means = np.zeros((x_dim, x_dim))
         #  rand_axis = np.random.randint(x_dim)
         rand_axis = 0
-        centers = 1
         #  centers = np.sqrt(2)
 
         means[::2, rand_axis] = centers
         means[1::2, rand_axis] = - centers
-        #  params['arrangement'] = 'single_axis'
         arrangement = 'single_axis'
 
     if args.diagonal:
         means = np.zeros((x_dim, x_dim))
         rand_axis = np.random.randint(x_dim)
-        centers = 1
-        #  centers = np.sqrt(2)
 
         means[::2, :] = centers
         means[1::2, :] = - centers
@@ -1278,11 +1215,11 @@ def main(args):
     if args.sigma:
         params['sigma'] = args.sigma
 
-    log_dir = None
     if args.log_dir:
         log_dir = args.log_dir
 
     config = tf.ConfigProto()
+    #  tf.set_random_seed(1234)
 
     t0 = time.time()
     if distribution is not None:
@@ -1360,6 +1297,11 @@ if __name__ == '__main__':
                         default=0.025, type=float, required=False,
                         help="Standard deviation to use for creating "
                         "Gaussians. (Default: 0.05")
+
+    parser.add_argument("--centers",
+                        default=1, type=float, required=False,
+                        help="Location of center of mean of Gaussian "
+                        " distributions.")
 
     parser.add_argument("--annealing_steps",
                         default=100, type=int, required=False,
