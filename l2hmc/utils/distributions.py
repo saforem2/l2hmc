@@ -82,10 +82,11 @@ class Gaussian(object):
 class TiltedGaussian(Gaussian):
     def __init__(self, dim, log_min, log_max):
         self.R = ortho_group.rvs(dim)
-        self.diag = (np.diag(np.exp(np.log(10.) * np.random.uniform(log_min,
-                                                                    log_max,
-                                                                    size=(dim,))))
-                     + 1e-8 * np.eye(dim))
+        self.diag = (
+            np.diag(np.exp(np.log(10.) * np.random.uniform(log_min, log_max,
+                                                           size=(dim,))))
+            + 1e-8 * np.eye(dim)
+        )
         S = self.R.T.dot(self.diag).dot(self.R)
         self.dim = dim
         Gaussian.__init__(self, np.zeros((dim,)), S)
@@ -107,13 +108,12 @@ class RoughWell(object):
         def fn(x, *args, **kwargs):
             n = tf.reduce_sum(tf.square(x), 1)
             if not self.easy:
-                return 0.5 * n + self.eps * tf.reduce_sum(tf.cos(x / (self.eps
-                                                                      *
-                                                                      self.eps)),
-                                                          1)
+                return (0.5 * n + self.eps * tf.reduce_sum(
+                    tf.cos(x/(self.eps * self.eps)), 1))
             else:
-                return 0.5 * n + self.eps * tf.reduce_sum(tf.cos(x / self.eps),
-                                                          1)
+                return (
+                    0.5 * n + self.eps * tf.reduce_sum(tf.cos(x/self.eps), 1)
+                )
         return fn
 
     def get_samples(self, n):
@@ -126,8 +126,10 @@ class GMM(object):
         assert len(mus) == len(sigmas)
         if not isinstance(pis, np.ndarray):
             pis = np.array(pis)
-        pis /= pis.sum()  # normalize to achieve tolerance for np.random.choice
-        assert round(np.sum(pis), len(pis) - 1) == 1.0
+        if np.sum(pis) != 1.0:
+            # normalize to achieve tolerance for np.random.choice
+            pis /= pis.sum()
+        #  assert round(np.sum(pis), len(pis) - 1) == 1.0
         #  assert sum(pis) == 1.0
         self.mus = mus
         self.sigmas = sigmas
