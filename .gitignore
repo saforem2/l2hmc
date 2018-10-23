@@ -7,3 +7,10 @@ gpu*
 toy_tasks/
 *.npy
 log_mog_tf/*
+U1_logs/
+l2hmc/
+old_logs/
+run_2_20_380/
+tf_eager_log/
+timing_logs/
+
