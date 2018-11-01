@@ -7,6 +7,8 @@ mixture of Gaussians target distribution.
 ###############################################################################
 #  TODO: 
 # -----------------------------------------------------------------------------
+#  (!!)  * Look at using tensorflow.contrib.training.HParams to store
+#          hyperparameter values.
 #  (!!)  * For Lattice model:
 #          - Define distance as difference in average plaquette.
 #          - Look at site by site difference in plaquette (not sum) to prevent
@@ -29,13 +31,14 @@ mixture of Gaussians target distribution.
 #                   acceptance rate.
 ###############################################################################
 """
+# pylint: disable=invalid-name
+# pylint: disable=no-member
 
 import time
 import functools
 import argparse
 import os
 import pickle
-
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
@@ -222,10 +225,11 @@ class GaussianMixtureModel(object):
         print(80*'#')
         print('\n')
 
-
     def _init_params(self, params, covs=None, distribution=None, **kwargs):
-        """Parse keys in params dictionary to be used for setting instance
-        parameters."""
+        """Parse keys from params dictionary and set as class attributes. """
+        self.lr_init = None
+        self.lr_decay_steps = None
+        self.lr_decay_rate = None
         self.tunneling_rates = {}
         self.acceptance_rates = {}
         self.distances = {}
@@ -325,7 +329,7 @@ class GaussianMixtureModel(object):
     def _distribution(self, sigma, means):
         """Initialize distribution using utils/distributions.py"""
         means = np.array(means).astype(np.float32)
-        cov_mtx = sigma * np.eye(self.x_dim).astype(np.float32) 
+        cov_mtx = sigma * np.eye(self.x_dim).astype(np.float32)
         covs = np.array([cov_mtx] * self.x_dim).astype(np.float32)
         dist_arr = distribution_arr(self.x_dim,
                                     self.num_distributions)
@@ -335,8 +339,6 @@ class GaussianMixtureModel(object):
     def _create_dynamics(self, trajectory_length, eps, use_temperature=True):
         """ Create dynamics object using 'utils/dynamics.py'. """
         energy_function = self.distribution.get_energy_function()
-        #  tl = 3 * np.sqrt(self.sigma * self.temp_init)
-        #  traj_len = max(trajectory_length, tl, 2)
         self.dynamics = Dynamics(self.x_dim,
                                  energy_function,
                                  trajectory_length,
@@ -345,9 +347,8 @@ class GaussianMixtureModel(object):
                                  use_temperature=use_temperature)
 
     def _create_loss(self):
-        """ 
-        Initialize loss and build recipe for calculating it during training. 
-        
+        """Initialize loss and build recipe for calculating it during training.
+
         NOTE: The loss is a combination of a term averaged over samples from
         the initial distribution and the target distribution.
         """
@@ -404,21 +405,6 @@ class GaussianMixtureModel(object):
                     f.write(f'\n{key}: {val}\n')
             f.write(f"\nmeans:\n\n {str(self.means)}\n"
                     f"\ncovs:\n\n {str(self.covs)}\n")
-        #  print(f'params file written to: {params_txt_file}')
-
-    def _update_trajectory_length(self, temp):
-        """Update the trajectory length to be roughly equal to half the period
-        of evolution. """
-        pass
-        #  ttl = int(np.ceil(3 * np.sqrt(self.sigma * temp)))
-        #  new_trajectory_length = max([2, ttl])
-        #  new_trajectory_length = 3
-        #  new_trajectory_length = 2
-
-        #  if new_trajectory_length < 2:
-        #      new_trajectory_length = 3
-        #  self.trajectory_length = new_trajectory_length
-        #  self.dynamics.T = new_trajectory_length
 
     def build_graph(self):
         """Build the graph for our model."""
@@ -429,10 +415,10 @@ class GaussianMixtureModel(object):
         self._create_optimizer()
         self._create_summaries()
         self._save_variables()
+        self._create_params_file()
 
     def generate_trajectories(self, temp=1., num_samples=500, num_steps=100):
-        """ Generate trajectories using current values from L2HMC update
-        method.  """
+        """Generate num_samples trajectories of num_steps length at temp."""
         if num_steps is None:
             #  num_steps = int(5 * self.trajectory_length)
             num_steps = int(self.trajectory_length)
@@ -470,9 +456,7 @@ class GaussianMixtureModel(object):
         return tunneling_rates
 
     def _calc_tunneling_info(self, trajectory_data):
-        """Calculate average tunneling rate and error by generating
-        trajectories at a temperature of 1.
-
+        """Calculate relvant quantities of interest from `trajectory_data`.
         Args:
             trajectory_data (list): 
                 trajectory_data[0] = Array of trajectories, 
@@ -493,12 +477,12 @@ class GaussianMixtureModel(object):
         # trajectories are contained in trajectory_data[0]
         tunneling_rates = self._calc_tunneling_rates(trajectory_data[0])
         #  Calculate the average value and error of tunneling rates 
-        tunn_avg_err = calc_avg_vals_errors(tunneling_rates, num_blocks=100)
+        tunn_avg_err = calc_avg_vals_errors(tunneling_rates, num_blocks=50)
         # not sure if this is needed
         loss_arr = trajectory_data[1]
         # acceptance rates are contained in trajectory_data[2]
         accept_avg_err = calc_avg_vals_errors(trajectory_data[2],
-                                              num_blocks=100)
+                                              num_blocks=50)
 
         return tunn_avg_err, accept_avg_err
 
@@ -529,8 +513,7 @@ class GaussianMixtureModel(object):
         return trajectory_data, tunn_rates, accept_rates, avg_distances
 
     def _update_annealing_schedule(self):
-        """Update the annealing schedule dynamically based on the changes in
-        the tunneling rate.
+        """Dynamically update the annealing schedule.
 
         If the tunneling rate decreases during training, we want to slow down
         the annealing schedule. (?? Might delete) However if the tunneling rate
@@ -568,20 +551,6 @@ class GaussianMixtureModel(object):
                 self.tunneling_rates_highT.values()
             ))[:,1]
 
-            #  dtr_dsteps0 = calc_derivative(tunn_rates0, steps_arr0)
-            #  dtr_dtemps1 = calc_derivative(tunn_rates1, temps_arr1)
-            #  dtr_dsteps1 = calc_derivative(tunn_rates1, steps_arr1)
-
-            #  tr0_old = tr0_arr[-2]
-            #  tr0_old_err = tr0_err_arr[-2]
-            #  tr0_new = tr0_arr[-1]
-            #  tr0_new_err = tr0_err_arr[-1]
-
-            #  tr1_old = tr1_arr[-2]
-            #  tr1_old_err = tr1_err_arr[-2]
-            #  tr1_new = tr1_arr[-1]
-            #  tr1_new_err = tr1_err_arr[-1]
-            #
             # want the tunneling to either increase or remain
             # constant (within margin of error)
             delta_tr0_dec = ((tr0_old - tr0_old_err)
@@ -672,8 +641,6 @@ class GaussianMixtureModel(object):
                     if self.annealing_steps > self.tunneling_rate_steps:
                         self.tunneling_rate_steps = self.annealing_steps + 100
 
-                    #  self.temp = self.temp_arr[-2] * self.annealing_factor
-
                     print('Slowing down annealing schedule and resetting'
                           ' temperature.')
                     print(f'Annealing steps: {as_old} -->'
@@ -717,7 +684,7 @@ class GaussianMixtureModel(object):
             #          self.annealing_steps = max(50, as_new)
             #          print(f'Annealing steps: {as_old} -->'
             #                f' {self.annealing_steps}')
-
+            ###################################################################
         else:
             print("Nothing to compare to!")
 
@@ -731,10 +698,8 @@ class GaussianMixtureModel(object):
             dash0 = (len(h_strf) + 1) * '='
             dash1 = (len(h_strf) + 1) * '-'
             print(dash0)
-            #  print(h_str)
             print(h_strf)
             print(dash0)
-            #  print(dash1)
         else:
             h_str = '{:^13s}{:^8s}{:^13s}{:^13s}{:^13s}{:^13s}{:^13s}'
             h_strf = h_str.format("STEP", "TEMP", "LOSS", "ACCEPT RATE",
@@ -783,7 +748,6 @@ class GaussianMixtureModel(object):
                 tunneling rate info
             temp (float):
                 Temperature
-
         """
         i_str = (f'{self.steps_arr[-1]:^8g}'
                  + f'{temp:^6.3g}'
@@ -801,7 +765,8 @@ class GaussianMixtureModel(object):
         print(dash1)
 
     def _generate_plots(self, step, normalize_distance=True):
-        """ Plot tunneling rate, acceptance_rate vs. training step for both
+        """ 
+        Plot tunneling rate, acceptance_rate vs. training step for both
         sets of trajectories. 
 
          Variables with the suffix _highT correspond to trajectories calculated
@@ -818,11 +783,11 @@ class GaussianMixtureModel(object):
             list:
                 List consisting of (fig, ax) pairs for each of the plots.
          """
-
         x_steps = [self.steps_arr, self.steps_arr, self.steps_arr]
         x_temps = [self.temp_arr, self.temp_arr, self.temp_arr]
 
-        def get_vals_as_arr(_dict): return np.array(list(_dict.values()))
+        def get_vals_as_arr(_dict): 
+            return np.array(list(_dict.values()))
 
         tr_arr = get_vals_as_arr(self.tunneling_rates)
         ar_arr = get_vals_as_arr(self.acceptance_rates)
@@ -975,8 +940,8 @@ class GaussianMixtureModel(object):
             #  step = initial_step
             #  tot_steps = initial_step + num_train_steps
             #  while step < tot_steps and self.temp > 1:
+            save_time_steps = 10
             for step in range(initial_step, initial_step + num_train_steps):
-
                 feed_dict = {self.x: _samples,
                              self.dynamics.temperature: self.temp}
 
@@ -992,8 +957,11 @@ class GaussianMixtureModel(object):
                 self.losses_arr.append(loss_)
                 eps = self.sess.run(dynamics.eps)
 
-                if (step + 1) % self.save_steps == 0:
+
+                if (step + 1) % save_time_steps == 0:
                     self.train_times[step+1] = time.time() - time_delay
+
+                if (step + 1) % self.save_steps == 0:
                     #  self.train_times[step+1] = time.time() -
                     self._print_header()
                     self._save_model(saver, writer, step)
@@ -1011,7 +979,6 @@ class GaussianMixtureModel(object):
                         self.sess.close()
                         print('Done!')
                         return 0
-
 
                 if step % self.logging_steps == 0:
                     summary_str = self.sess.run(summary_op,
@@ -1041,7 +1008,7 @@ class GaussianMixtureModel(object):
                                # length
 
                     td0, tr0, ar0, ad0 = self.get_tunneling_rates(step, 1.,
-                                                                  500, ttl,
+                                                                  ns, ttl,
                                                                   normalize=nd)
                     self.tunneling_rates[(step+1, 1.)] = tr0
                     self.acceptance_rates[(step+1, 1.)] = ar0
@@ -1049,7 +1016,7 @@ class GaussianMixtureModel(object):
 
                     td1, tr1, ar1, ad1 = self.get_tunneling_rates(step,
                                                                   self.temp,
-                                                                  500, ttl,
+                                                                  ns, ttl,
                                                                   normalize=nd)
 
                     self.tunneling_rates_highT[(step+1, self.temp)] = tr1
