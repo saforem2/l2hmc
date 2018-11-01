@@ -151,14 +151,14 @@ class Linear(object):
                     'W', shape=_shape, initializer=initializer,
 
                 )
-                variable_summaries(self.W)
+                #  variable_summaries(self.W)
                 with tf.name_scope('biases'):
                     self.b = tf.get_variable(
                         'b', shape=(out_,),
                         initializer=tf.constant_initializer(0.,
                                                             dtype=TF_FLOAT)
                     )
-                    variable_summaries(self.b)
+                    #  variable_summaries(self.b)
 
     def __call__(self, x):
         #  self.activations = tf.add(tf.matmul(x, self.W), self.b)
