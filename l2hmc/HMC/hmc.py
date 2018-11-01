@@ -5,8 +5,14 @@ import tensorflow.contrib.eager as tfe
 
 class HMC(object):
     """Generic HMC object for implementing Hybrid Monte Carlo algorithm."""
-    def __init__(self, position_init, step_size, n_leapfrog_steps, 
-                 potential_fn, grad_potential_fn=None,):
+    def __init__(self,
+                 position_init,
+                 step_size,
+                 n_leapfrog_steps,
+                 potential_fn,
+                 grad_potential_fn=None,
+                 beta=1.,
+                 **kwargs):
         """Initialize HMC object.
 
         Args:
@@ -24,10 +30,16 @@ class HMC(object):
                 Integer number of steps to run the leapfrog integrator for.
                 Total progress per HMC step is roughly proportional to
                 step_size * n_leapfrog_steps.
+            potential_fn:
+                Minus log-likelihood function describing the target
+                distribution.
+            beta:
+                Inverse temperature (coupling) describing the potential fn.
         """
         self.position_init = position_init
         self.step_size = step_size
         self.n_leapfrog_steps = n_leapfrog_steps
+        self.beta = beta
         self.potential = potential_fn
         self.grad_potential_fn = grad_potential_fn
         self._construct_time()
@@ -47,15 +59,11 @@ class HMC(object):
 
         old_hamil = self.hamiltonian(position, momentum)
         new_hamil = self.hamiltonian(position_post, momentum_post)
-        prob = np.exp(np.minimum(old_hamil - new_hamil, 0.))
+        prob = np.exp(np.minimum((old_hamil - new_hamil), 0.))
         #  prob = np.minimum(np.exp(old_hamil - new_hamil), 1)
         if np.random.uniform() <= prob:
             return position_post, momentum_post, prob
         return position, momentum, prob
-        #  accept_prob = self._compute_accept_prob(position, momentum,
-        #                                          position_post, momentum_post)
-        #
-        #  return position_post, momentum_post, accept_prob
 
     def _leapfrog_fn(self, position, momentum, i):
         """One leapfrog step."""
@@ -107,9 +115,16 @@ class HMC(object):
 
     def kinetic(self, v):
         """Compute the kinetic energy."""
-        #return 0.5 * tf.reduce_sum(v**2)
-        return 0.5 * np.sum(np.square(v))
-        #  return 0.5 * np.sum(v**2, axis=1)
+        if len(v.shape) > 1:
+            # i.e. v has not been flattened into a vector
+            # in this case we want to contract over the axes [1:] to calculate
+            # a scalar value for the kinetic energy.
+            # NOTE: The first axis of v indexes samples in a batch of samples.
+            axes = np.arange(1, len(v.shape))
+            #  return 0.5 * tf.reduce_sum(v**2, axis=axes)
+            return 0.5 * np.sum(v**2, axis=axes)
+        else:
+            return 0.5 * np.sum(v**2, axis=0)
 
     def hamiltonian(self, position, momentum):
         """Compute the overall Hamiltonian."""
