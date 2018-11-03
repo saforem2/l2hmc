@@ -41,22 +41,17 @@ def mat_adj(mat):
 
 class GaugeLattice(object):
     """Lattice with Gauge field existing on links."""
-    def __init__(self, 
-                 time_size, 
-                 space_size, 
-                 dim, 
-                 beta, 
-                 link_type,
-                 num_samples=None,
-                 rand=False):
-        """
-            Args:
-                time_size (int): Temporal extent of lattice.
-                space_size (int): Spatial extent of lattice.
-                dim (int): Dimensionality
-                link_type (str): 
-                    String representing the type of gauge group for the link
-                    variables. Must be either 'U1', 'SU2', or 'SU3'
+    def __init__(self, time_size, space_size, dim, beta, link_type,
+                 num_samples=None, rand=False):
+        """Initialization for GaugeLattice object.
+
+        Args:
+            time_size (int): Temporal extent of lattice.
+            space_size (int): Spatial extent of lattice.
+            dim (int): Dimensionality
+            link_type (str): 
+                String representing the type of gauge group for the link
+                variables. Must be either 'U1', 'SU2', or 'SU3'
         """
         assert link_type.upper() in ['U1', 'SU2', 'SU3'], ("Invalid link_type."
                                                            "Possible values:"
