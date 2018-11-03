@@ -16,6 +16,8 @@ tfe = tf.contrib.eager
 from l2hmc_eager import neural_nets
 from utils.distributions import quadratic_gaussian, GMM
 
+# pylint: disable invalid-name
+
 
 class GaugeDynamics(tf.keras.Model):
     """Dynamics engine of naive L2HMC sampler."""
@@ -25,7 +27,8 @@ class GaugeDynamics(tf.keras.Model):
                  minus_loglikelihood_fn,
                  n_steps=25,
                  eps=0.1,
-                 np_seed=1):
+                 np_seed=1,
+                 conv_net=True):
         """Initialization.
 
         Args:
@@ -56,6 +59,12 @@ class GaugeDynamics(tf.keras.Model):
 
         self.potential = minus_loglikelihood_fn
         self.n_steps = n_steps
+        #  self.n_steps = tf.contrib.eager.Variable(
+        #      initial_value=n_steps,
+        #      name='n_steps',
+        #      dtype=tf.int32,
+        #      trainable=True
+        #  )
 
         self._construct_time()
         self._construct_masks()
@@ -68,20 +77,23 @@ class GaugeDynamics(tf.keras.Model):
         spatial_size = self.lattice.space_size
         num_filters = 16
         filter_size = (2, 2)
-        self.position_fn = neural_nets.ConvNet(input_shape, factor=2.,
-                                               spatial_size=spatial_size,
-                                               num_filters=num_filters,
-                                               filter_size=filter_size,
-                                               num_hidden=n_hidden)
-        self.momentum_fn = neural_nets.ConvNet(input_shape, factor=1.,
-                                               spatial_size=spatial_size,
-                                               num_filters=num_filters,
-                                               filter_size=filter_size,
-                                               num_hidden=n_hidden)
-        #  self.position_fn = neural_nets.GenericNet(self.x_dim, factor=2.,
-        #                                            n_hidden=n_hidden)
-        #  self.momentum_fn = neural_nets.GenericNet(self.x_dim, factor=1.,
-        #                                            n_hidden=n_hidden)
+        self.conv_net = conv_net
+        if self.conv_net:
+            self.position_fn = neural_nets.ConvNet(input_shape, factor=2.,
+                                                   spatial_size=spatial_size,
+                                                   num_filters=num_filters,
+                                                   filter_size=filter_size,
+                                                   num_hidden=n_hidden)
+            self.momentum_fn = neural_nets.ConvNet(input_shape, factor=1.,
+                                                   spatial_size=spatial_size,
+                                                   num_filters=num_filters,
+                                                   filter_size=filter_size,
+                                                   num_hidden=n_hidden)
+        else:
+            self.position_fn = neural_nets.GenericNet(self.x_dim, factor=2.,
+                                                      n_hidden=n_hidden)
+            self.momentum_fn = neural_nets.GenericNet(self.x_dim, factor=1.,
+                                                      n_hidden=n_hidden)
 
         self.eps = tf.contrib.eager.Variable(
             initial_value=eps,
@@ -106,7 +118,6 @@ class GaugeDynamics(tf.keras.Model):
         forward_mask = tf.cast(tf.random_uniform((batch_size,)) > 0.5,
                                tf.float32)
         backward_mask = 1. - forward_mask
-
 
         # Obtain proposed states
         position_post = (
@@ -142,11 +153,8 @@ class GaugeDynamics(tf.keras.Model):
         """Transition kernel of augmented leapfrog integrator."""
         lf_fn = self._forward_lf if forward else self._backward_lf
 
-        #  position = tf.reshape(position, shape=())
         # Resample momentum
         momentum = tf.random_normal(tf.shape(position))
-        #  momentum = tf.reshape(momentum, (momentum.shape[0], -1))
-        #  position = tf.reshape(position, (position.shape[0], -1))
 
         position_post, momentum_post = position, momentum
         sumlogdet = 0.
@@ -225,15 +233,17 @@ class GaugeDynamics(tf.keras.Model):
 
         # Reshape tensors to satisfy input shape for convolutional layer
         # want to reshape from [b, x * y * t] --> [b, x, y, t]
-        position = self.expand_tensor(position, self.lattice.links.shape)
-        grad = self.expand_tensor(grad, self.lattice.links.shape)
+        if self.conv_net:
+            position = self.expand_tensor(position, self.lattice.links.shape)
+            grad = self.expand_tensor(grad, self.lattice.links.shape)
 
         # scale, translation, transformed all have shape [b, x * y * t]
         scale, translation, transformed = self.momentum_fn([position, grad, t])
 
         # Flatten tensors from shape [b, x, y, t] --> [b, x * y * t]
-        momentum = self.flatten_tensor(momentum)
-        grad = self.flatten_tensor(grad)
+        if self.conv_net:
+            momentum = self.flatten_tensor(momentum)
+            grad = self.flatten_tensor(grad)
 
         scale *= 0.5 * self.eps
         transformed *= self.eps
@@ -248,9 +258,10 @@ class GaugeDynamics(tf.keras.Model):
         """Update x in the forward leapfrog step."""
         # Reshape tensors to satisfy input shape for convolutional layer
         # want to reshape from [b, x * y * t] --> [b, x, y, t]
-        position = self.expand_tensor(position, self.lattice.links.shape)
-        momentum = self.expand_tensor(momentum, self.lattice.links.shape)
-        mask = self.expand_tensor(mask, self.lattice.links.shape)
+        if self.conv_net:
+            position = self.expand_tensor(position, self.lattice.links.shape)
+            momentum = self.expand_tensor(momentum, self.lattice.links.shape)
+            mask = self.expand_tensor(mask, self.lattice.links.shape)
 
         # scale, translation, transformed all have shape [b, x * y * t]
         scale, translation, transformed = self.position_fn(
@@ -258,9 +269,10 @@ class GaugeDynamics(tf.keras.Model):
         )
 
         # Flatten tensors from shape [b, x, y, t] --> [b, x * y * t]
-        position = self.flatten_tensor(position)
-        momentum = self.flatten_tensor(momentum)
-        mask = self.flatten_tensor(mask)
+        if self.conv_net:
+            position = self.flatten_tensor(position)
+            momentum = self.flatten_tensor(momentum)
+            mask = self.flatten_tensor(mask)
 
         scale *= self.eps
         transformed *= self.eps
@@ -280,14 +292,17 @@ class GaugeDynamics(tf.keras.Model):
 
         # Reshape tensors to satisfy input shape for convolutional layer
         # want to reshape from [b, x * y * t] --> [b, x, y, t]
-        position = self.expand_tensor(position, self.lattice.links.shape)
-        grad = self.expand_tensor(grad, self.lattice.links.shape)
+        if self.conv_net:
+            position = self.expand_tensor(position, self.lattice.links.shape)
+            grad = self.expand_tensor(grad, self.lattice.links.shape)
 
         # scale, translation, transformed all have shape [b, x * y * t]
         scale, translation, transformed = self.momentum_fn([position, grad, t])
 
-        momentum = self.flatten_tensor(momentum)
-        grad = self.flatten_tensor(grad)
+        if self.conv_net:
+            # flatten momentum, grad from [b, x, y, t] --> [b, x * y * t]
+            momentum = self.flatten_tensor(momentum)
+            grad = self.flatten_tensor(grad)
 
         scale *= -0.5 * self.eps
         transformed *= self.eps
@@ -299,22 +314,23 @@ class GaugeDynamics(tf.keras.Model):
         return momentum, tf.reduce_sum(scale, axis=1)
 
     def _update_position_backward(self, position, momentum, t, mask, mask_inv):
-        """Update x in the backward leapfrog step. Inverting the forward
-        update."""
+        """Update x in the backward lf step. Inverting the forward update."""
         # Reshape tensors to satisfy input shape for convolutional layer
         # want to reshape from [b, x * y * t] --> [b, x, y, t]
-        position = self.expand_tensor(position, self.lattice.links.shape)
-        momentum = self.expand_tensor(momentum, self.lattice.links.shape)
-        mask = self.expand_tensor(mask, self.lattice.links.shape)
+        if self.conv_net:
+            position = self.expand_tensor(position, self.lattice.links.shape)
+            momentum = self.expand_tensor(momentum, self.lattice.links.shape)
+            mask = self.expand_tensor(mask, self.lattice.links.shape)
 
         # scale, translation, transformed all have shape [b, x * y * t]
         scale, translation, transformed = self.position_fn(
             [momentum, mask * position, t]
         )
         # Flatten tensors from shape [b, x, y, t] --> [b, x * y * t]
-        position = self.flatten_tensor(position)
-        momentum = self.flatten_tensor(momentum)
-        mask = self.flatten_tensor(mask)
+        if self.conv_net:
+            position = self.flatten_tensor(position)
+            momentum = self.flatten_tensor(momentum)
+            mask = self.flatten_tensor(mask)
 
         scale *= self.eps
         transformed *= self.eps
@@ -380,8 +396,7 @@ class GaugeDynamics(tf.keras.Model):
             # in this case we want to contract over the axes [1:] to calculate
             # a scalar value for the kinetic energy.
             # NOTE: The first axis of v indexes samples in a batch of samples.
-            axes = np.arange(1, len(v.shape))
-            return 0.5 * tf.reduce_sum(v**2, axis=axes)
+            return 0.5 * tf.reduce_sum(v**2, axis=np.arange(1, len(v.shape)))
         else:
             return 0.5 * tf.reduce_sum(v**2, axis=1)
 
@@ -391,7 +406,6 @@ class GaugeDynamics(tf.keras.Model):
 
     def grad_potential(self, position, check_numerics=True):
         """Get gradient of potential function at current location."""
-        #  grad_arr = self.lattice.grad_action(position)
         if tf.executing_eagerly():
             grad = tfe.gradients_function(self.potential)(position)[0]
         else:
@@ -399,16 +413,12 @@ class GaugeDynamics(tf.keras.Model):
         return tf.convert_to_tensor(grad, dtype=tf.float32)
 
     def flatten_tensor(self, tensor):
-        """Reshapes tensor of shape 
-        [batch_size, spatial_size, spatial_size, time_size]  ---->
-            [batch_size, spatial_size * spatial_size * time_size]
+        """Flattens tensor along axes 1:, since axis=0 indexes sample in batch.
+
+        Example: for a tensor of shape [b, x, y, t] -->
+        returns a tensor of shape [b, x * y * t]
         """
-        #  first_dim = tensor.shape[0]
-        #  dims_prod = np.cumprod(tensor.shape[1:])[-1]
         batch_size = tensor.shape[0]
-        #  spatial_size = tensor.shape[1]
-        #  time_size = tensor.shape[-1]
-        #  last_dim = spatial_size * spatial_size * time_size
         return tf.reshape(tensor, shape=(batch_size, -1))
 
     def expand_tensor(self, tensor, output_shape):
@@ -424,20 +434,22 @@ class GaugeDynamics(tf.keras.Model):
 def compute_loss(dynamics, x, scale=0.1, eps=1e-4):
     """Compute loss defined in Eq. (8) of paper."""
     z = tf.random_normal(tf.shape(x))  # Auxiliary variable
-    x_, _, x_accept_prob, x_out = dynamics.apply_transition(x)
-    z_, _, z_accept_prob, _ = dynamics.apply_transition(z)
+    _x, _, x_accept_prob, x_out = dynamics.apply_transition(x)
+    _z, _, z_accept_prob, _ = dynamics.apply_transition(z)
 
-    if x.shape != x_.shape:
-        x = tf.reshape(x, shape=x_.shape)
-    if z.shape != z_.shape:
-        z = tf.reshape(z, shape=z_.shape)
-    # Add eps for numerical stability; following released implx
-    x_loss = tf.reduce_sum((x - x_)**2, axis=1) * x_accept_prob + eps
-    #  x_loss = (tf.reduce_sum((np.cos(x) - np.cos(x_))**2, axis=1)
+    if x.shape != _x.shape:
+        x = tf.reshape(x, shape=_x.shape)
+    if z.shape != _z.shape:
+        z = tf.reshape(z, shape=_z.shape)
+
+    # Add eps for numerical stability; following released implementation
+    x_loss = (tf.reduce_sum((tf.math.cos(x) - tf.math.cos(_x))**2, axis=1)
+              * x_accept_prob + eps)
+    z_loss = (tf.reduce_sum((tf.math.cos(z) - tf.math.cos(_z))**2, axis=1)
+              * z_accept_prob + eps)
+    #  x_loss = (tf.reduce_sum((x_vec - _x_vec)**2, axis=1)
     #            * x_accept_prob + eps)
-    z_loss = tf.reduce_sum((z - z_)**2, axis=1) * z_accept_prob + eps
-    #  z_loss = (tf.reduce_sum((np.cos(z) - np.cos(z_))**2, axis=1)
-    #            * z_accept_prob + eps)
+    #  z_loss = tf.reduce_sum((z - _z)**2, axis=1) * z_accept_prob + eps
 
     loss = tf.reduce_mean(
         (1. / x_loss + 1. / z_loss) * scale - (x_loss + z_loss) / scale, axis=0

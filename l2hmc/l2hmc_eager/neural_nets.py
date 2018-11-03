@@ -25,6 +25,8 @@ class ConvNet(tf.keras.Model):
         if filter_size is None:
             filter_size = (2, 2)
 
+        chan_dim = -1  # `channel` dim, i.e. temporal dim of lattice
+
         self.x_dim = np.cumprod(input_shape[1:])[-1]
         #  self.input_shape = input_shape
         self._input_shape = input_shape
@@ -33,10 +35,15 @@ class ConvNet(tf.keras.Model):
                                              kernel_size=filter_size,
                                              activation=tf.nn.relu,
                                              input_shape=self._input_shape)
-        self.pool_1 = tf.keras.layers.MaxPooling2D(pool_size=(2, 2), strides=2)
+        self.batch_norm = tf.keras.layers.BatchNormalization(axis=chan_dim)
+        #  self.avg_pool = tf.keras.layers.AvgPool2D(pool_size=(2, 2), strides=2)
+        self.dropout = tf.keras.layers.Dropout(0.25)
+        self.max_pool = tf.keras.layers.MaxPooling2D(pool_size=(2, 2),
+                                                     strides=2)
         self.conv_2 = tf.keras.layers.Conv2D(filters=2 * num_filters,
                                              kernel_size=filter_size,
                                              activation=tf.nn.relu)
+
         self.flatten = tf.keras.layers.Flatten()
 
         self.v_layer = _custom_dense(num_hidden, 1. / 3.)
@@ -61,6 +68,12 @@ class ConvNet(tf.keras.Model):
         )
 
     def call(self, inputs):
+        """Architecture looks like:
+
+            input --> CONV, ReLU --> NORM --> AVG_POOL --> DROPOUT --> 
+                CONV, ReLU --> NORM --> MAX_POOL
+            
+        """
         v, x, t = inputs
         #  h = self.v_model(v) + self.x_model(x) + self.t_layer(t)
         #  v_shape = v.shape
@@ -71,8 +84,8 @@ class ConvNet(tf.keras.Model):
         #  if len(x.shape) == 2:
         #      x = tf.reshape(x, shape=(x.shape[0], *self.input_shape))
         #
-        v_conv = self.flatten((self.conv_2(self.pool_1(self.conv_1(v)))))
-        x_conv = self.flatten((self.conv_2(self.pool_1(self.conv_1(x)))))
+        v_conv = self.flatten((self.conv_2(self.max_pool(self.conv_1(v)))))
+        x_conv = self.flatten((self.conv_2(self.max_pool(self.conv_1(x)))))
 
         h = self.v_layer(v_conv) + self.x_layer(x_conv) + self.t_layer(t)
         h = tf.nn.relu(h)
