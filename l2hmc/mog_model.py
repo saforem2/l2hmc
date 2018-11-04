@@ -399,7 +399,6 @@ class GaussianMixtureModel(object):
         """Write relevant parameters to .txt file for reference."""
         params_txt_file = self.info_dir + 'parameters.txt'
         with open(params_txt_file, 'w') as f:
-            #  for key, value in self.params.items():
             for key, val in self.__dict__.items():
                 if isinstance(val, (int, float, str)):
                     f.write(f'\n{key}: {val}\n')
@@ -953,10 +952,8 @@ class GaussianMixtureModel(object):
                     learning_rate
                 ], feed_dict=feed_dict)
 
-
                 self.losses_arr.append(loss_)
                 eps = self.sess.run(dynamics.eps)
-
 
                 if (step + 1) % save_time_steps == 0:
                     self.train_times[step+1] = time.time() - time_delay
