@@ -337,37 +337,15 @@ class GaugeLattice(object):
 
         return [self._total_action(sample) for sample in samples]
 
-    def _local_grad_action(self, site, u, links=None):
-        """Compute the local gradient of the action with respect to the link
-        variables for a single lattice instance."""
-        if links is None:
-            links = self.links
-
-        if len(links.shape) == 1:
-            links = tf.reshape(links, self.links.shape)
-            #  links = links.reshape(self.links.shape)
-
-        grad = np.float32(0.0)
-        shape = self.site_idxs
-        for v in range(self.dim):
-            if v != u:
-                site2 = np.mod((site - self.bases[v]), shape)
-
-                plaq1 = self.plaquette_operator(site, u, v, links)
-                plaq2 = self.plaquette_operator(site2, u, v, links)
-                grad += (self._grad_action_op(plaq1)
-                             - self._grad_action_op(plaq2))
-
-
-                #  shifted_site = np.mod((site - self.bases[v]), shape)
-                #  plaq1 = self.plaquette_operator(links, site, u, v)
-                #  plaq2 = self.plaquette_operator(links, shifted_site, u, v)
-                #  force += np.sin(plaq2) - np.sin(plaq1)
-        return self.beta * grad
-
-    def _grad_action(self, links=None):
-        """Compute the gradient of the action for each array of links in
-        `self.samples`."""
+    def _grad_action(self, links=None, flatten=True):
+        """Compute the gradient of the action for the array of link variables.
+        Args:
+            links: Array of link variables. If None is provided, self.links is
+                used.
+        Returns:
+            grad_arr: Array containing the gradient of the action. Same shape
+                as links.
+        """
         if links is None:
             links = self.links
 
@@ -375,11 +353,23 @@ class GaugeLattice(object):
             links = tf.reshape(links, self.links.shape)
 
         grad_arr = np.zeros(links.shape)
+        shape = self.site_idxs
         for site in self.iter_sites():
             for u in range(self.dim):
-                grad_arr[site][u] = self._local_grad_action(site, u)
+                grad = np.float32(0.0)
+                for v in range(self.dim):
+                    if v != u:
+                        site2 = np.mod((site - self.bases[v]), shape)
+                        plaq1 = self.plaquette_operator(site, u, v, links)
+                        plaq2 = self.plaquette_operator(site2, u, v, links)
+                        grad += (self._grad_action_op(plaq1)
+                                 - self._grad_action_op(plaq2))
+                grad_arr[site][u] = self.beta * grad
+                #  grad_arr[site][u] = self._local_grad_action(site, u)
+        if flatten:
+            return grad_arr.flatten()
 
-        return grad_arr.flatten()
+        return grad_arr
 
     def grad_action(self, samples=None):
         """Return the gradient of the action for each sample in samples, at
@@ -405,7 +395,7 @@ class GaugeLattice(object):
     def _grad_action_op(self, plaq):
         """Operator used in calculating the gradient of the action."""
         if self.link_type == 'U1':
-            return np.sin(plaq)
+            return tf.math.sin(plaq)
         return tf.imag(tf.trace(plaq)) / self.link_shape[0]
 
     def _link_staple_op(self, link, staple):
@@ -458,8 +448,7 @@ class GaugeLattice(object):
             raise AttributeError('Link type must be one of `U1`, `SU2`, `SU3`')
 
     def _get_staples(self, site, u, links=None):
-        """Calculates each of the `staples` for the link variable located at 
-        site + u."""
+        """Calculates each of the staples for the link variable at site + u."""
         if links is None:
             links = self.links
         if len(links.shape) == 1:

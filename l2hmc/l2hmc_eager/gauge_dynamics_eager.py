@@ -28,7 +28,8 @@ class GaugeDynamics(tf.keras.Model):
                  n_steps=25,
                  eps=0.1,
                  np_seed=1,
-                 conv_net=True):
+                 conv_net=True,
+                 test_HMC=False):
         """Initialization.
 
         Args:
@@ -69,31 +70,45 @@ class GaugeDynamics(tf.keras.Model):
         self._construct_time()
         self._construct_masks()
 
-        #  n_hidden = int(2 * self.x_dim / 3 + self.x_dim)
-        n_hidden = int(2 * self.x_dim)
-        #  input_shape = (self.lattice.num_samples, *self.lattice.links.shape)
-        #  input_shape = self.lattice.links.shape
-        input_shape = (1, *self.lattice.links.shape)
-        spatial_size = self.lattice.space_size
-        num_filters = 16
-        filter_size = (2, 2)
-        self.conv_net = conv_net
-        if self.conv_net:
-            self.position_fn = neural_nets.ConvNet(input_shape, factor=2.,
-                                                   spatial_size=spatial_size,
-                                                   num_filters=num_filters,
-                                                   filter_size=filter_size,
-                                                   num_hidden=n_hidden)
-            self.momentum_fn = neural_nets.ConvNet(input_shape, factor=1.,
-                                                   spatial_size=spatial_size,
-                                                   num_filters=num_filters,
-                                                   filter_size=filter_size,
-                                                   num_hidden=n_hidden)
+
+        if not test_HMC:
+            if conv_net:
+                self.conv_net = conv_net
+
+                input_shape = (1, *self.lattice.links.shape)
+                s_size = self.lattice.space_size
+                n_hidden = int(2 * self.x_dim)  # num of hidden nodes in FC net
+                n_filters = 2 * s_size          # num of filters in Conv2D
+                filter_size = (2, 2)            # filter size in Conv2D
+
+                self.position_fn = neural_nets.ConvNet(input_shape,
+                                                       factor=2.,
+                                                       spatial_size=s_size,
+                                                       num_filters=n_filters,
+                                                       filter_size=filter_size,
+                                                       num_hidden=n_hidden)
+
+                self.momentum_fn = neural_nets.ConvNet(input_shape,
+                                                       factor=1.,
+                                                       spatial_size=s_size,
+                                                       num_filters=n_filters,
+                                                       filter_size=filter_size,
+                                                       num_hidden=n_hidden)
+            else:
+                self.conv_net = False
+
+                self.position_fn = neural_nets.GenericNet(self.x_dim,
+                                                          factor=2.,
+                                                          n_hidden=n_hidden)
+
+                self.momentum_fn = neural_nets.GenericNet(self.x_dim,
+                                                          factor=1.,
+                                                          n_hidden=n_hidden)
         else:
-            self.position_fn = neural_nets.GenericNet(self.x_dim, factor=2.,
-                                                      n_hidden=n_hidden)
-            self.momentum_fn = neural_nets.GenericNet(self.x_dim, factor=1.,
-                                                      n_hidden=n_hidden)
+            self.conv_net = True  # don't use ConvNet architecture
+            self.position_fn = self._test_fn  # dummy fn, returns zeros
+            self.momentum_fn = self._test_fn  # dummy fn, returns zeros
+
 
         self.eps = tf.contrib.eager.Variable(
             initial_value=eps,
@@ -101,6 +116,16 @@ class GaugeDynamics(tf.keras.Model):
             dtype=tf.float32,
             trainable=True
         )
+
+    def _test_fn(self, *args, **kwargs):
+        """Dummy test function used for testing generic HMC sampler.
+
+        Returns: Three identical tensors of zeros, equivalent to setting 
+        T_x, Q_x, and S_x to zero in the augmented leapfrog integrator.
+        """
+        output = tf.constant(0, shape=self.samples.shape, dtype=tf.float32)
+        output = self.flatten_tensor(output)
+        return output, output, output
 
     def apply_transition(self, position):
         """Propose a new state and perform the accept/reject step."""
@@ -449,6 +474,7 @@ def compute_loss(dynamics, x, scale=0.1, eps=1e-4):
               * z_accept_prob + eps)
     #  x_loss = (tf.reduce_sum((x_vec - _x_vec)**2, axis=1)
     #            * x_accept_prob + eps)
+    #  x_loss = tf.reduce_sum((x - _x)**2, axis=1) * x_accept_prob + eps
     #  z_loss = tf.reduce_sum((z - _z)**2, axis=1) * z_accept_prob + eps
 
     loss = tf.reduce_mean(

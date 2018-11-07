@@ -31,20 +31,32 @@ class ConvNet(tf.keras.Model):
         #  self.input_shape = input_shape
         self._input_shape = input_shape
 
-        self.conv_1 = tf.keras.layers.Conv2D(filters=num_filters,
-                                             kernel_size=filter_size,
-                                             activation=tf.nn.relu,
-                                             input_shape=self._input_shape)
-        self.batch_norm = tf.keras.layers.BatchNormalization(axis=chan_dim)
+        self.conv_x1 = tf.keras.layers.Conv2D(filters=num_filters,
+                                              kernel_size=filter_size,
+                                              activation=tf.nn.relu,
+                                              input_shape=self._input_shape)
+        self.conv_v1 = tf.keras.layers.Conv2D(filters=num_filters,
+                                              kernel_size=filter_size,
+                                              activation=tf.nn.relu,
+                                              input_shape=self._input_shape)
+        self.batch_norm_x1 = tf.keras.layers.BatchNormalization(axis=chan_dim)
+        self.batch_norm_v1 = tf.keras.layers.BatchNormalization(axis=chan_dim)
         #  self.avg_pool = tf.keras.layers.AvgPool2D(pool_size=(2, 2), strides=2)
-        self.dropout = tf.keras.layers.Dropout(0.25)
-        self.max_pool = tf.keras.layers.MaxPooling2D(pool_size=(2, 2),
-                                                     strides=2)
-        self.conv_2 = tf.keras.layers.Conv2D(filters=2 * num_filters,
-                                             kernel_size=filter_size,
-                                             activation=tf.nn.relu)
+        self.dropout_x1 = tf.keras.layers.Dropout(0.25)
+        self.dropout_v1 = tf.keras.layers.Dropout(0.25)
+        self.max_pool_x1 = tf.keras.layers.MaxPooling2D(pool_size=(2, 2),
+                                                        strides=2)
+        self.max_pool_v1 = tf.keras.layers.MaxPooling2D(pool_size=(2, 2),
+                                                        strides=2)
+        self.conv_x2 = tf.keras.layers.Conv2D(filters=2 * num_filters,
+                                              kernel_size=filter_size,
+                                              activation=tf.nn.relu)
 
-        self.flatten = tf.keras.layers.Flatten()
+        self.conv_v2 = tf.keras.layers.Conv2D(filters=2 * num_filters,
+                                              kernel_size=filter_size,
+                                              activation=tf.nn.relu)
+        self.flatten_x = tf.keras.layers.Flatten()
+        self.flatten_v = tf.keras.layers.Flatten()
 
         self.v_layer = _custom_dense(num_hidden, 1. / 3.)
         self.x_layer = _custom_dense(num_hidden, factor / 3.)
@@ -84,9 +96,13 @@ class ConvNet(tf.keras.Model):
         #  if len(x.shape) == 2:
         #      x = tf.reshape(x, shape=(x.shape[0], *self.input_shape))
         #
-        v_conv = self.flatten((self.conv_2(self.max_pool(self.conv_1(v)))))
-        x_conv = self.flatten((self.conv_2(self.max_pool(self.conv_1(x)))))
-
+        v_conv = self.max_pool_v1(self.conv_v1(v))
+        v_conv = self.flatten_v((self.conv_v2(v_conv)))
+        x_conv = self.max_pool_x1(self.conv_x1(x))
+        x_conv = self.flatten_x((self.conv_x2(x_conv)))
+        #  v_conv = self.flatten_v((self.conv_v2(self.max_pool_v1(self.conv_v1(v)))))
+        #  v_conv = self.flatten((self.conv_2(self.max_pool(self.conv_1(v)))))
+        #  x_conv = self.flatten((self.conv_2(self.max_pool(self.conv_1(x)))))
         h = self.v_layer(v_conv) + self.x_layer(x_conv) + self.t_layer(t)
         h = tf.nn.relu(h)
         h = self.h_layer(h)
@@ -144,28 +160,6 @@ class GenericNet(tf.keras.Model):
         transformation = (tf.nn.tanh(self.transformation_layer(h))
                           * tf.exp(self.coeff_transformation))
         return scale, translation, transformation
-
-def _custom_conv(input_shape, spatial_size, num_filters, filter_size):
-    """Custom implementation of 2D convolutional layers."""
-    # 2D convolution, with 'SAME' padding (i.e. the output feature map has the
-    # same size as the input). Note that {strides} is a 4D array whose shape
-    # matches the data layout: [lattice_index, y, x, depth].
-    if num_filters is None:
-        num_filters = int(spatial_size * 2)
-        #  num_filters = int(input_shape * 2)
-    if filter_size is None:
-        filter_size = (2, 2)
-    model = tf.keras.Sequential()
-    model.add(tf.keras.layers.Conv2D(filters=num_filters,
-                                     kernel_size=filter_size,
-                                     activation=tf.nn.relu,
-                                     input_shape=input_shape))
-    model.add(tf.keras.layers.MaxPooling2D(pool_size=(2, 2), strides=2))
-    model.add(tf.keras.layers.Conv2D(filters=num_filters * 2,
-                                     kernel_size=filter_size,
-                                     activation=tf.nn.relu))
-    model.add(tf.keras.layers.Flatten())
-    return model
 
 
 def _custom_dense(units, factor=1.):
