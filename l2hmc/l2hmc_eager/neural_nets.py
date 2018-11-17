@@ -25,7 +25,7 @@ class ConvNet(tf.keras.Model):
         if filter_size is None:
             filter_size = (2, 2)
 
-        chan_dim = -1  # `channel` dim, i.e. temporal dim of lattice
+        #  chan_dim = 1  # `channel` dim, i.e. temporal dim of lattice
 
         self.x_dim = np.cumprod(input_shape[1:])[-1]
         #  self.input_shape = input_shape
@@ -34,13 +34,15 @@ class ConvNet(tf.keras.Model):
         self.conv_x1 = tf.keras.layers.Conv2D(filters=num_filters,
                                               kernel_size=filter_size,
                                               activation=tf.nn.relu,
+                                              #  data_format='channels_first',
                                               input_shape=self._input_shape)
         self.conv_v1 = tf.keras.layers.Conv2D(filters=num_filters,
                                               kernel_size=filter_size,
                                               activation=tf.nn.relu,
+                                              #  data_format='channels_first',
                                               input_shape=self._input_shape)
-        self.batch_norm_x1 = tf.keras.layers.BatchNormalization(axis=chan_dim)
-        self.batch_norm_v1 = tf.keras.layers.BatchNormalization(axis=chan_dim)
+        self.batch_norm_x1 = tf.keras.layers.BatchNormalization(axis=0)
+        self.batch_norm_v1 = tf.keras.layers.BatchNormalization(axis=0)
         #  self.avg_pool = tf.keras.layers.AvgPool2D(pool_size=(2, 2), strides=2)
         self.dropout_x1 = tf.keras.layers.Dropout(0.25)
         self.dropout_v1 = tf.keras.layers.Dropout(0.25)
@@ -50,10 +52,12 @@ class ConvNet(tf.keras.Model):
                                                         strides=2)
         self.conv_x2 = tf.keras.layers.Conv2D(filters=2 * num_filters,
                                               kernel_size=filter_size,
+                                              #  data_format='channels_first',
                                               activation=tf.nn.relu)
 
         self.conv_v2 = tf.keras.layers.Conv2D(filters=2 * num_filters,
                                               kernel_size=filter_size,
+                                              #  data_format='channels_first',
                                               activation=tf.nn.relu)
         self.flatten_x = tf.keras.layers.Flatten()
         self.flatten_v = tf.keras.layers.Flatten()
@@ -87,6 +91,9 @@ class ConvNet(tf.keras.Model):
             
         """
         v, x, t = inputs
+        #v = tf.reshape(v, [-1, v.shape[2], v.shape[3], v.shape[1]])
+        #x = tf.reshape(x, [-1, x.shape[2], x.shape[3], x.shape[1]])
+
         #  h = self.v_model(v) + self.x_model(x) + self.t_layer(t)
         #  v_shape = v.shape
         #  x_shape = x.shape

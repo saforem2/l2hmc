@@ -21,6 +21,8 @@ import tensorflow as tf
 import numpy as np
 from functools import reduce
 from lattice.gauge_lattice import GaugeLattice
+from l2hmc_eager import neural_nets
+
 
 TF_FLOAT = tf.float32
 NP_FLOAT = np.float32
@@ -32,9 +34,169 @@ def safe_exp(x, name=None):
     return tf.check_numerics(tf.exp(x), message=f'{name} is NaN')
 
 def cast_f32(tensor):
-    return tf.cast(tensor, TF_FLOAT)
+    return tf.cast(tensor, dtype=tf.float32)
+
 
 class GaugeDynamics(object):
+    """Dynamics engine of naive L2HMC sampler."""
+    def __init__(self,
+                 lattice,
+                 minus_loglikelihood_fn,
+                 n_steps=10,
+                 eps=0.1,
+                 hmc=False,
+                 conv_net=True,
+                 eps_trainable=True,
+                 np_seed=1):
+        """Initialization.
+
+        Args:
+            lattice (array-like):
+                Array containing a batch of lattices, each of which is a
+                `GaugeLattice` object.
+            x_dim: 
+                Dimensionality of observed data
+                minus_loglikelihood_fn: 
+            Log-likelihood function of conditional probability
+            n_steps:
+                Number of leapfrog steps within each transition
+            eps:
+                Initial value learnable scale of step size
+            np_seed:
+                Random seed for numpy; used to control sample masks
+        """
+
+        self.lattice = lattice
+        self.samples = tf.convert_to_tensor(np.array(self.lattice.samples),
+                                            dtype=tf.float32)
+        npr.seed(np_seed)
+
+        self.x_dim = self.lattice.num_links
+
+        self.potential = minus_loglikelihood_fn
+
+        self.n_steps = n_steps
+
+        self._construct_time()
+        self._construct_masks()
+
+        self.eps = tf.Variable(
+            initial_value=eps,
+            trainable=True,
+            name=None,
+            dtype=tf.float32
+        )
+
+        if not hmc:
+            alpha = tf.get_variable(
+                'alpha',
+                initializer=tf.log(tf.constant(eps)),
+                trainable=eps_trainable,
+            )
+            if conv_net:
+                self.conv_net = conv_net
+                input_shape = (1, *self.lattice.links.shape)
+                s_size = self.lattice.space_size
+                n_hidden = int(2 * self.x_dim)  # num of hidden nodes in FC net
+                n_filters = 2 * s_size          # num of filters in Conv2D
+                filter_size = (2, 2)            # filter size in Conv2D
+
+                self.position_fn = neural_nets.ConvNet(input_shape,
+                                                       factor=2.,
+                                                       spatial_size=s_size,
+                                                       num_filters=n_filters,
+                                                       filter_size=filter_size,
+                                                       num_hidden=n_hidden)
+
+                self.momentum_fn = neural_nets.ConvNet(input_shape,
+                                                       factor=1.,
+                                                       spatial_size=s_size,
+                                                       num_filters=n_filters,
+                                                       filter_size=filter_size,
+                                                       num_hidden=n_hidden)
+            else:
+                self.conv_net = False
+
+                self.position_fn = neural_nets.GenericNet(self.x_dim,
+                                                          factor=2.,
+                                                          n_hidden=n_hidden)
+
+                self.momentum_fn = neural_nets.GenericNet(self.x_dim,
+                                                          factor=1.,
+                                                          n_hidden=n_hidden)
+
+        else:
+            alpha = tf.log(tf.constant(eps, dtype=tf.float32))
+            self.conv_net = True
+
+            self.position_fn = self._test_fn
+            self.momentum_fn = self._test_fn
+
+    def apply_transition(self, position):
+        """Propose a new state and perform the accept/reject step."""
+        # Simulate dynamics both forward and backward;
+        # Use sampled masks to compute the actual solutions
+        position_f, momentum_f, accept_prob_f = self.transition_kernel(
+            position, forward=True
+        )
+        position_b, momentum_b, accept_prob_b = self.transition_kernel(
+            position, forward=False
+        )
+
+        # Decide direction uniformly
+        batch_size = tf.shape(position)[0]
+        forward_mask = tf.cast(tf.random_uniform((batch_size,)) > 0.5,
+                               tf.float32)
+        backward_mask = 1. - forward_mask
+
+        # Obtain proposed states
+        position_post = (
+            forward_mask[:, None] * position_f
+            + backward_mask[:, None] * position_b
+        )
+        momentum_post = (
+            forward_mask[:, None] * momentum_f
+            + backward_mask[:, None] * momentum_b
+        )
+
+        # Probability of accepting the proposed states
+        accept_prob = (forward_mask * accept_prob_f
+                       + backward_mask * accept_prob_b)
+
+        # Accept or reject step
+        accept_mask = tf.cast(
+            accept_prob > tf.random_uniform(tf.shape((accept_prob)),
+                                            tf.float32)
+        )
+        reject_mask = 1. - accept_mask
+
+        # Samples after accept / reject step
+        position_out = (
+            accept_mask[:, None] * position_post
+            + reject_mask[:, None] * tf.reshape(position,
+                                                shape=(position.shape[0], -1))
+        )
+
+        return position_post, momentum_post, accept_prob, position_out
+
+    def transition_kernel(self, position, forward=True):
+        """Transition kerel of augmented leapfrog integrator."""
+        lf_fn = self._forward_lf if forward else self._backward_lf
+
+        # Resample momentum
+        momentum = tf.random_normal(tf.shape(position))
+
+        position_post, momentum_post = position, momentum
+        sumlogdet = 0.
+
+        # Apply augmented leapfrog steps
+        batch_size = tf.shape(position)[0]
+        i = tf.constant(0., dtype=tf.float32)
+
+
+
+
+class GaugeDynamicsOld(object):
     def __init__(self,
                  lattice,
                  trajectory_length=10,
@@ -115,7 +277,7 @@ class GaugeDynamics(object):
         """Calculate the kinetic energy from the MD `velocity`."""
         _axis = np.arange(1, len(self.lattice.links.shape) + 1)
         return 0.5 * tf.reduce_sum(tf.square(v), axis=_axis)
-        #  return 0.5 * tf.reduce_sum(tf.square(v), axis=1)
+    #  return 0.5 * tf.reduce_sum(tf.square(v), axis=1)
 
     def clip_with_grad(self, u, min_u=-32., max_u=32.):
         u = u - tf.stop_gradient(tf.nn.relu(u - max_u))
@@ -252,7 +414,7 @@ class GaugeDynamics(object):
         #                  )))
 
         return x, v, tf.reduce_sum(sv1 + sv2 + mb * sx1 + m * sx2, axis=1)
-        #return x, v, tf.reduce_sum(sv1 + sv2 + mb * sx1 + m * sx2, axis=1)
+    #return x, v, tf.reduce_sum(sv1 + sv2 + mb * sx1 + m * sx2, axis=1)
 
     def energy(self, x, batch_size):
         if self.use_temperature:
@@ -261,14 +423,14 @@ class GaugeDynamics(object):
             T = tf.constant(1.0, dtype=TF_FLOAT)
 
         #  if T.dtype != x.dtype:
-        #      T = tf.cast(T, x.dtype)
+            #      T = tf.cast(T, x.dtype)
 
         #  if aux is not None:
             #  return self._energy_fn(x, aux=aux) / T
-        return tf.cast(self._energy_fn(x, batch_size), TF_FLOAT) / T
+            return tf.cast(self._energy_fn(x, batch_size), TF_FLOAT) / T
         #  else:
-        #      #  return self._energy_fn(x) / T)
-        #      return tf.cast(self._energy_fn(x), TF_FLOAT) / T
+            #      #  return self._energy_fn(x) / T)
+            #      return tf.cast(self._energy_fn(x), TF_FLOAT) / T
 
     def hamiltonian(self, x, v, aux=None):
         return self.energy(x, self.batch_size) + self.kinetic(v)
@@ -276,16 +438,16 @@ class GaugeDynamics(object):
     def grad_energy(self, x, aux=None):
         #  grad_ys = tf.constant(1.0, dtype=tf.complex64, shape=())
         return tf.gradients(self.energy(x, self.batch_size), x)[0]
-        #  return tf.gradients(self.energy(x, aux=aux), x, grad_ys=grad_ys)[0]
-        #  try:
+    #  return tf.gradients(self.energy(x, aux=aux), x, grad_ys=grad_ys)[0]
+    #  try:
         #      _energy = tf.cast(self.energy(x, aux=aux), TF_FLOAT)
         #      return tf.gradients(_energy, x)[0]
         #  except TypeError:
-        #      import pdb
-        #      pdb.set_trace()
-        #  return tf.cast(tf.gradients(tf.cast(self.energy(x, aux=aux),
-        #                                      tf.float32), x)[0],
-                       #  dtype=TF_FLOAT)
+            #      import pdb
+            #      pdb.set_trace()
+            #  return tf.cast(tf.gradients(tf.cast(self.energy(x, aux=aux),
+            #                                      tf.float32), x)[0],
+            #  dtype=TF_FLOAT)
 
     def _gen_mask(self, x):
         #  dX = x.get_shape().as_list()[1]
@@ -295,7 +457,7 @@ class GaugeDynamics(object):
                 b[i] = 1
                 b = b.astype('bool')
                 nb = np.logical_not(b)
-        return b.astype(NP_FLOAT), nb.astype(NP_FLOAT)
+                return b.astype(NP_FLOAT), nb.astype(NP_FLOAT)
 
     def forward(self, x, init_v=None, aux=None, log_path=False, log_jac=False):
         if init_v is None:

@@ -39,6 +39,10 @@ def pbc(tup, shape):
 def mat_adj(mat):
     return tf.transpose(tf.conj(mat))  # conjugate transpose
 
+def project_angle(x):
+    """Function to project an angle from [-4pi, 4pi] to [-pi, pi]."""
+    return x - 2 * np.pi * tf.math.floor((x + np.pi) / (2 * np.pi))
+
 class GaugeLattice(object):
     """Lattice with Gauge field existing on links."""
     def __init__(self, time_size, space_size, dim, beta, link_type,
@@ -53,9 +57,9 @@ class GaugeLattice(object):
                 String representing the type of gauge group for the link
                 variables. Must be either 'U1', 'SU2', or 'SU3'
         """
-        assert link_type.upper() in ['U1', 'SU2', 'SU3'], ("Invalid link_type."
-                                                           "Possible values:"
-                                                           "'U1', 'SU2', 'SU3'")
+        assert link_type.upper() in ['U1', 'SU2', 'SU3'], (
+            "Invalid link_type. Possible values: U1', 'SU2', 'SU3'"
+        )
         self.time_size = time_size
         self.space_size = space_size
         self.dim = dim
@@ -83,15 +87,17 @@ class GaugeLattice(object):
         Link variables are randomly initialized to elements in their respective
         gauge group.
         """
-
         if link_type == 'SU2':
             self.link_shape = (2, 2)
+            link_dtype = np.complex64
 
         if link_type == 'SU3':
             self.link_shape = (3, 3)
+            link_dtype = np.complex64
 
         if link_type == 'U1':
             self.link_shape = ()
+            link_dtype = np.float32
 
         sites_shape = tuple(
             [self.time_size]
@@ -106,31 +112,40 @@ class GaugeLattice(object):
             + list(self.link_shape)
         )
 
-        self.sites = np.zeros(sites_shape, dtype=np.complex64)
-        self.links = np.zeros(links_shape, dtype=np.complex64)
-        #  self.links = self._generate_links(rand, link_type)
+
+        self.sites = np.zeros(sites_shape, dtype=link_dtype)
+        self.links = np.zeros(links_shape, dtype=link_dtype)
+
         self.num_sites = np.cumprod(self.sites.shape)[-1]
         self.num_links = self.num_sites * self.dim
-
         #  if self.link_shape != ():
         if self.link_type != 'U1':
             # Indices for individual sites and links
             self.site_idxs = self.sites.shape[:-2]
             self.link_idxs = self.links.shape[:-2]
-            self.links = np.zeros(links_shape, dtype=np.complex64)
+            #  self.links = np.zeros(links_shape, dtype=np.complex64)
         else:
             self.site_idxs = self.sites.shape
             self.link_idxs = self.links.shape
+
             if rand:
                 self.links = np.array(np.random.uniform(0, 2*np.pi,
                                                         links_shape),
                                       dtype=np.float32)
-            else:
-                self.links = np.zeros(links_shape, dtype=np.float32)
-            #  self.links = 2 * np.pi * np.random.rand(*self.link_idxs)
 
-        self.sites_flat = self.sites.flatten()
-        self.links_flat = self.links.flatten()
+        # Construct list containing the indices of the link variables for each
+        # plaquette in the lattice to use as a lookup table instead of having
+        # to perform nested loops
+        t = np.arange(self.time_size)
+        x = np.arange(self.space_size)
+        u = np.arange(self.dim)
+        v = np.arange(self.dim)
+        s_tups = [(i, j) for i in t for j in x]  # site tuples
+        self.plaquette_idxs = [
+            list(s) + [i] + [j] for s in s_tups for i in u for j in v if j > i
+        ]
+        #  self.sites_flat = self.sites.flatten()
+        #  self.links_flat = self.links.flatten()
 
     def _generate_links(self, rand=False, link_type=None):
         """Method for obtaning an array of randomly initialized link variables.
@@ -231,32 +246,60 @@ class GaugeLattice(object):
                 return self.total_action(samples)
         return fn
 
-    def _average_plaquette(self, links=None):
+    def _calc_plaq_observables(self, links=None):
         """Computes the average plaquette of a particular lattice of links."""
         if links is None:
             links = self.links
+        if links.shape != self.links.shape:
             links = tf.reshape(links, self.links.shape)
             #links = links.reshape(self.links.shape)
 
         num_plaquettes = self.time_size * self.space_size
-        plaquette_sum = 0.
-        for site in self.iter_sites():
-            for u in range(self.dim):
-                for v in range(self.dim):
-                    if v > u:
-                        plaq = self.plaquette_operator(site, u, v, links)
-                        plaquette_sum += self._action_op(plaq)
+        plaquettes_sum = 0.
+        topological_charge = 0.
+        total_action = 0.
+        #  for plaq in self.iter_plaquettes():
+            #  *site, u, v = plaq  # unpack plaquette idxs as [site, u, v]
+        #  for site in self.iter_sites():
+        #      for u in range(self.dim):
+        #          for v in range(self.dim):
+        #              if v > u:
+        for plaq in self.plaquette_idxs:
+            *site, u, v = plaq
+            plaq_sum = self.plaquette_operator(site, u, v, links)
+            local_action = self._action_op(plaq_sum)
 
-        return plaquette_sum / num_plaquettes
+            total_action += 1 - local_action
+            plaquettes_sum += local_action
+            topological_charge += project_angle(local_action)
 
-    def average_plaquette(self, samples=None):
+            #  plaquette_sum += self._action_op(links_sum)
+            #  topological_charge += project_angle(links_sum)
+
+        return [self.beta * total_action,
+                plaquettes_sum / num_plaquettes,
+                topological_charge / (2 * np.pi)]
+
+    def calc_plaq_observables(self, samples=None):
         """Calculate the average plaquette for each sample in samples."""
         if samples is None:
             if self.samples is None:
-                return self._average_plaquette()
+                return self._calc_plaq_observables()
             samples = self.samples
 
-        return [self._average_plaquette(sample) for sample in samples]
+        if tf.executing_eagerly():
+            return [self._calc_plaq_observables(sample) for sample in samples]
+        else:
+            plaq_observables = []
+            for idx in range(samples.shape[0]):
+                observables = self._calc_plaq_observables(samples[idx])
+                plaq_observables.extend(observables)
+                #  average_plaquettes.append(observables[0])
+                #  topological_charges.append(observables[1])
+                #  average_plaquettes.append(self._average_plaquette(samples[idx]))
+            #  tf.convert_to_tensor(average_plaquettes, dtype=tf.float32)
+            #  return average_plaquettes, topological_charges
+            return plaq_observables
 
     def local_action(self, *links, all_links):
         """Compute local action (internal energy) of a collection of `links`
@@ -285,18 +328,18 @@ class GaugeLattice(object):
         return S
 
     def _total_action(self, links=None):
-        """
-        Computes the total action of an individual lattice by summing the
+        """Computes the total action of an individual lattice by summing the
         internal energy of each plaquette over all plaquettes.
 
-        * For SU(N) (N = 2, 3), the action of a single plaquette is
-        calculated as:
-            Sp = 1 - Re{Tr(Up)}, where Up is the plaquette_operator defined as
-            the product of the gauge fields around an elementary plaquette.
-
-        * For U(1), the action of a sinigle plaquette is calculated as:
-            Sp = 1 - cos(Qp), where Qp is the plaquette operator defined as the
-            sum of the angles (phases) around an elementary plaquette.
+        NOTE:
+            * For SU(N) (N = 2, 3), the action of a single plaquette is
+            calculated as:
+                Sp = 1 - Re{Tr(Up)}, where Up is the plaquette_operator defined
+                as the product of the gauge fields around an elementary
+                plaquette.
+            * For U(1), the action of a sinigle plaquette is calculated as:
+                Sp = 1 - cos(Qp), where Qp is the plaquette operator defined as
+                the sum of the angles (phases) around an elementary plaquette.
         """
         if links is None:
             links = self.links
@@ -335,7 +378,14 @@ class GaugeLattice(object):
                 return self._total_action()
             samples = self.samples
 
-        return [self._total_action(sample) for sample in samples]
+        if tf.executing_eagerly():
+            return [self._total_action(sample) for sample in samples]
+        else:
+            total_actions = []
+            for idx in range(samples.shape[0]):
+                total_actions.append(self._total_action(samples[idx]))
+            #  tf.convert_to_tensor(total_actions, dtype=tf.float32)
+            return total_actions
 
     def _grad_action(self, links=None, flatten=True):
         """Compute the gradient of the action for the array of link variables.
@@ -384,6 +434,17 @@ class GaugeLattice(object):
         return [
             self._grad_action(sample) for sample in samples
         ]
+
+    def topological_charge_op(self, plaq):
+        """Calculate the (local) topological charge of the plaquette.
+        Args:
+            plaq: list containing the four link variables that define the
+                plaquette.
+        Returns:
+            topological_charge: The sum of the link variables (for the U1
+                case.)
+        """
+        pass
 
     def _action_op(self, plaq):
         """Operator used in calculating the action."""

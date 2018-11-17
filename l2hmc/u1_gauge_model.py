@@ -39,7 +39,7 @@ PARAMS = {
     'space_size': 8,
     'dim': 2,
     'beta': 2.,
-    'num_samples': 10,
+    'num_samples': 5,
     'rand': False,
     'link_type': 'U1',
     'n_lf_steps': 10,
@@ -160,16 +160,17 @@ class GaugeModel(object):
         self.potential_fn = self.lattice.get_energy_function(self.samples)
 
         self.dynamics = self._create_dynamics(lattice=self.lattice,
-                                              num_lf_steps=self.num_lf_steps,
-                                              eps=self.eps, 
+                                              num_lf_steps=self.n_lf_steps,
+                                              eps=self.lf_step_size,
                                               potential_fn=self.potential_fn)
 
-        self.optimizer = tf.train.AdamOptimizer(
-            learning_rate=self.learning_rate
-        )
+        #  self.optimizer = tf.train.AdamOptimizer(
+        #      learning_rate=self.lr_init
+        #  )
 
-        self.ckptr = self._create_checkpointer(self.optimizer, self.dynamics,
-                                               self.global_step)
+        self.global_step = tf.train.get_or_create_global_step()
+        self.global_step.assign(1)
+
         if eager:
             self.step_fn = step
             #  self.step_fn = step(self.dynamics, self.optimizer, self.samples)
@@ -178,7 +179,8 @@ class GaugeModel(object):
             self.sess = tf.Session(config=config)
             #  self.step_fn = graph_step(self.dynamics, self.optimizer,
             #                            self.samples)
-            self.step_fn = graph_step
+            #  self.step_fn = graph_step
+            #  self.loss_op, x_out, x_accept_prob = self._create_loss()
 
         if restore:
             self.restore_model()
@@ -255,6 +257,51 @@ class GaugeModel(object):
                                    dynamics=dynamics,
                                    global_step=global_step)
 
+    @staticmethod
+    def _create_loss(dynamics, x, scale=0.1, eps=1e-4):
+        """Compute loss defined in Eq. (8) of paper."""
+        with tf.name_scope('loss'):
+            z = tf.random_normal(tf.shape(x))  # Auxiliary variable
+            _x, _, x_accept_prob, x_out = dynamics.apply_transition(x)
+            _z, _, z_accept_prob, _ = dynamics.apply_transition(z)
+
+            if x.shape != _x.shape:
+                x = tf.reshape(x, shape=_x.shape)
+            if z.shape != _z.shape:
+                z = tf.reshape(z, shape=_z.shape)
+
+             # Add eps for numerical stability; following released implementation
+            x_loss = (tf.reduce_sum(
+                (tf.math.cos(x) - tf.math.cos(_x))**2, axis=1
+            ) * x_accept_prob + eps)
+
+            z_loss = (tf.reduce_sum(
+                (tf.math.cos(z) - tf.math.cos(_z))**2, axis=1
+            ) * z_accept_prob + eps)
+
+            loss_op = tf.reduce_mean((1. / x_loss + 1. / z_loss) * scale
+                                     - (x_loss + z_loss) / scale, axis=0)
+
+        return loss_op, x_out, x_accept_prob
+
+    @staticmethod
+    def _compute_loss_and_grads(dynamics):
+        """Obtain loss value and gradients."""
+        with tf.GradientTape() as tape:
+            loss_val, out, accept_prob = loss_fn(dynamics, x)
+        grads = tape.gradient(loss_val, dynamics.trainable_variables)
+
+        return loss_val, grads, out, accept_prob
+
+    @staticmethod
+    def _create_optimizer(learning_rate, loss_op, global_step):
+        with tf.name_scope('train'):
+            optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
+            train_op = optimizer.minimize(loss_op,
+                                          global_step=global_step,
+                                         name='train_op')
+        return train_op, optimizer
+
     def warmup(self, dynamics, optimizer, n_iters=1):
         """Warmup optimization to reduce overhead.
             Args:
@@ -292,10 +339,25 @@ class GaugeModel(object):
             print("Model restored.\n")
             self.global_step = tf.train.get_global_step()
 
+
+            self.sess.run(tf.global_variables_initializer())
+
     def train(self, num_train_steps):
         """Train the model."""
         saver = tf.train.Saver(max_to_keep=3)
         initial_step = 0
+        x = tf.placeholder(dtype=tf.float32,
+                           shape=self.samples.shape,
+                           name='x')
+        loss_op, x_out, x_accept_prob = self._create_loss(self.dynamics,
+                                                          x,
+                                                          scale=0.1,
+                                                          eps=1e-4)
+        train_op, optimizer = self._create_optimizer(loss_op, step)
+
+        self.ckptr = self._create_checkpointer(optimizer, self.dynamics,
+                                               self.global_step)
+
         self.sess.run(tf.global_variables_initializer())
         ckpt = tf.train.get_checkpoint_state(self.log_dir)
         time_delay = 0.
@@ -310,18 +372,53 @@ class GaugeModel(object):
             time_delay = time.time() - previous_time
         writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
         try:
-            train_op, loss, _ = self.step_fn(self.dynamics,
-                                             self.optimizer,
-                                             self.samples)
+            #  train_op, loss, _ = self.step_fn(self.dynamics,
+            #                                   self.optimizer,
+            #                                   self.samples)
+            learning_rate = self.learning_rate
+            _samples = self.samples
+            self.actions_arr.extend(self.lattice.total_action(_samples))
+            self.avg_plaquettes_arr.extend(
+                self.lattice.average_plaquette(_samples)
+            )
 
             # Warmup to reduce initialization effect when timing
-            for _ in range(1):
-                _, _ = sess.run([train_op, loss])
+            #  for _ in range(1):
+            #      _, _ = sess.run([train_op, loss])
 
+            start_time = time.time()
             for step in range(initial_step, initial_step + num_train_steps):
-                start_time = time.time()
+                t1 = time.time()
                 self.train_times[initial_step] = start_time - time_delay
 
 
+                _, _loss, _samples, _accept_prob, _lr = self.sess.run([
+                    train_op,
+                    loss_op,
+                    x_out,
+                    x_accept_prob,
+                ], feed_dict={x: _samples})
 
+                total_actions = self.lattice.total_action(_samples)
+                avg_plaquettes = self.lattice.average_plaquette(_samples)
+
+                self.actions_arr.extend(total_actions)
+                self.avg_plaquettes_arr.extend(avg_plaquettes)
+                self.losses_arr.append(_loss)
+
+                print(f"Iteration: {step}, "
+                      f"loss: {_loss:^.4f}, "
+                      f"x_accept: {np.mean(_accept_prob):^.4f}, "
+                      f"eps: {self.dynamics.eps:^.4f}, "
+                      f"avg_action: {np.mean(total_actions):^.4f}, "
+                      f"avg_plaq: {np.mean(avg_plaquettes):^.4f}, "
+                      f"step time: {time.time() - t1}")
+
+        except (KeyboardInterrupt, SystemExit):
+            print("\nKeyboardInterrupt detected! \n"
+                  " Saving current state and exiting.\n")
+            self._save_variables()
+            self._save_model(saver, writer, step)
+            writer.close()
+            self.sess.close()
 

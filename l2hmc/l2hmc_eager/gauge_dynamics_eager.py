@@ -10,13 +10,13 @@ import numpy as np
 import numpy.random as npr
 import tensorflow as tf
 
-#import tensorflow.contrib.eager as tfea
+#  import tensorflow.contrib.eager as tfe
 tfe = tf.contrib.eager
 
 from l2hmc_eager import neural_nets
 from utils.distributions import quadratic_gaussian, GMM
 
-# pylint: disable invalid-name
+# pylint: disable invalid-name, module level import not at top of file
 
 
 class GaugeDynamics(tf.keras.Model):
@@ -108,7 +108,6 @@ class GaugeDynamics(tf.keras.Model):
             self.conv_net = True  # don't use ConvNet architecture
             self.position_fn = self._test_fn  # dummy fn, returns zeros
             self.momentum_fn = self._test_fn  # dummy fn, returns zeros
-
 
         self.eps = tf.contrib.eager.Variable(
             initial_value=eps,
@@ -456,11 +455,15 @@ class GaugeDynamics(tf.keras.Model):
 
 
 # Loss function
-def compute_loss(dynamics, x, scale=0.1, eps=1e-4):
+def compute_loss(dynamics, x, scale=0.1, eps=1e-4, l2_dist=True):
     """Compute loss defined in Eq. (8) of paper."""
     z = tf.random_normal(tf.shape(x))  # Auxiliary variable
     _x, _, x_accept_prob, x_out = dynamics.apply_transition(x)
     _z, _, z_accept_prob, _ = dynamics.apply_transition(z)
+
+    _x = tf.mod(_x, 2*np.pi)
+    _z = tf.mod(_z, 2*np.pi)
+    x_out = tf.mod(x_out, 2*np.pi)
 
     if x.shape != _x.shape:
         x = tf.reshape(x, shape=_x.shape)
@@ -468,14 +471,14 @@ def compute_loss(dynamics, x, scale=0.1, eps=1e-4):
         z = tf.reshape(z, shape=_z.shape)
 
     # Add eps for numerical stability; following released implementation
-    x_loss = (tf.reduce_sum((tf.math.cos(x) - tf.math.cos(_x))**2, axis=1)
-              * x_accept_prob + eps)
-    z_loss = (tf.reduce_sum((tf.math.cos(z) - tf.math.cos(_z))**2, axis=1)
-              * z_accept_prob + eps)
-    #  x_loss = (tf.reduce_sum((x_vec - _x_vec)**2, axis=1)
-    #            * x_accept_prob + eps)
-    #  x_loss = tf.reduce_sum((x - _x)**2, axis=1) * x_accept_prob + eps
-    #  z_loss = tf.reduce_sum((z - _z)**2, axis=1) * z_accept_prob + eps
+    if l2_dist:
+        x_loss = tf.reduce_sum((x - _x)**2, axis=1) * x_accept_prob + eps
+        z_loss = tf.reduce_sum((z - _z)**2, axis=1) * z_accept_prob + eps
+    else:
+        x_loss = (tf.reduce_sum((tf.math.cos(x) - tf.math.cos(_x))**2, axis=1)
+                  * x_accept_prob + eps)
+        z_loss = (tf.reduce_sum((tf.math.cos(z) - tf.math.cos(_z))**2, axis=1)
+                  * z_accept_prob + eps)
 
     loss = tf.reduce_mean(
         (1. / x_loss + 1. / z_loss) * scale - (x_loss + z_loss) / scale, axis=0
@@ -483,11 +486,11 @@ def compute_loss(dynamics, x, scale=0.1, eps=1e-4):
 
     return loss, x_out, x_accept_prob
 
-
-def loss_and_grads(dynamics, x, loss_fn=compute_loss):
+def loss_and_grads(dynamics, x, loss_fn=compute_loss, 
+                   scale=0.1, eps=1e-4, l2_dist=True):
     """Obtain loss value and gradients."""
     with tf.GradientTape() as tape:
-        loss_val, out, accept_prob = loss_fn(dynamics, x)
+        loss_val, out, accept_prob = loss_fn(dynamics, x, scale, eps)
     grads = tape.gradient(loss_val, dynamics.trainable_variables)
 
     return loss_val, grads, out, accept_prob
