@@ -20,9 +20,10 @@ Dynamics object
 import tensorflow as tf
 import numpy as np
 from functools import reduce
-from lattice.gauge_lattice import GaugeLattice
+#  from lattice.gauge_lattice import GaugeLattice
 from l2hmc_eager import neural_nets
 
+tfe = tf.contrib.eager
 
 TF_FLOAT = tf.float32
 NP_FLOAT = np.float32
@@ -67,73 +68,98 @@ class GaugeDynamics(object):
         """
 
         self.lattice = lattice
-        self.samples = tf.convert_to_tensor(np.array(self.lattice.samples),
-                                            dtype=tf.float32)
-        npr.seed(np_seed)
+        self.potential = minus_loglikelihood_fn
+        self.n_steps = n_steps
+        self.conv_net = conv_net
 
         self.x_dim = self.lattice.num_links
 
-        self.potential = minus_loglikelihood_fn
+        self.samples = tf.convert_to_tensor(
+            np.array(self.lattice.samples),
+            dtype=tf.float32
+        )
 
-        self.n_steps = n_steps
+        self.batch_size = self.lattice.samples.shape[0]
+        #  self._feature_dims = len(self.lattice.links.shape)
+        #  self._transition_mask_shape = tuple([self.batch_size] +
+        #                                      [1] * self._feature_dims)
 
-        self._construct_time()
+        np.random.seed(np_seed)
+
+        #  self._construct_time()
         self._construct_masks()
 
         self.eps = tf.Variable(
             initial_value=eps,
-            trainable=True,
+            trainable=eps_trainable,
             name=None,
             dtype=tf.float32
         )
 
         if not hmc:
-            alpha = tf.get_variable(
-                'alpha',
-                initializer=tf.log(tf.constant(eps)),
-                trainable=eps_trainable,
-            )
             if conv_net:
-                self.conv_net = conv_net
-                input_shape = (1, *self.lattice.links.shape)
-                s_size = self.lattice.space_size
-                n_hidden = int(2 * self.x_dim)  # num of hidden nodes in FC net
-                n_filters = 2 * s_size          # num of filters in Conv2D
-                filter_size = (2, 2)            # filter size in Conv2D
-
-                self.position_fn = neural_nets.ConvNet(input_shape,
-                                                       factor=2.,
-                                                       spatial_size=s_size,
-                                                       num_filters=n_filters,
-                                                       filter_size=filter_size,
-                                                       num_hidden=n_hidden)
-
-                self.momentum_fn = neural_nets.ConvNet(input_shape,
-                                                       factor=1.,
-                                                       spatial_size=s_size,
-                                                       num_filters=n_filters,
-                                                       filter_size=filter_size,
-                                                       num_hidden=n_hidden)
+                self._build_conv_nets()
             else:
-                self.conv_net = False
-
-                self.position_fn = neural_nets.GenericNet(self.x_dim,
-                                                          factor=2.,
-                                                          n_hidden=n_hidden)
-
-                self.momentum_fn = neural_nets.GenericNet(self.x_dim,
-                                                          factor=1.,
-                                                          n_hidden=n_hidden)
-
+                self._build_generic_nets()
         else:
-            alpha = tf.log(tf.constant(eps, dtype=tf.float32))
-            self.conv_net = True
-
             self.position_fn = self._test_fn
             self.momentum_fn = self._test_fn
 
+    def _build_conv_nets(self):
+        """Build ConvNet architecture for position and momentum functions."""
+
+        input_shape = (1, *self.lattice.links.shape)
+        s_size = self.lattice.space_size
+        n_hidden = int(2 * self.x_dim)  # num of hidden nodes in FC net
+        n_filters = 2 * s_size          # num of filters in Conv2D
+        filter_size = (2, 2)            # filter size in Conv2D
+
+        self.position_fn = neural_nets.ConvNet(input_shape,
+                                               factor=2.,
+                                               spatial_size=s_size,
+                                               num_filters=n_filters,
+                                               filter_size=filter_size,
+                                               num_hidden=n_hidden,
+                                               name='XConvNet',
+                                               scope='XNet')
+
+        self.momentum_fn = neural_nets.ConvNet(input_shape,
+                                               factor=1.,
+                                               spatial_size=s_size,
+                                               num_filters=n_filters,
+                                               filter_size=filter_size,
+                                               num_hidden=n_hidden,
+                                               name='VConvNet',
+                                               scope='VNet')
+
+    def _build_generic_nets(self):
+        """Build GenericNet FC-architectures for position and momentum fns."""
+
+        n_hidden = int(2 * self.x_dim)  # num of hidden nodes in FC net
+
+        self.position_fn = neural_nets.GenericNet(self.x_dim,
+                                                  factor=2.,
+                                                  n_hidden=n_hidden)
+
+        self.momentum_fn = neural_nets.GenericNet(self.x_dim,
+                                                  factor=1.,
+                                                  n_hidden=n_hidden)
+
+    def _test_fn(self, *args, **kwargs):
+        """Dummy test function used for testing generic HMC sampler.
+        
+        Returns:
+            Three identical tensors of zeros, equivalent to setting the
+            auxiliary functions T, Q, and S to zero in the augmented leapfrog
+            integrator.
+        """
+        output = tf.constant(0, shape=self.samples.shape, dtype=tf.float32)
+        output = self.flatten_tensor(output)
+        return output, output, output
+
     def apply_transition(self, position):
         """Propose a new state and perform the accept/reject step."""
+
         # Simulate dynamics both forward and backward;
         # Use sampled masks to compute the actual solutions
         position_f, momentum_f, accept_prob_f = self.transition_kernel(
@@ -144,16 +170,22 @@ class GaugeDynamics(object):
         )
 
         # Decide direction uniformly
-        batch_size = tf.shape(position)[0]
-        forward_mask = tf.cast(tf.random_uniform((batch_size,)) > 0.5,
+        #  batch_size = tf.shape(position)[0]
+        forward_mask = tf.cast(tf.random_uniform((self.batch_size,)) > 0.5,
                                tf.float32)
+
+        #  forward_mask = tf.reshape(forward_mask,
+        #                            shape=self._transition_mask_shape)
+
         backward_mask = 1. - forward_mask
+
 
         # Obtain proposed states
         position_post = (
             forward_mask[:, None] * position_f
             + backward_mask[:, None] * position_b
         )
+
         momentum_post = (
             forward_mask[:, None] * momentum_f
             + backward_mask[:, None] * momentum_b
@@ -165,16 +197,18 @@ class GaugeDynamics(object):
 
         # Accept or reject step
         accept_mask = tf.cast(
-            accept_prob > tf.random_uniform(tf.shape((accept_prob)),
-                                            tf.float32)
+            accept_prob > tf.random_uniform(tf.shape(accept_prob)), tf.float32
         )
+
+        #  accept_mask = tf.reshape(accept_mask,
+        #                           shape=self._transition_mask_shape)
+
         reject_mask = 1. - accept_mask
 
         # Samples after accept / reject step
         position_out = (
             accept_mask[:, None] * position_post
-            + reject_mask[:, None] * tf.reshape(position,
-                                                shape=(position.shape[0], -1))
+            + reject_mask[:, None] * position
         )
 
         return position_post, momentum_post, accept_prob, position_out
@@ -184,344 +218,339 @@ class GaugeDynamics(object):
         lf_fn = self._forward_lf if forward else self._backward_lf
 
         # Resample momentum
-        momentum = tf.random_normal(tf.shape(position))
-
+        momentum = tf.random_normal(tf.shape(position), dtype=tf.float32)
         position_post, momentum_post = position, momentum
-        sumlogdet = 0.
 
         # Apply augmented leapfrog steps
-        batch_size = tf.shape(position)[0]
-        i = tf.constant(0., dtype=tf.float32)
+        #  batch_size = tf.shape(position)[0]
+        sumlogdet = tf.zeros((self.batch_size,))
 
+        t = tf.constant(0., dtype=tf.float32)
 
+        # pylint: disable=unused-argument, missing-docstring
+        def body(x, v, t, sumlogdet):
+            new_x, new_v, logdet = lf_fn(x, v, t)
 
+            return new_x, new_v, t + 1, sumlogdet + logdet
 
-class GaugeDynamicsOld(object):
-    def __init__(self,
-                 lattice,
-                 trajectory_length=10,
-                 eps=0.1,
-                 batch_size=10,
-                 hmc=False,
-                 net_factory=None,
-                 eps_trainable=True,
-                 use_temperature=False):
-        """Initialization method."""
-        self.lattice = lattice
-        self.batch_size = batch_size
+        def cond(x, v, t, sumlogdet):  
+            return tf.less(t, self.n_steps)
 
-        try:
-            self._energy_fn = lattice.get_energy_function()
-        except AttributeError:
-            raise AttributeError("lattice has no `get_energy_function`"
-                                 " method. Exiting.")
+        position_post, momentum_post, i, sumlogdet = tf.while_loop(
+            cond=cond,
+            body=body,
+            loop_vars=[position_post, momentum_post, t, sumlogdet]
+        )
 
-        self.use_temperature = use_temperature
-        self.temperature = tf.placeholder(TF_FLOAT, shape=(),
-                                          name='temperature')
+        accept_prob = self._compute_accept_prob(position, momentum,
+                                                position_post, momentum_post,
+                                                sumlogdet)
 
-        if not hmc:
-            alpha = tf.get_variable('alpha',
-                                    initializer=tf.log(tf.constant(eps)),
-                                    trainable=eps_trainable)
-        else:
-            alpha = tf.log(tf.constant(eps, dtype=TF_FLOAT))
+        #  position_post = self.flatten_tensor(position_post)
+        #  momentum_post = self.flatten_tensor(momentum_post)
+        #  position_post = tf.reshape(position_post,
+        #                             shape=(position_post.shape[0], -1))
+        #  momentum_post = tf.reshape(momentum_post,
+        #                             shape=(momentum_post.shape[0], -1))
+        return position_post, momentum_post, accept_prob
 
-        self.eps = safe_exp(alpha, name='alpha')
-        self.trajectory_length = int(trajectory_length)
-        self.hmc = hmc
+    def _forward_lf(self, position, momentum, i):
+        """One forward augmented leapfrog step."""
+        #  t = self._get_time(i)
+        t = self._format_time(i, tile=tf.shape(position)[0])
+        mask, mask_inv = self._get_mask(i)
+        sumlogdet = 0.
 
-        self._init_mask()
+        momentum, logdet = self._update_momentum_forward(position, momentum, t)
 
-        # if HMC we just return all zeros
-        if hmc:
-            #  z = lambda x, *args, **kwargs: tf.zeros_like(x)
-            self.XNet = lambda inp: [tf.zeros_like(inp[0])
-                                     for t in range(NUM_AUX_FUNCS)]
-            self.VNet = lambda inp: [tf.zeros_like(inp[0])
-                                     for t in range(NUM_AUX_FUNCS)]
-        else:
-            self.XNet = net_factory(self.lattice.num_links,
-                                    scope='XNet', factor=2.0)
-            self.VNet = net_factory(self.lattice.num_links,
-                                    scope='VNet', factor=1.0)
+        sumlogdet += logdet
 
-    def _init_mask(self):
-        """Initialize mask to randomly select half of variables to update."""
-        mask_per_step = []
-        for t in range(self.trajectory_length):
-            arr = np.arange(self.lattice.num_links)
-            ind = np.random.permutation(arr)[:int(self.lattice.num_sites / 2)]
+        position, logdet = self._update_position_forward(position, momentum, t,
+                                                         mask, mask_inv)
+        sumlogdet += logdet
 
-            m = np.zeros((self.lattice.num_links,))
-            m[ind] = 1
-            m = m.reshape(self.lattice.link_idxs)
+        position, logdet = self._update_position_forward(position, momentum, t,
+                                                         mask_inv, mask)
+        sumlogdet += logdet
 
-            mask_per_step.append(m)
+        momentum, logdet = self._update_momentum_forward(position, momentum, t)
 
-        self.mask = tf.constant(np.stack(mask_per_step), dtype=TF_FLOAT)
+        sumlogdet += logdet
 
-    def _get_mask(self, step):
-        """Get the mask for a particular `step`."""
-        m = tf.gather(self.mask, tf.cast(step, dtype=tf.int32))
-        return m, 1.-m
+        return position, momentum, sumlogdet
+
+    def _backward_lf(self, position, momentum, i):
+        """One backward augmented leapfrog step."""
+        # Reversed index/sinusoidal time
+        #  t = self._get_time(self.n_steps - i - 1)
+        t = self._format_time(i, tile=tf.shape(position)[0])
+        mask, mask_inv = self._get_mask(self.n_steps - i - 1)
+        sumlogdet = 0.
+
+        momentum, logdet = self._update_momentum_backward(position,
+                                                          momentum,
+                                                          t)
+        sumlogdet += logdet
+
+        position, logdet = self._update_position_backward(position,
+                                                          momentum,
+                                                          t, mask_inv, mask)
+        sumlogdet += logdet
+
+        position, logdet = self._update_position_backward(position,
+                                                          momentum,
+                                                          t, mask, mask_inv)
+        sumlogdet += logdet
+
+        momentum, logdet = self._update_momentum_backward(position,
+                                                          momentum,
+                                                          t)
+        sumlogdet += logdet
+
+        return position, momentum, sumlogdet
+
+    def _update_momentum_forward(self, position, momentum, t):
+        """Update momentum `v` in the forward leapfrog step."""
+        grad = self.grad_potential(position)
+
+        # Reshape tensors to satisfy input shape for convolutional layer
+        # want to reshape from [b, x * y * t] --> [b, x, y, t]
+        #  if self.conv_net:
+        #      position = self.expand_tensor(position, self.lattice.links.shape)
+        #      grad = self.expand_tensor(grad, self.lattice.links.shape)
+
+        # scale, translation, transformed all have shape [b, x * y * t]
+        scale, translation, transformed = self.momentum_fn([position, grad, t])
+
+        # Flatten tensors from shape [b, x, y, t] --> [b, x * y * t]
+        #  if self.conv_net:
+        #      momentum = self.flatten_tensor(momentum)
+        #      grad = self.flatten_tensor(grad)
+
+        scale *= 0.5 * self.eps
+        transformed *= self.eps
+
+        momentum = (
+            momentum * tf.exp(scale)
+            - 0.5 * self.eps * (tf.exp(transformed) * grad - translation)
+        )
+
+        #  axes = np.arange(1, len(scale.shape))
+        #  return momentum, tf.reduce_sum(scale, axis=axes)
+        return momentum, tf.reduce_sum(scale, axis=1)
+
+    def _update_position_forward(self, position, momentum, t, mask, mask_inv):
+        """Update position `x` in the forward leapfrog step."""
+        # Reshape tensors to satisfy input shape for convolutional layer
+        # want to reshape from [b, x * y * t] --> [b, x, y, t]
+        #  if self.conv_net:
+        #      position = self.expand_tensor(position, self.lattice.links.shape)
+        #      momentum = self.expand_tensor(momentum, self.lattice.links.shape)
+        #      mask = self.expand_tensor(mask, self.lattice.links.shape)
+
+        # scale, translation, transformed all have shape [b, x * y * t]
+        scale, translation, transformed = self.position_fn(
+            [momentum, mask * position, t]
+        )
+
+        # Flatten tensors from shape [b, x, y, t] --> [b, x * y * t]
+        #  if self.conv_net:
+        #      position = self.flatten_tensor(position)
+        #      momentum = self.flatten_tensor(momentum)
+        #      mask = self.flatten_tensor(mask)
+
+        scale *= self.eps
+        transformed *= self.eps
+
+        position = (
+            mask * position
+            + mask_inv * (position * tf.exp(scale) + self.eps
+                          * (tf.exp(transformed) * momentum + translation))
+        )
+        #  axes = np.arange(1, len(scale.shape))
+        #  return position, tf.reduce_sum(mask_inv * scale, axis=axes)
+
+        return position, tf.reduce_sum(mask_inv * scale, axis=1)
+
+    def _update_momentum_backward(self, position, momentum, t):
+        """Update momentum `v` in the backward leapfro step.
+
+        Inverting the forward update.
+        """
+        grad = self.grad_potential(position)
+
+        # Reshape tensors to satisfy input shape for convolutional layer
+        # want to reshape from [b, x * y * t] --> [b, x, y, t]
+        #  if self.conv_net:
+        #      position = self.expand_tensor(position, self.lattice.links.shape)
+        #      grad = self.expand_tensor(grad, self.lattice.links.shape)
+
+        # scale, translation, transformed all have shape [b, x * y * t]
+        scale, translation, transformed = self.momentum_fn([position, grad, t])
+
+        #  if self.conv_net:
+        #      # flatten momentum, grad from [b, x, y, t] --> [b, x * y * t]
+        #      momentum = self.flatten_tensor(momentum)
+        #      grad = self.flatten_tensor(grad)
+
+        scale *= -0.5 * self.eps
+        transformed *= self.eps
+
+        momentum = (
+            tf.exp(scale) * (momentum + 0.5 * self.eps * (tf.exp(transformed) *
+                                                          grad - translation))
+        )
+
+        #  axes = np.arange(1, len(scale.shape))
+        #  return momentum, tf.reduce_sum(scale, axis=axes)
+        return momentum, tf.reduce_sum(scale, axis=1)
+
+    def _update_position_backward(self, position, momentum, t, mask, mask_inv):
+        """Update position `x` in the backward lf step. 
+        
+        Inverting the forward update.
+        """
+        # Reshape tensors to satisfy input shape for convolutional layer
+        # want to reshape from [b, x * y * t] --> [b, x, y, t]
+        #  if self.conv_net:
+        #      position = self.expand_tensor(position, self.lattice.links.shape)
+        #      momentum = self.expand_tensor(momentum, self.lattice.links.shape)
+        #      mask = self.expand_tensor(mask, self.lattice.links.shape)
+
+        # scale, translation, transformed all have shape [b, x * y * t]
+        scale, translation, transformed = self.position_fn(
+            [momentum, mask * position, t]
+        )
+
+        # flatten tensors from shape [b, x, y, t] --> [b, x * y * t]
+        #  if self.conv_net:
+        #      position = self.flatten_tensor(position)
+        #      momentum = self.flatten_tensor(momentum)
+        #      mask = self.flatten_tensor(mask)
+
+        scale *= self.eps
+        transformed *= self.eps
+        position = (
+            mask * position + mask_inv * tf.exp(scale)
+            * (position - self.eps * (tf.exp(transformed)
+                                      * momentum + translation))
+        )
+        #  position = (
+        #      mask * position + mask_inv * tf.exp(scale) * (
+        #          position - self.eps * (
+        #              tf.exp(transformed) * momentum + translation
+        #          )
+        #      )
+        #  )
+
+        return position, tf.reduce_sum(mask_inv * scale, axis=1)
+        #  axes = np.arange(1, len(scale.shape))
+        #  return position, tf.reduce_sum(mask_inv * scale, axis=axes)
+
+    def _compute_accept_prob(self, position, momentum, 
+                             position_post, momentum_post, sumlogdet):
+        """Compute the prob of accepting the proposed state given old state."""
+        old_hamil = self.hamiltonian(position, momentum)
+        new_hamil = self.hamiltonian(position_post, momentum_post)
+
+        prob = tf.exp(tf.minimum((old_hamil - new_hamil + sumlogdet), 0.))
+
+        # Ensure numerical stability as well as correct gradients
+        return tf.where(tf.is_finite(prob), prob, tf.zeros_like(prob))
 
     def _format_time(self, t, tile=1):
-        trig_t = tf.squeeze([
-            tf.cos(2 * np.pi * t / self.trajectory_length),
-            tf.sin(2 * np.pi * t / self.trajectory_length),
+        trig_time = tf.squeeze([
+            tf.cos(2 * np.pi * t / self.n_steps),
+            tf.sin(2 * np.pi * t / self.n_steps),
         ])
-        return tf.tile(tf.expand_dims(trig_t, 0), (tile, 1))
+        return tf.tile(tf.expand_dims(trig_time, 0), (tile, 1))
+
+    #  def _construct_time(self):
+    #      """Convert leapfrog step index into sinusoidal time."""
+    #      self.ts = []
+    #      for i in range(self.n_steps):
+    #          t = tf.constant(
+    #              [
+    #                  np.cos(2 * np.pi * i / self.n_steps),
+    #                  np.sin(2 * np.pi * i / self.n_steps)
+    #              ],
+    #              dtype=tf.float32
+    #          )
+    #          self.ts.append(t[None, :])
+    #
+    #  def _get_time(self, i):
+    #      """Get sinusoidal time for i-th augmented leapfrog step."""
+    #      return self.ts[i]
+
+    def _construct_masks(self):
+        """Construct different binary masks for different time steps."""
+        mask_per_step = []
+        for _ in range(self.n_steps):
+            # Need to use np.random here because tf would generate different
+            # random values across different `sess.run`
+            idx = np.random.permutation(np.arange(self.x_dim))[:self.x_dim //
+                                                               2]
+            mask = np.zeros((self.x_dim,))
+            mask[idx] = 1.
+            #  mask = tf.reshape(mask, shape=self.lattice.links.shape)
+
+            mask_per_step.append(mask[None, :])
+
+            self.mask = tf.constant(np.stack(mask_per_step), dtype=tf.float32)
+
+        #  self.mask = tf.reshape(self.mask, shape=(*self.mask.shape[:-1],
+        #                                           *self.lattice.links.shape))
+
+    def _get_mask(self, step):
+        """Get mask at time step `step`."""
+        m = tf.gather(self.mask, tf.cast(step, dtype=tf.int32))
+        return m, 1. - m
+
+    #  def _get_mask(self, i):
+    #      """Get binary masks for i-th augmented leapfrog step."""
+    #      m = self.masks[i]
+    #      return m, 1. - m
 
     def kinetic(self, v):
-        """Calculate the kinetic energy from the MD `velocity`."""
-        _axis = np.arange(1, len(self.lattice.links.shape) + 1)
-        return 0.5 * tf.reduce_sum(tf.square(v), axis=_axis)
-    #  return 0.5 * tf.reduce_sum(tf.square(v), axis=1)
-
-    def clip_with_grad(self, u, min_u=-32., max_u=32.):
-        u = u - tf.stop_gradient(tf.nn.relu(u - max_u))
-        u = u + tf.stop_gradient(tf.nn.relu(min_u - u))
-        return u
-
-    def _forward_step(self, x, v, step, aux=None):
-        """Implement a single MD step in the forward direction."""
-        t = self._format_time(step, tile=tf.shape(x)[0])
-
-        grad1 = self.grad_energy(x, aux=aux)
-        S1 = self.VNet([x, grad1, t, aux])
-
-        sv1 = 0.5 * self.eps * S1[0]
-        tv1 = S1[1]
-        fv1 = self.eps * S1[2]
-
-        v_h = (tf.multiply(v, safe_exp(sv1, name='sv1F'))
-               + 0.5 * self.eps * (-tf.multiply(safe_exp(fv1, name='fv1F'),
-                                                grad1) + tv1))
-
-        m, mb = self._get_mask(step)
-
-        X1 = self.XNet([v_h, m * x, t, aux])
-        sx1 = (self.eps * X1[0])
-        tx1 = X1[1]
-        fx1 = self.eps * X1[2]
-
-        y = (m * x + mb * (tf.multiply(x, safe_exp(sx1, name='sx1F'))
-                           + self.eps * (tf.multiply(safe_exp(fx1,
-                                                              name='fx1F'),
-                                                     v_h) + tx1)))
-
-        X2 = self.XNet([v_h, mb * y, t, aux])
-
-        sx2 = (self.eps * X2[0])
-        tx2 = X2[1]
-        fx2 = self.eps * X2[2]
-
-        x_o = (mb * y + m * (tf.multiply(y, safe_exp(sx2, name='sx2F'))
-                             + self.eps * (tf.multiply(safe_exp(fx2,
-                                                                name='fx2F'),
-                                                       v_h) + tx2)))
-
-        S2 = self.VNet([x_o, self.grad_energy(x_o, aux=aux), t, aux])
-        sv2 = (0.5 * self.eps * S2[0])
-        tv2 = S2[1]
-        fv2 = self.eps * S2[2]
-
-        grad2 = self.grad_energy(x_o, aux=aux)
-        v_o = (tf.multiply(v_h, safe_exp(sv2, name='sv2F'))
-               + 0.5 * self.eps * (-tf.multiply(safe_exp(fv2, name='fv2F'),
-                                                grad2) + tv2))
-
-        log_jac_contrib = tf.reduce_sum(sv1 + sv2 + mb * sx1 + m * sx2, axis=1)
-
-        return x_o, v_o, log_jac_contrib
-
-
-    def _backward_step(self, x_o, v_o, step, aux=None):
-        t = self._format_time(step, tile=tf.shape(x_o)[0])
-
-        grad1 = self.grad_energy(x_o, aux=aux)
-
-        S1 = self.VNet([x_o, grad1, t, aux])
-
-        sv2 = (-0.5 * self.eps * S1[0])
-        tv2 = S1[1]
-        fv2 = self.eps * S1[2]
-
-        exp_fv2 = safe_exp(fv2, name='fv2B')
-        exp_sv2 = safe_exp(sv2, name='sv2B')
-        prod_fv2 = tf.multiply(exp_fv2, grad1)
-        v_h = tf.multiply((v_o - 0.5 * self.eps * (-prod_fv2 + tv2)), exp_sv2)
-
-        #  v_h = (tf.multiply((v_o - 0.5 * self.eps
-        #                      * (-tf.multiply(safe_exp(fv2, name='fv2B'), grad1)
-        #                         + tv2)), safe_exp(sv2, name='sv2B')))
-
-        m, mb = self._get_mask(step)
-
-        # m, mb = self._gen_mask(x_o)
-
-        X1 = self.XNet([v_h, mb * x_o, t, aux])
-
-        sx2 = (-self.eps * X1[0])
-        tx2 = X1[1]
-        fx2 = self.eps * X1[2]
-
-        exp_sx2 = safe_exp(sx2, name='sx2B')
-        exp_fx2 = safe_exp(fx2, name='fx2B')
-        prod_fx2 = tf.multiply(exp_fx2, v_h)
-        prod_sx2 = tf.multiply(exp_sx2, (x_o - self.eps * (prod_fx2 + tx2)))
-        y = mb * x_o + m * prod_sx2
-
-        #  y = (mb * x_o + m * tf.multiply(safe_exp(sx2, name='sx2B'),
-        #                                  (x_o - self.eps * (tf.multiply(
-        #                                      safe_exp(fx2, name='fx2B'), v_h)
-        #                                      + tx2))))
-
-        X2 = self.XNet([v_h, m * y, t, aux])
-
-        sx1 = (-self.eps * X2[0])
-        tx1 = X2[1]
-        fx1 = self.eps * X2[2]
-
-        exp_sx = safe_exp(sx1, name='sx1B')
-        exp_fx = safe_exp(fx1, name='fx1B')
-        prod_fx = tf.multiply(exp_fx, v_h)
-        prod_sx = tf.multiply(exp_sx, (y - self.eps * prod_fx + tx1))
-        x = m * y + mb * prod_sx
-
-        #  x = m * y + mb * tf.multiply(safe_exp(sx1, name='sx1B'),
-        #                               (y - self.eps * (tf.multiply(
-        #                                   safe_exp(fx1, name='fx1B'), v_h)
-        #                                   + tx1)))
-
-        grad2 = self.grad_energy(x, aux=aux)
-        S2 = self.VNet([x, grad2, t, aux])
-
-        sv1 = (-0.5 * self.eps * S2[0])
-        tv1 = S2[1]
-        fv1 = self.eps * S2[2]
-
-        exp_sv = safe_exp(sv1, name='sv1B')
-        exp_fv = safe_exp(fv1, name='fv1B')
-        prod_fv = tf.multiply(exp_fv, grad2)
-        v = tf.multiply(exp_sv, (v_h - 0.5 * self.eps * (prod_fv + tv1)))
-
-        #  v = tf.multiply(safe_exp(sv1, name='sv1B'),
-        #                  (v_h - 0.5 * self.eps * (
-        #                      -tf.multiply(safe_exp(fv1, name='fv1B'), grad2)
-        #                      + tv1
-        #                  )))
-
-        return x, v, tf.reduce_sum(sv1 + sv2 + mb * sx1 + m * sx2, axis=1)
-    #return x, v, tf.reduce_sum(sv1 + sv2 + mb * sx1 + m * sx2, axis=1)
-
-    def energy(self, x, batch_size):
-        if self.use_temperature:
-            T = self.temperature
+        """Compute the kinetic energy."""
+        if len(v.shape) > 1:
+            # i.e. v has not been flattened into a vector
+            # in this case, we want to contract over the axes [1:] to calculate
+            # a scalar value for the kinetic energy.
+            # NOTE: The first axis of v indexes samples in a batch of samples.
+            return 0.5 * tf.reduce_sum(v ** 2, axis=np.arange(1, len(v.shape)))
         else:
-            T = tf.constant(1.0, dtype=TF_FLOAT)
+            return 0.5 * tf.reduce_sum(v ** 2, axis=1)
 
-        #  if T.dtype != x.dtype:
-            #      T = tf.cast(T, x.dtype)
+    def hamiltonian(self, position, momentum):
+        """Compute the overall Hamiltonian."""
+        return self.potential(position) + self.kinetic(momentum)
 
-        #  if aux is not None:
-            #  return self._energy_fn(x, aux=aux) / T
-            return tf.cast(self._energy_fn(x, batch_size), TF_FLOAT) / T
-        #  else:
-            #      #  return self._energy_fn(x) / T)
-            #      return tf.cast(self._energy_fn(x), TF_FLOAT) / T
-
-    def hamiltonian(self, x, v, aux=None):
-        return self.energy(x, self.batch_size) + self.kinetic(v)
-
-    def grad_energy(self, x, aux=None):
-        #  grad_ys = tf.constant(1.0, dtype=tf.complex64, shape=())
-        return tf.gradients(self.energy(x, self.batch_size), x)[0]
-    #  return tf.gradients(self.energy(x, aux=aux), x, grad_ys=grad_ys)[0]
-    #  try:
-        #      _energy = tf.cast(self.energy(x, aux=aux), TF_FLOAT)
-        #      return tf.gradients(_energy, x)[0]
-        #  except TypeError:
-            #      import pdb
-            #      pdb.set_trace()
-            #  return tf.cast(tf.gradients(tf.cast(self.energy(x, aux=aux),
-            #                                      tf.float32), x)[0],
-            #  dtype=TF_FLOAT)
-
-    def _gen_mask(self, x):
-        #  dX = x.get_shape().as_list()[1]
-        b = np.zeros(self.lattice.num_links)
-        for i in range(self.lattice.num_links):
-            if i % 2 == 0:
-                b[i] = 1
-                b = b.astype('bool')
-                nb = np.logical_not(b)
-                return b.astype(NP_FLOAT), nb.astype(NP_FLOAT)
-
-    def forward(self, x, init_v=None, aux=None, log_path=False, log_jac=False):
-        if init_v is None:
-            v = tf.random_normal(tf.shape(x))
+    def grad_potential(self, position, check_numerics=True):
+        """Get gradient of potential function at current location."""
+        if tf.executing_eagerly():
+            grad = tfe.gradients_function(self.potential)(position)[0]
         else:
-            v = init_v
+            grad = tf.gradients(self.potential(position), position)[0]
 
-        dN = tf.shape(x)[0]
-        t = tf.constant(0., dtype=TF_FLOAT)
-        j = tf.zeros((dN,))
+        return tf.convert_to_tensor(grad, dtype=tf.float32)
 
-        def body(x, v, t, j):
-            new_x, new_v, log_j = self._forward_step(x, v, t, aux=aux)
-            return new_x, new_v, t+1, j+log_j
+    def flatten_tensor(self, tensor):
+        """Flattens along axes [1:], since axis=0 indexes samples in batch.
 
-        def cond(x, v, t, j):
-            return tf.less(t, self.trajectory_length)
+        Example:
+            For a tensor of shape [b, x, y, t] -->
+            returns a tensor of shape [b, x * y * t].
+        """
+        batch_size = tensor.shape[0]
+        return tf.reshape(tensor, shape=(batch_size, -1))
 
-        X, V, t, log_jac_ = tf.while_loop(
-            cond=cond,
-            body=body,
-            loop_vars=[x, v, t, j]
-        )
+    def expand_tensor(self, tensor, output_shape):
+        """Expands tensor along all but the first axis.
 
-        if log_jac:
-            return X, V, log_jac_
-
-        return X, V, self.p_accept(x, v, X, V, log_jac_, aux=aux)
-
-    def backward(self, x, init_v=None, aux=None, log_jac=False):
-        if init_v is None:
-            v = tf.random_normal(tf.shape(x))
-        else:
-            v = init_v
-
-        dN = tf.shape(x)[0]
-        t = tf.constant(0., name='step_backward', dtype=TF_FLOAT)
-        j = tf.zeros((dN,), name='acc_jac_backward')
-
-        def body(x, v, t, j):
-            new_x, new_v, log_j = self._backward_step(x, v,
-                                                      (self.trajectory_length -
-                                                       t - 1), aux=aux)
-            return new_x, new_v, t+1, j+log_J
-
-        def cond(x, v, t, j):
-            return tf.less(t, self.trajectory_length)
-
-        X, V, t, log_jac_ = tf.while_loop(
-            cond=cond,
-            body=body,
-            loop_vars=[x, v, t,j]
-        )
-
-        if log_jac:
-            return X, V, log_jac_
-
-        return X, V, self.p_accept(x, v, X, V, log_jac_, aux=aux)
-
-    def p_accept(self, x0, v0, x1, v1, log_jac, aux=None):
-        e_new = self.hamiltonian(x1, v1, aux=aux)
-        e_old = self.hamiltonian(x0, v0, aux=aux)
-
-        v = e_old - e_new + log_jac
-        p = tf.exp(tf.minimum(v, 0.0))
-
-        return tf.where(tf.is_finite(p), p, tf.zeros_like(p))
+        Example:
+            For a tensor of shape [b, x * y * t] -->
+            returns a tensor of shape [b, x, y, t].
+        """
+        batch_size = tensor.shape[0]
+        return tf.reshape(tensor, shape=(batch_size, *output_shape))

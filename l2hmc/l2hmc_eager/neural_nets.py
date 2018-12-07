@@ -13,75 +13,180 @@ from keras.layers import Dense, Dropout, Flatten
 from keras.layers.convolutional import Conv2D, MaxPooling2D
 from keras.models import Sequential
 
+from utils.tf_logging import variable_summaries
+
+##############################################################################
+# Removed from ConvNet architecture
+# ----------------------------------------------------------------------------
+#  self.batch_norm_x1 = (
+#      tf.keras.layers.BatchNormalization(axis=0, name='batch_x1')
+#  )
+#  self.batch_norm_v1 = (
+#      tf.keras.layers.BatchNormalization(axis=0, name='batch_v1')
+#  )
+#
+#  self.dropout_x1 = tf.keras.layers.Dropout(0.25, name='dropout_x1')
+#  self.dropout_v1 = tf.keras.layers.Dropout(0.25, name='dropout_v1')
+##############################################################################
+
 class ConvNet(tf.keras.Model):
     """Convolutional neural network with different initializaiton scale based
     on input."""
-    def __init__(self, input_shape, factor, spatial_size,
-                 num_hidden=200, num_filters=None, filter_size=None):
-        super(ConvNet, self).__init__(name='conv_net')
+    def __init__(self, 
+                 input_shape, 
+                 factor, 
+                 spatial_size,
+                 num_hidden=200, 
+                 num_filters=None, 
+                 filter_size=None, 
+                 name='ConvNet',
+                 scope='Net'):
+        """Initialization method."""
+
+        super(ConvNet, self).__init__(name=name)
+
         if num_filters is None:
             num_filters = int(2 * spatial_size)
-            #  num_filters = 2 * input_shape[1]
+
         if filter_size is None:
             filter_size = (2, 2)
 
-        #  chan_dim = 1  # `channel` dim, i.e. temporal dim of lattice
-
         self.x_dim = np.cumprod(input_shape[1:])[-1]
-        #  self.input_shape = input_shape
+
         self._input_shape = input_shape
 
-        self.conv_x1 = tf.keras.layers.Conv2D(filters=num_filters,
-                                              kernel_size=filter_size,
-                                              activation=tf.nn.relu,
-                                              #  data_format='channels_first',
-                                              input_shape=self._input_shape)
-        self.conv_v1 = tf.keras.layers.Conv2D(filters=num_filters,
-                                              kernel_size=filter_size,
-                                              activation=tf.nn.relu,
-                                              #  data_format='channels_first',
-                                              input_shape=self._input_shape)
-        self.batch_norm_x1 = tf.keras.layers.BatchNormalization(axis=0)
-        self.batch_norm_v1 = tf.keras.layers.BatchNormalization(axis=0)
-        #  self.avg_pool = tf.keras.layers.AvgPool2D(pool_size=(2, 2), strides=2)
-        self.dropout_x1 = tf.keras.layers.Dropout(0.25)
-        self.dropout_v1 = tf.keras.layers.Dropout(0.25)
-        self.max_pool_x1 = tf.keras.layers.MaxPooling2D(pool_size=(2, 2),
-                                                        strides=2)
-        self.max_pool_v1 = tf.keras.layers.MaxPooling2D(pool_size=(2, 2),
-                                                        strides=2)
-        self.conv_x2 = tf.keras.layers.Conv2D(filters=2 * num_filters,
-                                              kernel_size=filter_size,
-                                              #  data_format='channels_first',
-                                              activation=tf.nn.relu)
+        with tf.variable_scope(scope):
+            with tf.variable_scope('conv_x1'):
+                self.conv_x1 = tf.keras.layers.Conv2D(
+                    filters=num_filters,
+                    kernel_size=filter_size,
+                    activation=tf.nn.relu,
+                    #  data_format='channels_first',
+                    input_shape=self._input_shape,
+                    name='conv_x1'
+                )
 
-        self.conv_v2 = tf.keras.layers.Conv2D(filters=2 * num_filters,
-                                              kernel_size=filter_size,
-                                              #  data_format='channels_first',
-                                              activation=tf.nn.relu)
-        self.flatten_x = tf.keras.layers.Flatten()
-        self.flatten_v = tf.keras.layers.Flatten()
+            with tf.variable_scope('conv_v1'):
+                self.conv_v1 = tf.keras.layers.Conv2D(
+                    filters=num_filters,
+                    kernel_size=filter_size,
+                    activation=tf.nn.relu,
+                    #  data_format='channels_first',
+                    input_shape=self._input_shape,
+                    name='conv_v1'
+                )
 
-        self.v_layer = _custom_dense(num_hidden, 1. / 3.)
-        self.x_layer = _custom_dense(num_hidden, factor / 3.)
-        self.t_layer = _custom_dense(num_hidden, 1. / 3.)
+            with tf.variable_scope('max_pool_x1'):
+                self.max_pool_x1 = tf.keras.layers.MaxPooling2D(
+                    pool_size=(2, 2),
+                    strides=2,
+                    name='max_pool_x1'
+                )
 
-        self.h_layer = _custom_dense(num_hidden)
+            with tf.variable_scope('max_pool_v1'):
+                self.max_pool_v1 = tf.keras.layers.MaxPooling2D(
+                    pool_size=(2, 2),
+                    strides=2,
+                    name='max_pool_v1'
+                )
 
-        self.scale_layer = _custom_dense(self.x_dim, 0.001)
+            with tf.variable_scope('conv_x2'):
+                self.conv_x2 = tf.keras.layers.Conv2D(
+                    filters=2 * num_filters,
+                    kernel_size=filter_size,
+                    #  data_format='channels_first',
+                    activation=tf.nn.relu,
+                    name='conv_x2'
+                )
 
-        self.coeff_scale = tf.contrib.eager.Variable(
-            initial_value=tf.zeros([1, self.x_dim]), name='coeff_scale',
-            trainable=True
-        )
-        # Translation
-        self.translation_layer = _custom_dense(self.x_dim, 0.001)
-        self.transformation_layer = _custom_dense(self.x_dim, factor=0.001)
-        self.coeff_transformation = tf.contrib.eager.Variable(
-            initial_value=tf.zeros([1, self.x_dim]),
-            name='coeff_transformation',
-            trainable=True
-        )
+            with tf.variable_scope('conv_x2'):
+                self.conv_v2 = tf.keras.layers.Conv2D(
+                    filters=2 * num_filters,
+                    kernel_size=filter_size,
+                    #  data_format='channels_first',
+                    activation=tf.nn.relu,
+                    name='conv_v2'
+                )
+
+            with tf.variable_scope('max_pool_x2'):
+                self.max_pool_x2 = tf.keras.layers.MaxPooling2D(
+                    pool_size=(2, 2),
+                    strides=2,
+                    name='max_pool_x2'
+                )
+
+            with tf.variable_scope('max_pool_v2'):
+                self.max_pool_v2 = tf.keras.layers.MaxPooling2D(
+                    pool_size=(2, 2),
+                    strides=2,
+                    name='max_pool_v2'
+                )
+
+            self.flatten_x = tf.keras.layers.Flatten(name='flat_x')
+            self.flatten_v = tf.keras.layers.Flatten(name='flat_v')
+
+            with tf.variable_scope('v_layer'):
+                self.v_layer = _custom_dense(
+                    num_hidden,
+                    1. / 3.,
+                    name='v_layer'
+                )
+
+            with tf.variable_scope('x_layer'):
+                self.x_layer = _custom_dense(
+                    num_hidden,
+                    factor / 3.,
+                    name='x_layer'
+                )
+
+            with tf.variable_scope('t_layer'):
+                self.t_layer = _custom_dense(
+                    num_hidden,
+                    1. / 3.,
+                    name='t_layer'
+                )
+
+            with tf.variable_scope('h_layer'):
+                self.h_layer = _custom_dense(
+                    num_hidden,
+                    name='h_layer'
+                )
+
+            with tf.variable_scope('scale_layer'):
+                self.scale_layer = _custom_dense(
+                    self.x_dim,
+                    0.001,
+                    name='scale_layer'
+                )
+
+            with tf.variable_scope('coeff_scale'):
+                self.coeff_scale = tf.contrib.eager.Variable(
+                    initial_value=tf.zeros([1, self.x_dim]),
+                    name='coeff_scale',
+                    trainable=True
+                )
+            # Translation
+            with tf.variable_scope('translation_layer'):
+                self.translation_layer = _custom_dense(
+                    self.x_dim,
+                    0.001,
+                    name='translation_layer'
+                )
+
+            with tf.variable_scope('transformation_layer'):
+                self.transformation_layer = _custom_dense(
+                    self.x_dim,
+                    0.001,
+                    name='transformation_layer'
+                )
+
+            with tf.variable_scope('coeff_transformation'):
+                self.coeff_transformation = tf.contrib.eager.Variable(
+                    initial_value=tf.zeros([1, self.x_dim]),
+                    name='coeff_transformation',
+                    trainable=True
+                )
+            #  _ = [variable_summaries(i) for i in self.trainable_variables]
 
     def call(self, inputs):
         """Architecture looks like:
@@ -91,32 +196,34 @@ class ConvNet(tf.keras.Model):
             
         """
         v, x, t = inputs
-        #v = tf.reshape(v, [-1, v.shape[2], v.shape[3], v.shape[1]])
-        #x = tf.reshape(x, [-1, x.shape[2], x.shape[3], x.shape[1]])
 
-        #  h = self.v_model(v) + self.x_model(x) + self.t_layer(t)
-        #  v_shape = v.shape
-        #  x_shape = x.shape
-        #  #  t_shape = t.shape
-        #  if len(v.shape) == 2:
-        #      v = tf.reshape(v, shape=(v.shape[0], *self.input_shape))
-        #  if len(x.shape) == 2:
-        #      x = tf.reshape(x, shape=(x.shape[0], *self.input_shape))
-        #
+        #  v = v.reshape((v.shape[0], *self._input_shape[1:]))
+        #  x = x.reshape((x.shape[0], *self._input_shape[1:]))
+        v = tf.reshape(v, shape=(v.shape[0], *self._input_shape[1:]))
+        x = tf.reshape(x, shape=(x.shape[0], *self._input_shape[1:]))
+
         v_conv = self.max_pool_v1(self.conv_v1(v))
         v_conv = self.flatten_v((self.conv_v2(v_conv)))
+
         x_conv = self.max_pool_x1(self.conv_x1(x))
         x_conv = self.flatten_x((self.conv_x2(x_conv)))
-        #  v_conv = self.flatten_v((self.conv_v2(self.max_pool_v1(self.conv_v1(v)))))
-        #  v_conv = self.flatten((self.conv_2(self.max_pool(self.conv_1(v)))))
-        #  x_conv = self.flatten((self.conv_2(self.max_pool(self.conv_1(x)))))
+
         h = self.v_layer(v_conv) + self.x_layer(x_conv) + self.t_layer(t)
         h = tf.nn.relu(h)
         h = self.h_layer(h)
+
         scale = tf.nn.tanh(self.scale_layer(h)) * tf.exp(self.coeff_scale)
+
         translation = self.translation_layer(h)
-        transformation = (tf.nn.tanh(self.transformation_layer(h)
-                                     * tf.exp(self.coeff_transformation)))
+
+        transformation = (
+            tf.nn.tanh(self.transformation_layer(h)
+                       * tf.exp(self.coeff_transformation))
+        )
+
+        #  scale = tf.reshape(scale, shape=x.shape)
+        #  translation = tf.reshape(translation, shape=x.shape)
+        #  transformation = tf.reshape(transformation, shape=x.shape)
 
         return scale, translation, transformation
 
@@ -169,7 +276,7 @@ class GenericNet(tf.keras.Model):
         return scale, translation, transformation
 
 
-def _custom_dense(units, factor=1.):
+def _custom_dense(units, factor=1., name=None):
     """Custom dense layer with specified weight initialization."""
 
     return tf.keras.layers.Dense(
@@ -180,5 +287,7 @@ def _custom_dense(units, factor=1.):
             mode='FAN_IN',
             uniform=False
         ),
-        bias_initializer=tf.constant_initializer(0., dtype=tf.float32)
+        bias_initializer=tf.constant_initializer(0., dtype=tf.float32),
+        name=name
+
     )

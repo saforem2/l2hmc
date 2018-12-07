@@ -80,8 +80,7 @@ def jackknife_err(y_i, y_full, num_blocks):
     return err
 
 def calc_avg_vals_errors(data, num_blocks=100):
-    """ 
-    Calculate average values and errors of `data` using block jackknife
+    """Calculate average values and errors of `data` using block jackknife
     resampling method.
 
     Args:

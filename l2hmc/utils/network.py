@@ -39,6 +39,14 @@ def flatten(tup):
             output += [i]
     return tuple(output)
 
+def get_kernel_initializer(factor):
+    """Create kernel initializer for fully-connected layer with `factor`."""
+    return tf.contrib.layers.variance_scaling_initializer(
+        factor=factor * 2.,
+        mode='FAN_IN',
+        uniform=False
+    )
+
 
 def complex_network(x_dim, scope, factor, num_nodes=100):
     with tf.variable_scope(scope):
@@ -134,6 +142,219 @@ def _network(x_dim, scope, factor, num_nodes=100):
         return net
 
 
+class ConvNet2D(object):
+    """2D Convolutional neural network using tf.contrib.layers API."""
+    def __init__(self,
+                 input_shape, 
+                 factor, 
+                 spatial_size,
+                 num_hidden=100, 
+                 num_filters=None,
+                 filter_size=None, 
+                 dropout_keep_prob=0.5,
+                 is_training=False,
+                 scope='ConvNet'):
+        """Convolutional neural network (2D)."""
+
+        if num_filters is None:
+            num_filters = int(2 * spatial_size)
+
+        if filter_size is None:
+            filter_size = (2, 2)
+
+        new_filter_size = (filter_size[0] + 2, filter_size[0] + 2)
+        new_num_filters = num_filters * num_filters
+
+        bias_init = tf.constant_initializer(0., dtype=tf.float32)
+
+        x_kern_init = get_kernel_initializer(factor=factor / 3.)
+        v_kern_init = get_kernel_initializer(factor=1./3.)
+        scale_kern_init = get_kernel_initializer(factor=0.001)
+        transf_kern_init = get_kernel_initializer(factor=0.001)
+        transl_kern_init = get_kernel_initializer(factor=0.001)
+
+        self.x_dim = np.cumprod(input_shape[1:])[-1]
+
+        self._input_shape = input_shape
+
+        with tf.variable_scope(scope):
+            # Convolutional layer 1
+            self.conv_x1 = tf.contrib.layers.conv2d(
+                input_shape,
+                num_outputs=num_filters,
+                kernel_size=filter_size,
+                scope='conv_x1'
+            )
+
+            self.conv_v1 = tf.contrib.layers.conv2d(
+                input_shape,
+                num_outputs=num_filters,
+                kernel_size=filter_size,
+                scope='conv_v1'
+            )
+
+            # Max pooling layer 1
+            self.pool_x1 = tf.contrib.layers.max_pool2d(
+                self.conv_x1,
+                kernel_size=[2, 2],
+                stride=2,
+                scope='pool_x1'
+            )
+
+            self.pool_v1 = tf.contrib.layers.max_pool2d(
+                self.conv_v1,
+                kernel_size=[2, 2],
+                stride=2,
+                scope='pool_v1'
+            )
+
+            # Convolutional layer 2
+            self.conv_x2 = tf.contrib.layers.conv2d(
+                self.pool_x1,
+                num_outputs=2*num_filters,
+                filter_size=filter_size,
+                activation=tf.nn.relu,
+                scope='conv_x2'
+            )
+
+            self.conv_v2 = tf.contrib.layers.conv2d(
+                self.pool_v1,
+                num_outputs=2*num_filters,
+                filter_size=filter_size,
+                activation=tf.nn.relu,
+                scope='conv_v2'
+            )
+
+            # Max pooling layer 2
+            self.pool_x2 = tf.contrib.layers.max_pool2d(
+                self.conv_x2,
+                kernel_size=[2, 2],
+                stride=2,
+                scope='pool_x2'
+            )
+
+            self.pool_v2 = tf.contrib.layers.max_pool2d(
+                self.conv_v2,
+                kernel_size=[2, 2],
+                stride=2,
+                scope='pool_v2'
+            )
+
+            # Convolutional layer 3
+            self.fc_x3 = tf.contrib.layers.conv2d(
+                self.pool_x2,
+                num_outputs=new_num_filters,
+                kernel_size=new_filter_size,
+                padding='VALID',
+                scope='fc_x3'
+            )
+
+            self.fc_v3 = tf.contrib.layers.conv2d(
+                self.pool_v2,
+                num_outputs=new_num_filters,
+                kernel_size=new_filter_size,
+                padding='VALID',
+                scope='fc_v3'
+            )
+
+            # Dropout layer
+            self.dropout_x = tf.contrib.layers.dropout(
+                self.fc_x3,
+                dropout_keep_prob,
+                is_training=is_training,
+                scope='dropout_x'
+            )
+
+            self.dropout_v = tf.contrib.layers.dropout(
+                self.fc_v3,
+                dropout_keep_prob,
+                is_training=is_training,
+                scope='dropout_v'
+            )
+
+            # Flatten layer
+            self.flat_x = tf.contrib.layers.flatten(self.dropout_x,
+                                                    scope='flat_x')
+
+            self.flat_v = tf.contrib.layers.flatten(self.dropout_v,
+                                                    scope='flat_v')
+
+            self.x_layer = tf.layers.dense(
+                inputs=self.flat_x,
+                units=num_hidden,
+                use_bias=True,
+                kernel_initializer=x_kern_init,
+                bias_initializer=bias_init,
+                name='x_layer'
+            )
+
+            self.v_layer = tf.layers.dense(
+                inputs=self.flat_v,
+                units=num_hidden,
+                use_bias=True,
+                kernel_initializer=v_kern_init,
+                bias_initializer=bias_init,
+                name='v_layer'
+            )
+
+            self.t_layer = Linear(2, num_hidden, scope='t_layer', factor=1./3)
+            self.h_layer = Linear(num_hidden, num_hidden, scope='h_layer')
+
+            self.scale_layer = tf.layers.dense(
+                inputs=self.h_layer,
+                units=self.x_dim,
+                use_bias=True,
+                kernel_initializer=scale_kern_init,
+                bias_initializer=bias_init,
+                name='scale_layer'
+            )
+
+            self.coeff_scale = tf.Variable(
+                initial_value=tf.zeros([1, self.x_dim]),
+                name='coeff_scale',
+                trainable=True
+            )
+
+            self.translation_layer = tf.layers.dense(
+                inputs=self.h_layer,
+                units=self.x_dim,
+                use_bias=True,
+                kernel_initializer=transl_kern_init,
+                bias_initializer=bias_init,
+                name='translation_layer'
+            )
+
+            self.transformation_layer = tf.layers.dense(
+                inputs=self.h_layer,
+                units=self.x_dim,
+                use_bias=True,
+                kernel_initializer=transf_kern_init,
+                bias_initializer=bias_init,
+                name='transformation_layer'
+            )
+
+            self.coeff_transformation = tf.Variable(
+                initial_value=tf.zeros([1, self.x_dim]),
+                name='coeff_transformation',
+                trainable=True
+            )
+
+    def call(self, inputs):
+        v, x, t = inputs
+
+        if x.shape != v.shape:
+            x = tf.reshape(x, v.shape)
+
+        h = self.v_layer(v) + self.x_layer(x) + self.t_layer(t)
+        h = tf.nn.relu(h)
+        h = self.h_layer(h)
+        h = tf.nn.relu(h)
+        scale = tf.nn.tanh(self.scale_layer(h)) * tf.exp(self.coeff_scale)
+        translation = self.translation_layer(h)
+        transformation = (tf.nn.tanh(self.transformation_layer(h))
+                          * tf.exp(self.coeff_transformation))
+        return scale, translation, transformation
+
 
 class Linear(object):
     def __init__(self, in_, out_, scope='linear', factor=1.0):
@@ -161,20 +382,8 @@ class Linear(object):
                     #  variable_summaries(self.b)
 
     def __call__(self, x):
-        #  self.activations = tf.add(tf.matmul(x, self.W), self.b)
-        #self.W = tf.reshape(self.W, shape=tuple([x.shape] + [-1]))
-        #  import pdb
-        #  pdb.set_trace()
-        if x.dtype == tf.complex64:
-            self.activations = tf.add(complex_matmul(x, self.W),
-                                      tf.cast(self.b, tf.complex64))
-            #  self.activations = tf.add(complex_matmul(x, self.W),
-            #                            tf.cast(self.b, tf.complex64))
-        else:
-            self.activations = tf.add(tf.matmul(x, self.W), self.b)
+        self.activations = tf.add(tf.matmul(x, self.W), self.b)
 
-        #  tf.summary.histogram('activations', self.activations)
-        #  return tf.add(tf.matmul(x, self.W), self.b)
         return self.activations
 
 

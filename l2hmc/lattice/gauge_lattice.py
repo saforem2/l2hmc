@@ -112,7 +112,6 @@ class GaugeLattice(object):
             + list(self.link_shape)
         )
 
-
         self.sites = np.zeros(sites_shape, dtype=link_dtype)
         self.links = np.zeros(links_shape, dtype=link_dtype)
 
@@ -252,14 +251,13 @@ class GaugeLattice(object):
             links = self.links
         if links.shape != self.links.shape:
             links = tf.reshape(links, self.links.shape)
-            #links = links.reshape(self.links.shape)
 
         num_plaquettes = self.time_size * self.space_size
         plaquettes_sum = 0.
         topological_charge = 0.
         total_action = 0.
         #  for plaq in self.iter_plaquettes():
-            #  *site, u, v = plaq  # unpack plaquette idxs as [site, u, v]
+        #      *site, u, v = plaq  # unpack plaquette idxs as [site, u, v]
         #  for site in self.iter_sites():
         #      for u in range(self.dim):
         #          for v in range(self.dim):
@@ -271,7 +269,7 @@ class GaugeLattice(object):
 
             total_action += 1 - local_action
             plaquettes_sum += local_action
-            topological_charge += project_angle(local_action)
+            topological_charge = project_angle(plaq_sum)
 
             #  plaquette_sum += self._action_op(links_sum)
             #  topological_charge += project_angle(links_sum)
