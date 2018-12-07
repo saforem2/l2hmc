@@ -28,3 +28,4 @@ run_2_20_380/
 tf_eager_log/
 timing_logs/
 gauge_logs/
+gauge_logs_eager/
