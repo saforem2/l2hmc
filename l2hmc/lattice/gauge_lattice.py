@@ -74,6 +74,9 @@ class GaugeLattice(object):
         self.num_links = int(self.dim * self.num_sites)
         self.bases = np.eye(dim, dtype=np.int)
 
+        #  self._observables_counter = 0
+        #  self._action_counter = 0
+
         if num_samples is not None:
             #  Create `num_samples` randomized instances of links array
             self.num_samples = num_samples
@@ -250,6 +253,9 @@ class GaugeLattice(object):
         if links is None:
             links = self.links
         if links.shape != self.links.shape:
+            #  print((f"{self._observables_counter} Bad link shape in "
+            #         f"`_calc_plaq_observables`. input_shape: {links.shape}"))
+            #  self._observables_counter += 1
             links = tf.reshape(links, self.links.shape)
 
         num_plaquettes = self.time_size * self.space_size
@@ -342,17 +348,26 @@ class GaugeLattice(object):
         if links is None:
             links = self.links
         if links.shape != self.links.shape:
+            #  print((f"{self._action_counter} Bad link shape in "
+            #         f"`_total_action`. input_shape: {links.shape}"))
+            #  self._action_counter += 1
             links = tf.reshape(links, self.links.shape)
 
-        action = 0.0
-        for site in self.iter_sites():
-            for u in range(self.dim):
-                for v in range(self.dim):
-                    if v > u:
-                        plaq = self.plaquette_operator(site, u, v, links)
-                        action += 1 - self._action_op(plaq)
+        total_action = 0.0
+        for plaq in self.plaquette_idxs:
+            *site, u, v = plaq
+            plaq_sum = self.plaquette_operator(site, u, v, links)
+            local_action = self._action_op(plaq_sum)
+
+            total_action += 1 - local_action
+        #  for site in self.iter_sites():
+        #      for u in range(self.dim):
+        #          for v in range(self.dim):
+        #              if v > u:
+        #                  plaq = self.plaquette_operator(site, u, v, links)
+        #                  action += 1 - self._action_op(plaq)
                         #  S += 1 - const * plaq
-        return self.beta * action #/ self.num_sites
+        return self.beta * total_action #/ self.num_sites
 
     def total_action(self, samples=None):
         """Return the total action (sum over all plaquettes) for each sample in
