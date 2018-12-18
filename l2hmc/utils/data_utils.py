@@ -4,6 +4,24 @@ import numpy as np
 #  from .jackknife import block_resampling, jackknife_err
 from sklearn.model_selection import KFold
 
+def compute_ac_spectrum(samples_history, target_mean, target_var=None):
+    """Compute autocorrelation spectrum using equation 15 from the L2HMC paper.
+    
+    ********** UNABLE TO GET WORKING CORRECTLY FOR U(1) GAUGE MODEL **********
+
+    Args:
+        samples_history: Numpy array of shape [T, B, D], where T is the total
+            number of time steps, B is the batch size, and D is the
+            dimensionality of sample space.
+        target_mean: 1D Numpy array of the mean of target (true) distribution.
+        target_covar: 2D Numpy array representing a symmetric matrix for
+            variance.
+
+    Returns:
+        Autocorrelation spectrum, Numpy array of shape [T-1].
+    """
+    pass
+
 def next_power_two(n):
     i = 1
     while i < n:
@@ -11,17 +29,33 @@ def next_power_two(n):
     return i
 
 
-def autocorr_func_1d(x, norm=True):
-    x = np.atleast_1d(x)
-    if len(x.shape) != 1:
+def compute_autocorrelation_fn(data, norm=True, fft=False):
+    """Compute the autocorrelation function of data.
+
+    Args:
+        norm (bool): Normalize autocorrelation function to have max val 1.
+        fft (bool): Compute autocorr function using fft/ifft (faster if data is
+            large)
+    """
+    data = np.atleast_1d(data)
+
+    if len(data.shape) != 1:
         raise ValueError('Invalid dimensions for 1D autocorrelation function.')
-    n = next_power_two(len(x))
+
+    if not fft:
+        acf = np.correlate(data, data, mode='full')
+        if norm:
+            acf /= acf[acf.argmax()]
+
+        return acf[acf.size//2:]
+
+    # if fft, compute autocorrelation function using FFT / IFFT
+    n = next_power_two(len(data))
 
     # Compute the FFT and then (from that) the auto-correlation function
-    f = np.fft.fft(x - np.mean(x), n=2*n)
-    acf = np.fft.ifft(f * np.conjugate(f))[:len(x)].real
+    f = np.fft.fft(data - np.mean(data), n=2*n)
+    acf = np.fft.ifft(f * np.conjugate(f))[:len(data)].real
     acf /= 4*n
-
     # Optionally normalize
     if norm:
         acf /= acf[0]
@@ -57,6 +91,7 @@ def jackknife(x, func, num_blocks=100):
     idx = np.arange(0, n, block_size)
     return np.sum(func(x[idx!=i]) for i in range(n))/float(n)
 
+
 def jackknife_var(x, func, num_blocks=100):
     """Jackknife estimate of the variance of the estimator function."""
     n = len(x)
@@ -66,6 +101,7 @@ def jackknife_var(x, func, num_blocks=100):
     return (n - 1) / (n + 0.) * np.sum(
         func(x[idx!=i]) - j_est**2.0 for i in range(n)
     )
+
 
 def jackknife_err(y_i, y_full, num_blocks):
     if isinstance(y_i, list):
@@ -78,6 +114,7 @@ def jackknife_err(y_i, y_full, num_blocks):
         print(f"y_i.shape: {y_i.shape}, y_full.shape: {y_full.shape}")
         raise
     return err
+
 
 def calc_avg_vals_errors(data, num_blocks=100):
     """Calculate average values and errors of `data` using block jackknife
