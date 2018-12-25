@@ -23,8 +23,10 @@ def plot_line(S):
         plt.grid('off')
         plt.axis('off')
 
-def get_hmc_samples(x_dim, eps, energy_function, sess, T=10, steps=200, samples=None):
-    hmc_dynamics = Dynamics(x_dim, energy_function, T=T, eps=eps, hmc=True)
+def get_hmc_samples(x_dim, eps, energy_function, sess, trajectory_length=10, 
+                    steps=200, samples=None):
+    hmc_dynamics = Dynamics(x_dim, energy_function, trajectory_length,
+                            eps=eps, hmc=True)
     hmc_x = tf.placeholder(tf.float32, shape=(None, x_dim))
     Lx, _, px, hmc_MH = propose(hmc_x, hmc_dynamics, do_mh_step=True)
 

@@ -10,118 +10,159 @@ import numpy as np
 import numpy.random as npr
 import tensorflow as tf
 
-#import tensorflow.contrib.eager as tfea
+# pylint: disable invalid-name, module level import not at top of file
+from . import neural_nets
 tfe = tf.contrib.eager
 
-from l2hmc_eager import neural_nets
-from utils.distributions import quadratic_gaussian, GMM
 
-# pylint: disable invalid-name
-
-
-class GaugeDynamics(tf.keras.Model):
+class GaugeDynamicsEager(tf.keras.Model):
     """Dynamics engine of naive L2HMC sampler."""
 
     def __init__(self,
                  lattice,
                  minus_loglikelihood_fn,
-                 n_steps=25,
+                 num_steps=25,
                  eps=0.1,
                  np_seed=1,
                  conv_net=True,
-                 test_HMC=False):
+                 hmc=False,
+                 eps_trainable=True):
         """Initialization.
 
         Args:
-            lattice (array-like):
-                Array containing a batch of lattices, each of which is a
-                `GaugeLattice` object.
-            x_dim: 
-                Dimensionality of observed data
-                minus_loglikelihood_fn: 
-            Log-likelihood function of conditional probability
-            n_steps:
-                Number of leapfrog steps within each transition
-            eps:
-                Initial value learnable scale of step size
-            np_seed:
-                Random seed for numpy; used to control sample masks
+            lattice (array-like): Array containing a batch of lattices, each of
+                which is a `GaugeLattice` object.
+            x_dim: Dimensionality of observed data
+            minus_loglikelihood_fn: Log-likelihood function of conditional
+                probability
+            num_steps: Number of leapfrog steps within each transition
+            eps: Initial value learnable scale of step size
+            np_seed: Random seed for numpy; used to control sample masks
         """
-        super(GaugeDynamics, self).__init__()
+        super(GaugeDynamicsEager, self).__init__()
+        npr.seed(np_seed)
 
         self.lattice = lattice
-        self.samples = tf.convert_to_tensor(np.array(self.lattice.samples),
-                                            dtype=tf.float32)
+        self.batch_size = self.lattice.samples.shape[0]
 
-        npr.seed(np_seed)
+        self.samples = tf.convert_to_tensor(
+            self.lattice.samples, dtype=tf.float32
+        )
+
         self.x_dim = self.lattice.num_links
-
-        #  num_samples = len(self.lattice.samples)
-
         self.potential = minus_loglikelihood_fn
-        self.n_steps = n_steps
-        #  self.n_steps = tf.contrib.eager.Variable(
-        #      initial_value=n_steps,
-        #      name='n_steps',
-        #      dtype=tf.int32,
-        #      trainable=True
-        #  )
+        self.num_steps = num_steps
+        self.conv_net = conv_net
+        self.hmc = hmc
 
         self._construct_time()
         self._construct_masks()
 
+        # when performing `tf.reduce_sum` we want to sum over all
+        # `extra axes`, e.g. when using conv_net, samples has shape
+        # (batch_size, time_size, space_size, dimension) so we want to
+        # reduce the sum over the first, second, and third axes. 
+        self.axes = np.arange(1, len(self.samples.shape))
 
-        if not test_HMC:
+        if not hmc:
             if conv_net:
-                self.conv_net = conv_net
-
-                input_shape = (1, *self.lattice.links.shape)
-                s_size = self.lattice.space_size
-                n_hidden = int(2 * self.x_dim)  # num of hidden nodes in FC net
-                n_filters = 2 * s_size          # num of filters in Conv2D
-                filter_size = (2, 2)            # filter size in Conv2D
-
-                self.position_fn = neural_nets.ConvNet(input_shape,
-                                                       factor=2.,
-                                                       spatial_size=s_size,
-                                                       num_filters=n_filters,
-                                                       filter_size=filter_size,
-                                                       num_hidden=n_hidden)
-
-                self.momentum_fn = neural_nets.ConvNet(input_shape,
-                                                       factor=1.,
-                                                       spatial_size=s_size,
-                                                       num_filters=n_filters,
-                                                       filter_size=filter_size,
-                                                       num_hidden=n_hidden)
+                self._build_conv_nets()
             else:
-                self.conv_net = False
-
-                self.position_fn = neural_nets.GenericNet(self.x_dim,
-                                                          factor=2.,
-                                                          n_hidden=n_hidden)
-
-                self.momentum_fn = neural_nets.GenericNet(self.x_dim,
-                                                          factor=1.,
-                                                          n_hidden=n_hidden)
+                self._build_generic_nets()
         else:
-            self.conv_net = True  # don't use ConvNet architecture
-            self.position_fn = self._test_fn  # dummy fn, returns zeros
-            self.momentum_fn = self._test_fn  # dummy fn, returns zeros
+            #  z = lambda x, *args, **kwargs: tf.zeros_like(x)
+            self.position_fn = lambda inp: [
+                tf.zeros_like(inp[0]) for t in range(3)
+            ]
+            self.momentum_fn = lambda inp: [
+                tf.zeros_like(inp[0]) for t in range(3)
+            ]
+            #  self.position_fn = self._test_fn
+            #  self.momentum_fn = self._test_fn
+            #  self.axes = 1
+
+        if tf.executing_eagerly():
+            self.eps = tf.contrib.eager.Variable(
+                initial_value=eps,
+                name='eps',
+                dtype=tf.float32,
+                trainable=eps_trainable
+            )
+        else:
+            self.eps = tf.Variable(
+                initial_value=eps,
+                name='eps',
+                dtype=tf.float32,
+                trainable=eps_trainable
+            )
+            tf.add_to_collection('eps', self.eps)
+
+    #  @tfe.defun
+    #  def call(self, samples):
+    #      """Call method for tf.keras.Model."""
+    #      output = self.apply_transition(samples)
+    #      samples_post, momentum_post, accept_prob, samples_out = output
+    #      samples_post = tf.mod(samples_post, 2*np.pi)
+    #      samples_out = tf.mod(samples_out, 2*np.pi)
+    #      return samples_post, accept_prob, samples_out
+
+    def _build_conv_nets(self):
+        """Build ConvNet architecture for position and momentum functions."""
+
+        input_shape = (1, *self.lattice.links.shape)
+        links_shape = self.lattice.links.shape
+        num_links = self.lattice.num_links
+        s_size = self.lattice.space_size
+        n_hidden = int(2 * self.x_dim)  # num of hidden nodes in FC net
+        n_filters = 2 * s_size          # num of filters in Conv2D
+        filter_size1 = (3, 3)           # filter size in first Conv2D layer
+        filter_size2 = (2, 2)           # filter size in second Conv2D layer
+
+        self.position_fn = neural_nets.ConvNet(input_shape,
+                                               links_shape,
+                                               num_links,
+                                               factor=2.,
+                                               spatial_size=s_size,
+                                               num_filters=n_filters,
+                                               filter_size1=filter_size1,
+                                               filter_size2=filter_size2,
+                                               num_hidden=n_hidden,
+                                               name='XConvNet',
+                                               scope='XNet')
+
+        self.momentum_fn = neural_nets.ConvNet(input_shape,
+                                               links_shape,
+                                               num_links,
+                                               factor=1.,
+                                               spatial_size=s_size,
+                                               num_filters=n_filters,
+                                               filter_size1=filter_size1,
+                                               filter_size2=filter_size2,
+                                               num_hidden=n_hidden,
+                                               name='VConvNet',
+                                               scope='VNet')
+
+    def _build_generic_nets(self):
+        """Build GenericNet FC-architectures for position and momentum fns."""
+        n_hidden = int(2 * self.x_dim)  # num of hidden nodes in FC net
+        links_shape = self.lattice.links.shape
 
 
-        self.eps = tf.contrib.eager.Variable(
-            initial_value=eps,
-            name='eps',
-            dtype=tf.float32,
-            trainable=True
-        )
+        self.position_fn = neural_nets.GenericNet(self.x_dim,
+                                                  links_shape,
+                                                  factor=2.,
+                                                  n_hidden=n_hidden)
+
+        self.momentum_fn = neural_nets.GenericNet(self.x_dim,
+                                                  links_shape,
+                                                  factor=1.,
+                                                  n_hidden=n_hidden)
 
     def _test_fn(self, *args, **kwargs):
         """Dummy test function used for testing generic HMC sampler.
 
         Returns: Three identical tensors of zeros, equivalent to setting 
-        T_x, Q_x, and S_x to zero in the augmented leapfrog integrator.
+            T_x, Q_x, and S_x to zero in the augmented leapfrog integrator.
         """
         output = tf.constant(0, shape=self.samples.shape, dtype=tf.float32)
         output = self.flatten_tensor(output)
@@ -139,20 +180,25 @@ class GaugeDynamics(tf.keras.Model):
         )
 
         # Decide direction uniformly
-        batch_size = tf.shape(position)[0]
-        forward_mask = tf.cast(tf.random_uniform((batch_size,)) > 0.5,
+        forward_mask = tf.cast(tf.random_uniform((self.batch_size,)) > 0.5,
                                tf.float32)
         backward_mask = 1. - forward_mask
 
+        #  if self.conv_net:
+        #  forward_mask_ = forward_mask[:, None, None, None]
+        #  backward_mask_ = backward_mask[:, None, None, None]
+        #  else:
+            #  forward_mask_ = forward_mask[:, None]
+            #  backward_mask_ = backward_mask[:, None]
+
         # Obtain proposed states
         position_post = (
-            forward_mask[:, None] * position_f
-            + backward_mask[:, None] * position_b
+            forward_mask[:, None, None, None] * position_f
+            + backward_mask[:, None, None, None] * position_b
         )
-
         momentum_post = (
-            forward_mask[:, None] * momentum_f
-            + backward_mask[:, None] * momentum_b
+            forward_mask[:, None, None, None] * momentum_f
+            + backward_mask[:, None, None, None] * momentum_b
         )
 
         # Probability of accepting the proposed states
@@ -165,15 +211,24 @@ class GaugeDynamics(tf.keras.Model):
         )
         reject_mask = 1. - accept_mask
 
+        #  accept_mask = mask_idx(accept_mask, conv_net=self.conv_net)
+        #  reject_mask = mask_idx(accept_mask, conv_net=self.conv_net)
+        #  if self.conv_net:
+        #      accept_mask_ = accept_mask[:, None, None, None]
+        #      reject_mask_ = reject_mask[:, None, None, None]
+        #  else:
+        #      accept_mask_ = accept_mask[:, None]
+        #      reject_mask_ = reject_mask[:, None]
+
         # Samples after accept / reject step
         position_out = (
-            accept_mask[:, None] * position_post
-            + reject_mask[:, None] * tf.reshape(position,
-                                                shape=(position.shape[0], -1))
+            accept_mask[:, None, None, None] * position_post
+            + reject_mask[:, None, None, None] * position
         )
 
         return position_post, momentum_post, accept_prob, position_out
 
+    #  @tfe.defun
     def transition_kernel(self, position, forward=True):
         """Transition kernel of augmented leapfrog integrator."""
         lf_fn = self._forward_lf if forward else self._backward_lf
@@ -184,18 +239,16 @@ class GaugeDynamics(tf.keras.Model):
         position_post, momentum_post = position, momentum
         sumlogdet = 0.
         # Apply augmented leapfrog steps
-        for i in range(self.n_steps):
+        for i in range(self.num_steps):
+            #  print(f"\t\t leapfrog step: {i}")
             position_post, momentum_post, logdet = lf_fn(position_post,
                                                          momentum_post,
                                                          i)
             sumlogdet += logdet
+
         accept_prob = self._compute_accept_prob(position, momentum,
                                                 position_post, momentum_post,
                                                 sumlogdet)
-        position_post = tf.reshape(position_post,
-                                   shape=(position_post.shape[0], -1))
-        momentum_post = tf.reshape(momentum_post,
-                                   shape=(momentum_post.shape[0], -1))
 
         return position_post, momentum_post, accept_prob
 
@@ -205,20 +258,24 @@ class GaugeDynamics(tf.keras.Model):
         mask, mask_inv = self._get_mask(i)
         sumlogdet = 0.
 
+        #  print("\t\t\t Running self._update_momentum_forward...")
         momentum, logdet = self._update_momentum_forward(position,
                                                          momentum, t)
         sumlogdet += logdet
 
+        #  print("\t\t\t Running self._update_position_forward...")
         position, logdet = self._update_position_forward(position,
                                                          momentum, t, mask,
                                                          mask_inv)
         sumlogdet += logdet
 
+        #  print("\t\t\t Running self._update_position_forward...")
         position, logdet = self._update_position_forward(position,
                                                          momentum, t, mask_inv,
                                                          mask)
         sumlogdet += logdet
 
+        #  print("\t\t\t Running self._update_momentum_forward...")
         momentum, logdet = self._update_momentum_forward(position,
                                                          momentum, t)
         sumlogdet += logdet
@@ -228,23 +285,27 @@ class GaugeDynamics(tf.keras.Model):
     def _backward_lf(self, position, momentum, i):
         """One backward augmented leapfrog step."""
         # Reversed index/sinusoidal time
-        t = self._get_time(self.n_steps - i - 1)
-        mask, mask_inv = self._get_mask(self.n_steps - i - 1)
+        t = self._get_time(self.num_steps - i - 1)
+        mask, mask_inv = self._get_mask(self.num_steps - i - 1)
         sumlogdet = 0.
 
+        #  print("\t\t\t Running self._update_momentum_backward...")
         momentum, logdet = self._update_momentum_backward(position,
                                                           momentum,
                                                           t)
         sumlogdet += logdet
 
+        #  print("\t\t\t Running self._update_position_backward...")
         position, logdet = self._update_position_backward(position, momentum,
                                                           t, mask_inv, mask)
         sumlogdet += logdet
 
+        #  print("\t\t\t Running self._update_position_backward...")
         position, logdet = self._update_position_backward(position, momentum,
                                                           t, mask, mask_inv)
         sumlogdet += logdet
 
+        #  print("\t\t\t Running self._update_momentum_backward...")
         momentum, logdet = self._update_momentum_backward(position,
                                                           momentum,
                                                           t)
@@ -256,19 +317,10 @@ class GaugeDynamics(tf.keras.Model):
         """Update v in the forward leapfrog step."""
         grad = self.grad_potential(position)
 
-        # Reshape tensors to satisfy input shape for convolutional layer
-        # want to reshape from [b, x * y * t] --> [b, x, y, t]
-        if self.conv_net:
-            position = self.expand_tensor(position, self.lattice.links.shape)
-            grad = self.expand_tensor(grad, self.lattice.links.shape)
-
         # scale, translation, transformed all have shape [b, x * y * t]
+        #  print("\t\t\t\t Running self.momentum_fn...")
+        #  scale, translation, transformed = self.momentum_fn(position, grad, t)
         scale, translation, transformed = self.momentum_fn([position, grad, t])
-
-        # Flatten tensors from shape [b, x, y, t] --> [b, x * y * t]
-        if self.conv_net:
-            momentum = self.flatten_tensor(momentum)
-            grad = self.flatten_tensor(grad)
 
         scale *= 0.5 * self.eps
         transformed *= self.eps
@@ -277,27 +329,18 @@ class GaugeDynamics(tf.keras.Model):
             - 0.5 * self.eps * (tf.exp(transformed) * grad - translation)
         )
 
-        return momentum, tf.reduce_sum(scale, axis=1)
+        return momentum, tf.reduce_sum(scale, axis=self.axes)
 
     def _update_position_forward(self, position, momentum, t, mask, mask_inv):
         """Update x in the forward leapfrog step."""
-        # Reshape tensors to satisfy input shape for convolutional layer
-        # want to reshape from [b, x * y * t] --> [b, x, y, t]
-        if self.conv_net:
-            position = self.expand_tensor(position, self.lattice.links.shape)
-            momentum = self.expand_tensor(momentum, self.lattice.links.shape)
-            mask = self.expand_tensor(mask, self.lattice.links.shape)
 
-        # scale, translation, transformed all have shape [b, x * y * t]
+        # scale, translation, transformed all have shape [b, x * y * t] ???
+        #  print("\t\t\t\t Running self.position_fn...")
+        #  scale, translation, transformed = self.position_fn(momentum,
+        #                                                     mask*position, t)
         scale, translation, transformed = self.position_fn(
             [momentum, mask * position, t]
         )
-
-        # Flatten tensors from shape [b, x, y, t] --> [b, x * y * t]
-        if self.conv_net:
-            position = self.flatten_tensor(position)
-            momentum = self.flatten_tensor(momentum)
-            mask = self.flatten_tensor(mask)
 
         scale *= self.eps
         transformed *= self.eps
@@ -308,26 +351,18 @@ class GaugeDynamics(tf.keras.Model):
                           (tf.exp(transformed) * momentum + translation))
         )
 
-        return (position, tf.reduce_sum(mask_inv * scale, axis=1))
+        return position, tf.reduce_sum(mask_inv * scale, axis=self.axes)
 
     def _update_momentum_backward(self, position, momentum, t):
         """Update v in the backward leapforg step. Inverting the forward
         update."""
         grad = self.grad_potential(position)
 
-        # Reshape tensors to satisfy input shape for convolutional layer
-        # want to reshape from [b, x * y * t] --> [b, x, y, t]
-        if self.conv_net:
-            position = self.expand_tensor(position, self.lattice.links.shape)
-            grad = self.expand_tensor(grad, self.lattice.links.shape)
 
         # scale, translation, transformed all have shape [b, x * y * t]
+        #  print("\t\t\t\t Running self.momentum_fn`...")
+        #  scale, translation, transformed = self.momentum_fn(position, grad, t)
         scale, translation, transformed = self.momentum_fn([position, grad, t])
-
-        if self.conv_net:
-            # flatten momentum, grad from [b, x, y, t] --> [b, x * y * t]
-            momentum = self.flatten_tensor(momentum)
-            grad = self.flatten_tensor(grad)
 
         scale *= -0.5 * self.eps
         transformed *= self.eps
@@ -336,37 +371,29 @@ class GaugeDynamics(tf.keras.Model):
                                                           grad - translation))
         )
 
-        return momentum, tf.reduce_sum(scale, axis=1)
+        return momentum, tf.reduce_sum(scale, axis=self.axes)
 
     def _update_position_backward(self, position, momentum, t, mask, mask_inv):
         """Update x in the backward lf step. Inverting the forward update."""
-        # Reshape tensors to satisfy input shape for convolutional layer
-        # want to reshape from [b, x * y * t] --> [b, x, y, t]
-        if self.conv_net:
-            position = self.expand_tensor(position, self.lattice.links.shape)
-            momentum = self.expand_tensor(momentum, self.lattice.links.shape)
-            mask = self.expand_tensor(mask, self.lattice.links.shape)
 
         # scale, translation, transformed all have shape [b, x * y * t]
+        #  print("\t\t\t\t Running self.position_fn...")
+        #  scale, translation, transformed = self.position_fn(momentum,
+        #                                                     mask * position, t)
         scale, translation, transformed = self.position_fn(
             [momentum, mask * position, t]
         )
-        # Flatten tensors from shape [b, x, y, t] --> [b, x * y * t]
-        if self.conv_net:
-            position = self.flatten_tensor(position)
-            momentum = self.flatten_tensor(momentum)
-            mask = self.flatten_tensor(mask)
 
         scale *= self.eps
         transformed *= self.eps
+
         position = (
-            mask * position + mask_inv * tf.exp(scale) * (position - self.eps *
-                                                          (tf.exp(transformed)
-                                                           * momentum +
-                                                           translation))
+            mask * position + mask_inv * tf.exp(scale)
+            * (position - self.eps * (tf.exp(transformed)
+                                      * momentum + translation))
         )
 
-        return (position, tf.reduce_sum(mask_inv * scale, axis=1))
+        return position, tf.reduce_sum(mask_inv * scale, axis=self.axes)
 
     def _compute_accept_prob(self, position, momentum, position_post,
                              momentum_post, sumlogdet):
@@ -382,11 +409,11 @@ class GaugeDynamics(tf.keras.Model):
     def _construct_time(self):
         """Convert leapfrog step index into sinusoidal time."""
         self.ts = []
-        for i in range(self.n_steps):
+        for i in range(self.num_steps):
             t = tf.constant(
                 [
-                    np.cos(2 * np.pi * i / self.n_steps),
-                    np.sin(2 * np.pi * i / self.n_steps)
+                    np.cos(2 * np.pi * i / self.num_steps),
+                    np.sin(2 * np.pi * i / self.num_steps)
 
                 ],
                 dtype=tf.float32
@@ -400,13 +427,16 @@ class GaugeDynamics(tf.keras.Model):
     def _construct_masks(self):
         """Construct different binary masks for different time steps."""
         self.masks = []
-        for _ in range(self.n_steps):
+        for _ in range(self.num_steps):
             #  Need to use npr here because tf would generate different random
             #  values across different `sess.run`
             idx = npr.permutation(np.arange(self.x_dim))[:self.x_dim // 2]
             mask = np.zeros((self.x_dim,))
             mask[idx] = 1.
             mask = tf.constant(mask, dtype=tf.float32)
+            #  if conv_net:
+            mask = tf.reshape(mask, shape=self.lattice.links.shape)
+
             self.masks.append(mask[None, :])
 
     def _get_mask(self, i):
@@ -435,7 +465,8 @@ class GaugeDynamics(tf.keras.Model):
             grad = tfe.gradients_function(self.potential)(position)[0]
         else:
             grad = tf.gradients(self.potential(position), position)[0]
-        return tf.convert_to_tensor(grad, dtype=tf.float32)
+        #  return tf.convert_to_tensor(grad, dtype=tf.float32)
+        return grad
 
     def flatten_tensor(self, tensor):
         """Flattens tensor along axes 1:, since axis=0 indexes sample in batch.
@@ -455,39 +486,98 @@ class GaugeDynamics(tf.keras.Model):
         return tf.reshape(tensor, shape=(batch_size, *output_shape))
 
 
-# Loss function
-def compute_loss(dynamics, x, scale=0.1, eps=1e-4):
-    """Compute loss defined in Eq. (8) of paper."""
-    z = tf.random_normal(tf.shape(x))  # Auxiliary variable
-    _x, _, x_accept_prob, x_out = dynamics.apply_transition(x)
-    _z, _, z_accept_prob, _ = dynamics.apply_transition(z)
+def get_new_sample(dynamics, x, transition_fn=None, defun=False):
+    """Get new sample from dynamics by passing x through the network."""
+    if transition_fn is None:
+        #  if defun:
+        #      apply_transition = tfe.defun(dynamics.apply_transition)
+        #  else:
+        apply_transition = dynamics.apply_transition
+    else:
+        apply_transition = transition_fn
 
-    if x.shape != _x.shape:
-        x = tf.reshape(x, shape=_x.shape)
-    if z.shape != _z.shape:
-        z = tf.reshape(z, shape=_z.shape)
+    _x, _, x_accept_prob, x_out = apply_transition(x)
+
+    _x = tf.mod(_x, 2*np.pi)
+    x_out = tf.mod(x_out, 2*np.pi)
+    return _x, x_accept_prob, x_out
+
+
+# pylint: disable=invalid-name
+def compute_loss(dynamics, x, _x, x_accept_prob, params, defun=False):
+    """Compute loss defined in Eq. (8) of paper."""
+
+    scale = params.get('loss_scale', 0.1)
+    eps = params.get('loss_eps', 1e-4)
+    metric = params.get('metric', 'l2')
+
+    axes = dynamics.axes
+
+    #  z = tf.random_normal(tf.shape(x))  # Auxiliary variable
+
+    #  _x, x_accept_prob, x_out = get_new_sample(dynamics, x, defun)
+    #  _z, z_accept_prob, z_out = get_new_sample(dynamics, z, defun)
 
     # Add eps for numerical stability; following released implementation
-    x_loss = (tf.reduce_sum((tf.math.cos(x) - tf.math.cos(_x))**2, axis=1)
-              * x_accept_prob + eps)
-    z_loss = (tf.reduce_sum((tf.math.cos(z) - tf.math.cos(_z))**2, axis=1)
-              * z_accept_prob + eps)
-    #  x_loss = (tf.reduce_sum((x_vec - _x_vec)**2, axis=1)
-    #            * x_accept_prob + eps)
-    #  x_loss = tf.reduce_sum((x - _x)**2, axis=1) * x_accept_prob + eps
-    #  z_loss = tf.reduce_sum((z - _z)**2, axis=1) * z_accept_prob + eps
+    if metric == 'l2':  # l2 Euclidean squared norm
+        x_loss = tf.reduce_sum((x - _x)**2, axis=axes) * x_accept_prob + eps
+        #  z_loss = tf.reduce_sum((z - _z)**2, axis=axes) * z_accept_prob + eps
 
-    loss = tf.reduce_mean(
-        (1. / x_loss + 1. / z_loss) * scale - (x_loss + z_loss) / scale, axis=0
-    )
+    if metric == 'l1':
+        x_loss = tf.reduce_sum(tf.abs(x - _x), axis=axes) * x_accept_prob + eps
+        #  z_loss = tf.reduce_sum(tf.abs(z - _z), axis=axes) * z_accept_prob + eps
 
-    return loss, x_out, x_accept_prob
+    else:  # `cos` metric (NOTE: experimental!)
+        x_loss = (tf.reduce_sum((tf.math.cos(x)
+                                 - tf.math.cos(_x))**2, axis=axes)
+                  * x_accept_prob + eps)
+        #  z_loss = (tf.reduce_sum((tf.math.cos(z)
+        #                           - tf.math.cos(_z))**2, axis=axes)
+        #            * z_accept_prob + eps)
+
+    loss = tf.reduce_mean(scale / x_loss - x_loss / scale, axis=0)
+    #  loss = tf.reduce_mean(
+    #      (1. / x_loss + 1. / z_loss) * scale - (x_loss + z_loss) / scale, axis=0
+    #  )
+
+    return loss
 
 
-def loss_and_grads(dynamics, x, loss_fn=compute_loss):
-    """Obtain loss value and gradients."""
+def loss_and_grads(dynamics, x, params, loss_fn=compute_loss, 
+                   hmc=False, transition_fn=None, defun=False):
+    """Obtain loss value and gradients.
+
+    Args:
+        dynamics: Main dynamics engine responsible for implementing L2HMC alg.
+        samples (tf.Tensor): Batch of training samples.
+        optimizer: Tensorflow optimizer (e.g. tf.train.AdamOptimizer)
+        loss_fn (function): Function that computes loss from network output.
+        params (dict): Dictionary of parameters. 
+            We are interested in:
+                * params['loss_eps']: Small constant for numerical stability.
+                * params['metric']: Metric used in calculating loss. 
+                * params['loss_scale']: Scaling factor (lambda) used in
+                    calculating the loss.
+
+    Returns:
+        loss (float): `loss` value output from network.
+        gradients: Resulting gradient values from this training step.
+        out: Output from Metropolis Hastings accept/reject step (new samples).
+        accept_prob (float): Probability that proposed states were accepted.
+    """
+    if defun:
+        _get_new_sample = tfe.defun(get_new_sample)
+    else:
+        _get_new_sample = get_new_sample
+
     with tf.GradientTape() as tape:
-        loss_val, out, accept_prob = loss_fn(dynamics, x)
+        _x, x_accept_prob, x_out = _get_new_sample(dynamics, x,
+                                                   transition_fn, defun)
+        #  _x, x_accept_prob, x_out = dynamics(x)
+        loss_val = loss_fn(dynamics, x, _x, x_accept_prob, params, defun)
+        #  loss_val, x_out, accept_prob = loss_fn(dynamics, x, params, defun)
+
     grads = tape.gradient(loss_val, dynamics.trainable_variables)
 
-    return loss_val, grads, out, accept_prob
+    return loss_val, x_out, x_accept_prob, grads
+

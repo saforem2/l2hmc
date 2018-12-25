@@ -27,6 +27,7 @@ l2hmc/notebooks/Untitled.ipynb
 run_2_20_380/
 tf_eager_log/
 timing_logs/
+<<<<<<< HEAD
 backups/
 cprofile_out.txt
 gauge_logs/
@@ -34,3 +35,12 @@ gauge_logs_eager/
 gauge_logs_graph/
 l2hmc/notebooks/u1_keras_model_with_dataset.ipynb
 new_mog_logs/
+=======
+gauge_logs/
+gauge_logs_eager/
+backups/
+gauge_logs_graph/
+new_mog_logs/
+l2hmc/notebooks/u1_keras_model_with_dataset.ipynb
+cprofile_out.txt
+>>>>>>> U1_gauge
