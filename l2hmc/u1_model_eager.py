@@ -12,24 +12,32 @@ import argparse
 import numpy as np
 import tensorflow as tf
 
+from keras.models import load_model
+
+#  from memory_profiler import profile
+
+
 #  if not tf.executing_eagerly():
 #      tf.enable_eager_execution()
 
 
-try:
-    import matplotlib.pyplot as plt
-    HAS_MATPLOTLIB = True
-except ImportError:
-    HAS_MATPLOTLIB = False
+#  try:
+#      import matplotlib.pyplot as plt
+#      HAS_MATPLOTLIB = True
+#  except ImportError:
+#      HAS_MATPLOTLIB = False
 
 from scipy.special import i0, i1 # pylint: disable=no-name-in-module
 
 from l2hmc_eager import gauge_dynamics_eager as gde
-from l2hmc_eager.neural_nets import ConvNet, GenericNet
-from definitions import ROOT_DIR
+#  from l2hmc_eager.neural_nets import ConvNet, GenericNet
+#  from definitions import ROOT_DIR
 from lattice.gauge_lattice import GaugeLattice, u1_plaq_exact
 from utils.tf_logging import variable_summaries, get_run_num, make_run_dir
-from utils.gauge_model_helpers import *
+import utils.gauge_model_helpers as helpers
+#  from utils.gauge_model_helpers import *
+
+#  fp = open('memory_profiler.log', 'w+')
 
 
 tfe = tf.contrib.eager
@@ -61,13 +69,13 @@ PARAMS = {
     'clip_value': 100,
     'rand': False,
     'metric': 'l2',
-    #  'conv_net': True,
-    #  'hmc': False
 }
 
 ##############################################################################
 # Helper functions etc.
 ##############################################################################
+
+
 def write_summaries(summary_writer, data):
     """Write `summaries` using `summary_writer` for use in TensorBoard."""
     with summary_writer.as_default():
@@ -83,8 +91,16 @@ def write_summaries(summary_writer, data):
 
 
 # pylint: disable=too-many-locals
-def train_one_iter(dynamics, samples, optimizer, 
-                   loss_fn, params, global_step=None, hmc=False):
+#  @profile(stream=fp)
+def train_one_iter(dynamics, 
+                   samples, 
+                   optimizer, 
+                   loss_fn, 
+                   params, 
+                   global_step=None, 
+                   hmc=False, 
+                   transition_fn=None, 
+                   defun=True):
     """
     Peform a single training step for the `dynamics` engine.
 
@@ -110,29 +126,43 @@ def train_one_iter(dynamics, samples, optimizer,
         gradients: Resulting gradient values from this training step.
     """
     clip_value = params.get('clip_value', 10)
+    grads = None
 
-    #  print("Computing loss_and_grads...")
     loss, samples_out, accept_prob, grads = gde.loss_and_grads(
         dynamics=dynamics,
         x=samples,
         params=params,
         loss_fn=loss_fn,
-        hmc=hmc
+        hmc=hmc,
+        transition_fn=transition_fn,
+        defun=defun
     )
 
     if not hmc:
-        grads, _ = tf.clip_by_global_norm(grads, clip_value)
+        #  if defun:
+            #  apply_grads = tfe.defun(apply_gradients)
+        #  else:
+        #  apply_grads = apply_gradients
 
-        print("Applying gradients...")
-        optimizer.apply_gradients(
-            zip(grads, dynamics.trainable_variables), global_step=global_step
-        )
-        print("done.")
+        grads = apply_gradients(dynamics, optimizer, grads,
+                                clip_value, global_step)
 
     return loss, samples_out, accept_prob, grads
 
 
+#  @profile(stream=fp)
+def apply_gradients(dynamics, optimizer, grads, clip_value, global_step):
+    grads, _ = tf.clip_by_global_norm(grads, clip_value)
+
+    optimizer.apply_gradients(
+        zip(grads, dynamics.trainable_variables), global_step=global_step
+    )
+
+    return grads
+
+
 # pylint: disable=too-many-instance-attributes
+#  @profile(stream=fp)
 class GaugeModelEager(object):
     """
     Wrapper class implementing L2HMC algorithm on lattice gauge models.
@@ -151,71 +181,76 @@ class GaugeModelEager(object):
         * Because of this, a batch of `samples` will have shape:
             (N, T, X, 2)
     """
+    #  @profile(stream=fp)
     def __init__(self, 
                  params=None,
                  conv_net=True,
                  hmc=False,
                  log_dir=None, 
                  restore=False,
-                 defun=True):
+                 defun=True,
+                 eps_trainable=True):
         """Initialization method."""
         _t0 = time.time()
 
         if log_dir is None:
-            dirs = create_log_dir('gauge_logs_eager')
+            dirs = helpers.create_log_dir('gauge_logs_eager')
         else:
-            dirs = check_log_dir(log_dir)
+            dirs = helpers.check_log_dir(log_dir)
 
         self.log_dir, self.info_dir, self.figs_dir = dirs
 
-        if restore:
-            self._restore_model(log_dir)
-        else:
-            self.summary_writer = (  # using newly created `self.log_dir`
-                    tf.contrib.summary.create_file_writer(self.log_dir)
-                )
-            self.params = params
-            self.data = {}
-            self._defun = defun
+        #  if restore:
+        #      self._restore_model(log_dir)
+        #  else:
+        self.summary_writer = (
+            tf.contrib.summary.create_file_writer(self.log_dir)
+        )
+        self.params = params
+        self.data = {}
+        self._defun = defun
 
-            #  self.conv_net = params.get('conv_net', True)
-            self.conv_net = conv_net
-            self.hmc = hmc
+        #  self.conv_net = params.get('conv_net', True)
+        self.conv_net = conv_net
+        self.hmc = hmc
 
-            self._init_params(params, log_dir)
+        self._init_params(params, log_dir)
 
-        print('Creating lattice...')
-        self.lattice = self._create_lattice(self.params)
+        #  self.lattice = self._create_lattice()
+
+        self.lattice = GaugeLattice(time_size=self.time_size,
+                                    space_size=self.space_size,
+                                    dim=self.dim,
+                                    beta=self.beta,
+                                    link_type=self.link_type,
+                                    num_samples=self.num_samples,
+                                    rand=self.rand)
 
         # batch size is equivalent to the number of samples (call it `N`)
         self.batch_size = self.lattice.samples.shape[0]
 
-        if self.conv_net:
-            self.samples = tf.convert_to_tensor(
-                self.lattice.samples, dtype=tf.float32
-            )
+        #  if self.conv_net:
+        self.samples = tf.convert_to_tensor(
+            self.lattice.samples, dtype=tf.float32
+        )
 
-        else:
-            self.samples = tf.convert_to_tensor(
-                self.lattice.samples.reshape((self.batch_size, -1)),
-                dtype=tf.float32
-            )
-        #  self.samples = self.dynamics.samples
-        # reshape lattice.links from (N, T, X, 2) --> (N, T * X * 2)
-        #  self.samples = tf.convert_to_tensor(
-        #      self.lattice.samples.reshape(), dtype=tf.float32
-        #  )
+        #  else:
+        #      self.samples = tf.convert_to_tensor(
+        #          self.lattice.samples.reshape((self.batch_size, -1)),
+        #          dtype=tf.float32
+        #      )
 
         self.potential_fn = self.lattice.get_energy_function(self.samples)
-        print('done.')
 
-        print("Creating dynamics...")
-        self.dynamics = self._create_dynamics(lattice=self.lattice,
-                                              potential_fn=self.potential_fn,
-                                              conv_net=self.conv_net,
-                                              hmc=self.hmc,
-                                              params=self.params)
-        print('done.')
+        self.dynamics = gde.GaugeDynamicsEager(
+            lattice=self.lattice,
+            num_steps=self.num_steps,
+            eps=self.eps,
+            minus_loglikelihood_fn=self.potential_fn,
+            conv_net=self.conv_net,
+            hmc=self.hmc,
+            eps_trainable=eps_trainable
+        )
 
         self.global_step = tf.train.get_or_create_global_step()
         self.global_step.assign(1)
@@ -227,19 +262,22 @@ class GaugeModelEager(object):
             self.learning_rate_decay_rate,
             staircase=True
         )
+
         self.optimizer = tf.train.AdamOptimizer(self.learning_rate)
 
         self.checkpointer = tf.train.Checkpoint(optimizer=self.optimizer,
                                                 dynamics=self.dynamics,
                                                 global_step=self.global_step)
 
-        if defun:
+        if self._defun:
             # Use `tfe.defun` to boost performance
-            self.loss_fn = tfe.defun(gde.compute_loss)
             #  self.loss_fn = tfe.defun(gde.compute_loss)
+            self.loss_fn = gde.compute_loss
         else:
             self.loss_fn = gde.compute_loss
-
+            #  self._calc_observables = self.lattice.calc_plaq_observables
+        if restore:
+            self._restore_model(self.log_dir)
 
         print(f"total initialization time: {time.time() - _t0}\n")
 
@@ -301,9 +339,10 @@ class GaugeModelEager(object):
 
         self.files = {
             'parameters_file': os.path.join(self.info_dir, 'parameters.txt'),
-            'samples_file': os.path.join(self.info_dir, 'samples.npy'),
+            #  'samples_file': os.path.join(self.info_dir, 'samples.npy'),
             'run_info_file': os.path.join(self.info_dir, 'run_info.txt'),
             'data_pkl_file': os.path.join(self.info_dir, 'data.pkl'),
+            'samples_pkl_file': os.path.join(self.info_dir, 'samples.pkl'),
             'parameters_pkl_file': (
                 os.path.join(self.info_dir, 'parameters.pkl')
             ),
@@ -318,51 +357,10 @@ class GaugeModelEager(object):
             ),
         }
 
-        write_run_parameters(self.files['parameters_file'], self.params)
+        helpers.write_run_parameters(self.files['parameters_file'],
+                                     self.params)
 
-    def _create_lattice(self, params=None):
-        """Delegate creation logic to private methods."""
-        if params is None:
-            params = self.params
-
-        return GaugeLattice(time_size=params.get('time_size', 8),
-                            space_size=params.get('space_size', 8),
-                            dim=params.get('dim', 2),
-                            beta=params.get('beta', '2.5'),
-                            link_type=params.get('link_type', 'U1'),
-                            num_samples=params['num_samples'],
-                            rand=params['rand'])
-
-    def _create_dynamics(self, lattice=None, conv_net=True, 
-                         hmc=False, potential_fn=None, params=None):
-        """
-        Delegate creation logic to private methods.
-
-        Args:
-            lattice (:obj:GaugeLattice, optional): Lattice object containing
-                link variables of interest.
-            potential_fn (function, optional): The minus-loglikelihood function
-                describing the target distribution.
-            params (dict, optional): Dictionary containing parameters for
-                initializing the `dynamics` object.
-        Returns:
-            `GaugeDynamicsEager` object.
-        """
-        if lattice is None:
-            lattice = self.lattice
-        if potential_fn is None:
-            potential_fn = self.potential_fn
-        if params is None:
-            params = self.params
-
-        return gde.GaugeDynamicsEager(lattice=lattice,
-                                      num_steps=params.get('num_steps', 5),
-                                      eps=params.get('eps', 0.1),
-                                      minus_loglikelihood_fn=potential_fn,
-                                      conv_net=conv_net,
-                                      hmc=hmc)
-
-    def calc_observables(self, samples, _print=True, _write=True):
+    def calc_observables(self, samples, update=True):
         """
         Calculate observables of interest for each sample in `samples`.
         
@@ -374,7 +372,8 @@ class GaugeModelEager(object):
                             [total_actions_2, avg_plaqs_2, top_charges_2],
                             [     ...            ...            ...     ],
                             [total_actions_M, avg_plaqs_M, top_charges_M],
-         """
+        """
+        #  observables = np.array(self._calc_observables(samples)).T
         observables = np.array(self.lattice.calc_plaq_observables(samples)).T
 
         if tf.executing_eagerly():
@@ -385,18 +384,8 @@ class GaugeModelEager(object):
             avg_plaquettes = observables[:, 1]
             top_charges = observables[:, 2]
 
-        self._update_data(total_actions, avg_plaquettes, top_charges)
-
-        if _print:
-            print_run_data(self.data)
-
-        if _write:
-            if self.global_step.numpy() > 1:
-                write_mode = 'a'
-            else:
-                write_mode = 'w'
-
-            write_run_data(self.files['run_info_file'], self.data, write_mode)
+        if update:
+            self._update_data(total_actions, avg_plaquettes, top_charges)
 
         return total_actions, avg_plaquettes, top_charges
 
@@ -436,14 +425,18 @@ class GaugeModelEager(object):
         self.checkpointer.restore(latest_path)
         print("Restored latest checkpoint from:\"{}\"".format(latest_path))
 
-        params_pkl_file = os.path.join(run_info_dir, 'parameters.pkl')
-        with open(params_pkl_file, 'rb') as f:
+        #  params_pkl_file = os.path.join(run_info_dir, 'parameters.pkl')
+        with open(self.files['parameters_pkl_file'], 'rb') as f:
             self.params = pickle.load(f)
         self._init_params(self.params)
 
-        data_pkl_file = os.path.join(run_info_dir, 'data.pkl')
-        with open(data_pkl_file, 'rb') as f:
+        #  data_pkl_file = os.path.join(run_info_dir, 'data.pkl')
+        with open(self.files['data_pkl_file'], 'rb') as f:
             self.data = pickle.load(f)
+
+        #  samples_pkl_file = os.path.join(self.run_info_dir, 'samples.pkl')
+        with open(self.files['samples_pkl_file'], 'rb') as f:
+            self.samples = pickle.load(f)
 
         total_actions_arr = np.load(os.path.join(run_info_dir,
                                                  'total_actions.npy'))
@@ -457,19 +450,84 @@ class GaugeModelEager(object):
                           average_plaquettes_arr,
                           topological_charges_arr)
 
+        _, _, _, self.samples = self.dynamics.apply_transition(self.samples)
+
+        if not self.hmc:
+            self.dynamics.position_fn.load_weights(
+                os.path.join(self.log_dir, 'position_model_weights.h5')
+            )
+
+            self.dynamics.momentum_fn.load_weights(
+                os.path.join(self.log_dir, 'momentum_model_weights.h5')
+            )
         sys.stdout.flush()
 
-    def train(self, num_train_steps, keep_samples=False):
+    def _save_model(self, samples=None):
+        """Save run `data` to `files` in `log_dir` using `checkpointer`"""
+        if samples is None:
+            samples = self.samples
+
+        saved_path = self.checkpointer.save(
+            file_prefix=os.path.join(self.log_dir, 'ckpt')
+        )
+        print('\n')
+        print(f"Saved checkpoint to: {saved_path}")
+        print('\n')
+
+        if not self.hmc:
+            self.dynamics.position_fn.save_weights(
+                os.path.join(self.log_dir, 'position_model_weights.h5')
+            )
+            self.dynamics.momentum_fn.save_weights(
+                os.path.join(self.log_dir, 'momentum_model_weights.h5')
+            )
+
+        np.save(self.files['average_plaquettes_file'],
+                self.data['average_plaquettes_arr'])
+        np.save(self.files['total_actions_file'],
+                self.data['total_actions_arr'])
+        np.save(self.files['topological_charges_file'],
+                self.data['topological_charges_arr'])
+
+        with open(self.files['data_pkl_file'], 'wb') as f:
+            pickle.dump(self.data, f)
+        with open(self.files['parameters_pkl_file'], 'wb') as f:
+            pickle.dump(self.params, f)
+        with open(self.files['samples_pkl_file'], 'wb') as f:
+            pickle.dump(samples, f)
+
+    def _write_summaries(self, summary_writer=None):
+        """Write summary objects for TensorBoard logging."""
+        if summary_writer is None:
+            summary_writer = self.summary_writer
+
+        step = self.data['step']
+        with summary_writer.as_default():
+            with tf.contrib.summary.always_record_summaries():
+                tf.contrib.summary.scalar(
+                    'Training_loss', self.data['loss'], step=step
+                )
+                tf.contrib.summary.scalar(
+                    'avg_action', self.data['avg_action'], step=step
+                )
+                tf.contrib.summary.scalar(
+                    'avg_plaquette', self.data['avg_plaq'], step=step
+                )
+                tf.contrib.summary.scalar(
+                    'avg_top_charge', self.data['avg_top_charge'], step=step
+                )
+
+    #  @profile(stream=fp)
+    def train(self, num_train_steps):
         """Run the training procedure of the L2HMC algorithm."""
         start_step = self.global_step.numpy()
-        #  start_time = time.time()
 
         samples = self.samples
         self.data['train_steps'] = num_train_steps
 
-        #  if self._defun:
-        #      train_one_iter = tfe.defun(train_one_iter)
-
+        #  start_step_time = time.time()
+        #  train_start_time = time.time()
+        print(helpers.data_header(test_flag=True))
         for step in range(start_step, num_train_steps):
             start_step_time = time.time()
 
@@ -480,49 +538,51 @@ class GaugeModelEager(object):
                 loss_fn=self.loss_fn,
                 global_step=self.global_step,
                 params=self.params,
-                hmc=self.hmc
+                hmc=self.hmc,
+                defun=self._defun
             )
 
-            self.data['step'] = step
-            #  self.data['learning_rate'] = self.learning_rate
-            self.data['loss'] = loss.numpy()
-            self.data['step_time'] = time.time() - start_step_time
-            self.data['accept_prob'] = accept_prob.numpy().mean()
-            self.data['eps'] = self.dynamics.eps.numpy()
+            if step % self.data_steps == 0:
+                self.data['step_time'] = (
+                    (time.time() - start_step_time)
+                    / (self.num_steps * self.batch_size)
+                )
 
-            self.step_times_arr.append(self.data['step_time'])
-            self.steps_arr.append(step)
+                self.data['step'] = step
+                self.data['loss'] = loss.numpy()
+                self.data['accept_prob'] = accept_prob.numpy().mean()
+                self.data['eps'] = self.dynamics.eps.numpy()
 
-            if keep_samples:
-                self.data['samples'] = samples.numpy()
-                #  self.data['gradients'] = grads.numpy()
+                self.step_times_arr.append(self.data['step_time'])
+                self.steps_arr.append(step)
 
-            # pylint: disable=bad-option-value
-            _ = self.calc_observables(samples,
-                                      _print=True,
-                                      _write=True)
-            #                            _print=True,
-            #                            _write=True)
+                # pylint: disable=bad-option-value
+                _ = self.calc_observables(samples, update=True)
+
+                helpers.print_run_data(self.data)
+                helpers.write_run_data(self.files['run_info_file'],
+                                       self.data)
 
             if step % self.logging_steps == 0:
-                write_summaries(self.summary_writer, self.data)
+                self._write_summaries()
+                #  write_summaries(self.summary_writer, self.data)
 
             if step % self.save_steps == 0:
-                save_run_data(self.checkpointer,
-                              self.log_dir,
-                              self.files,
-                              self.data,
-                              self.params)
+                self._save_model(samples=samples)
+                header = helpers.data_header(test_flag=True)
+                print(header)
+                #  helpers.save_run_data(self.checkpointer,
+                #                self.log_dir,
+                #                self.files,
+                #                self.data,
+                #                self.params)
 
         print("Training complete.")
         sys.stdout.flush()
-        save_run_data(self.checkpointer,
-                      self.log_dir,
-                      self.files,
-                      self.data,
-                      self.params)
+        self._save_model(samples=samples)
 
 
+#  @profile(stream=fp)
 def main(args):
     """Main method for creating/training U(1) gauge model from command line."""
     tf.enable_eager_execution()
@@ -562,19 +622,16 @@ def main(args):
 
     #  import pdb
     #  pdb.set_trace()
-
-    observables = model.calc_observables(model.samples,
-                                         _print=True,
-                                         _write=True)
-
-
-
     start_time_str = time.strftime("%a, %d %b %Y %H:%M:%S",
                                    time.gmtime(time.time()))
     print(f"Training began at: {start_time_str}.")
-    model.train(args.train_steps, args.keep_samples)
+    observables = model.calc_observables(model.samples, update=True)
 
-if __name__ == '__main__':
+    model.train(args.train_steps)
+
+
+
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=('L2HMC model using Mixture of Gaussians '
                      'for target distribution')
@@ -606,7 +663,7 @@ if __name__ == '__main__':
                               "training. (Default: 2)"))
 
     parser.add_argument("-n", "--num_steps", type=int,
-                        default=5, required=False, dest="num_steps",
+                        default=10, required=False, dest="num_steps",
                         help=("Number of leapfrog steps to use in (augmented) "
                               "HMC sampler. (Default: 5)"))
 
@@ -627,24 +684,12 @@ if __name__ == '__main__':
                               "If this argument is passed, a `log_dir` "
                               "must be specified and passed to `--log_dir` "
                               "argument. (Default: False)"))
-    #  parser.add_argument("--restore", type=bool, default=False,
-    #                      required=False, dest="restore",
-    #                      help=("Restore model from previous run. "
-    #                            "If this argument is passed, a `log_dir` "
-    #                            "must be specified and passed to `--log_dir` "
-    #                            "argument. (Default: False)"))
 
     parser.add_argument("--defun", action="store_false",
                         required=False, dest="defun",
                         help=("Whether or not to use `tfe.defun` to compile "
                               "functions as a graph to speed up computations. "
                               "(Default: True)"))
-
-    #  parser.add_argument("--defun", type=bool, default=True,
-    #                      required=False, dest="defun",
-    #                      help=("Whether or not to use `tfe.defun` to compile "
-    #                            "functions as a graph to speed up computations. "
-    #                            "(Default: True)"))
 
     parser.add_argument("--loss_scale", type=float, default=0.1,
                         required=False, dest="loss_scale",
@@ -681,6 +726,7 @@ if __name__ == '__main__':
                         required=False, dest="record_loss_every",
                         help=("Number of steps after which to record loss "
                               "value (Default: 20)"))
+
     parser.add_argument("--data_steps", type=int, default=10,
                         required=False, dest="data_steps",
                         help=("Number of steps after which to compute and "
@@ -712,10 +758,6 @@ if __name__ == '__main__':
                         required=False, dest="rand",
                         help=("Start lattice from randomized initial "
                               "configuration. (Default: False)"))
-    #  parser.add_argument("--rand", type=bool, default=False,
-    #                      required=False, dest="rand",
-    #                      help=("Start lattice from randomized initial "
-    #                            "configuration. (Default: False)"))
 
     parser.add_argument("--metric", type=str, default="l2",
                         required=False, dest="metric",
@@ -728,12 +770,6 @@ if __name__ == '__main__':
                               "neural network for pre-processing lattice "
                               "configurations (prepended to generic FC net "
                               "as outlined in paper). (Default: False)"))
-    #  parser.add_argument("--conv_net", type=bool, default=True,
-    #                      required=False, dest="conv_net",
-    #                      help=("Whether or not to use convolutional "
-    #                            "neural network for pre-processing lattice "
-    #                            "configurations (prepended to generic FC net "
-    #                            "as outlined in paper). (Default: True)"))
 
     parser.add_argument("--hmc", action="store_true",
                         required=False, dest="hmc",
@@ -742,22 +778,11 @@ if __name__ == '__main__':
                               "comparing against L2HMC algorithm. "
                               "(Default: False)"))
 
-    #  parser.add_argument("--hmc", type=bool, default=False,
-    #                      required=False, dest="hmc",
-    #                      help=("Use generic HMC (without augmented leapfrog "
-    #                            "integrator described in paper). Used for "
-    #                            "comparing against L2HMC algorithm. "
-    #                            "(Default: False)"))
-
-    parser.add_argument("--keep_samples", action="store_true",
-                        required=False, dest="keep_samples",
-                        help=("Keep samples output from L2HMC algorithm "
-                              "during training iterations. (Default: False)"))
-
-    #  parser.add_argument("--keep_samples", type=bool, default=False,
+    #  parser.add_argument("--keep_samples", action="store_true",
     #                      required=False, dest="keep_samples",
     #                      help=("Keep samples output from L2HMC algorithm "
     #                            "during training iterations. (Default: False)"))
+
 
     args = parser.parse_args()
 
