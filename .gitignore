@@ -29,3 +29,5 @@ tf_eager_log/
 timing_logs/
 gauge_logs/
 gauge_logs_eager/
+backups/
+gauge_logs_graph/
