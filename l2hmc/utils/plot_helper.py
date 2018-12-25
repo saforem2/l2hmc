@@ -2,12 +2,12 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
-try:
-    plt.style.use('/Users/saforem2/.config/matplotlib/'
-                   + 'stylelib/ggplot_sam.mplstyle')
-
-except:
-    plt.style.use('ggplot')
+#  try:
+#      plt.style.use('/Users/saforem2/.config/matplotlib/'
+#                     + 'stylelib/ggplot_sam.mplstyle')
+#
+#  except:
+#      plt.style.use('ggplot')
 plt.rcParams['xtick.direction'] = 'in'
 plt.rcParams['ytick.direction'] = 'in'
 plt.rcParams['xtick.major.pad'] = 3.5
@@ -17,14 +17,76 @@ plt.rcParams['xtick.minor.pad'] = 3.4
 plt.rcParams['xtick.minor.size'] = 2.0
 plt.rcParams['xtick.minor.width'] = 0.6
 
-colors = ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9']
-markers = ['o', 's', 'x', 'v', 'h', '^', 'p', '<', 'd', '>', 'o']
-linestyles = ['-', '--', ':', '-.', '-', '--', ':', '-.', '-', '--']
-linestyles = 10 * ['']
+COLORS = ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9']
+MARKERS = ['o', 's', 'x', 'v', 'h', '^', 'p', '<', 'd', '>', 'o']
+LINESTYLES = ['-', '--', ':', '-.', '-', '--', ':', '-.', '-', '--']
+#  linestyles = 10 * ['']
 #  linestyles = ['-', '--', ':', '-.', '-', '--', ':', '-.', '-', '--']
-markersize = 3
+MARKERSIZE = 3
 
 
+# pylint: disable=too-many-arguments
+def plot_broken_xaxis(xdata, 
+                      ydata, 
+                      xlabel, 
+                      ylabel, 
+                      output_file=None,
+                      xlim1=(-2, 100),
+                      xlim2=(398, 500)):
+    """Create plot with a broken x-axis."""
+    # pylint: disable=invalid-name
+    fig, (ax, ax2) = plt.subplots(1, 2, sharey=True, facecolor='w')
+    # plot the same data on both axes
+    for idx in range(ydata.shape[1]):
+        _ = ax.plot(xdata, ydata[:, idx], marker='', ls='-',
+                    alpha=0.7, lw=1.5, label=f'sample {idx}')
+
+    _ = ax.plot(xdata, ydata.mean(axis=1), marker='', ls='-',
+                color='k', lw=2., label='average')
+
+    for idx in range(ydata.shape[1]):
+        _ = ax2.plot(xdata, ydata[:, idx], marker='', ls='-',
+                     alpha=0.7, lw=1.5, label=f'sample {idx}')
+
+    _ = ax2.plot(xdata, ydata.mean(axis=1), marker='', ls='-',
+                 color='k', lw=2., label='average')
+
+    # zoom-in / limit the view to different portions of the data
+    _ = ax.set_xlim(xlim1)
+    _ = ax2.set_xlim(xlim2)
+
+    # hide the spines between ax and ax2
+    _ = ax.spines['right'].set_visible(False)
+    _ = ax2.spines['left'].set_visible(False)
+    _ = ax.yaxis.tick_left()
+    _ = ax.tick_params(labelright=False)
+    _ = ax2.yaxis.tick_right()
+
+    # pylint: disable=invalid-name
+    d = 0.015  # how big to make the diagonal lines in axes coordinates
+    # arguments to pass plot, just so we don't keep repeating them
+    kwargs = dict(transform=ax.transAxes, color='k', clip_on=False)
+    _ = ax.plot((1-d, 1+d), (-d, +d), **kwargs)
+    _ = ax.plot((1-d, 1+d), (1-d, 1+d), **kwargs)
+
+    _ = kwargs.update(transform=ax2.transAxes)  # switch to the bottom axes
+    _ = ax2.plot((-d, +d), (1-d, 1+d), **kwargs)
+    _ = ax2.plot((-d, +d), (-d, +d), **kwargs)
+
+    _ = ax.set_ylabel(ylabel, fontsize=14)
+    _ = ax.set_xlabel(xlabel, fontsize=14)
+    _ = ax.xaxis.set_label_coords(1.1, -0.065)
+    _ = ax2.legend(loc='best', fontsize=10)
+
+    _ = plt.show()  # pylint: disable=F841
+
+    if output_file is not None:
+        fig.savefig(output_file, dpi=400, bbox_inches='tight')
+
+    return fig, ax, ax2
+
+
+# pylint: disable=too-many-statements,too-many-locals
 def errorbar_plot(x_data, y_data, y_errors, out_file=None, **kwargs):
     """Create a single errorbar plot."""
     x = np.array(x_data)
@@ -62,8 +124,8 @@ def errorbar_plot(x_data, y_data, y_errors, out_file=None, **kwargs):
         fig, axes = plt.subplots(num_entries, sharex=True)
         for idx, ax in enumerate(axes):
             ax.errorbar(x[idx], y[idx], yerr=y_err[idx],
-                        color=colors[idx], ls=linestyles[idx],
-                        marker=markers[idx], markersize=markersize,
+                        color=COLORS[idx], ls=LINESTYLES[idx],
+                        marker=MARKERS[idx], markersize=markersize,
                         fillstyle=fillstyle, alpha=alpha,
                         capsize=capsize, capthick=capthick,
                         label=legend_labels[idx])
@@ -85,8 +147,8 @@ def errorbar_plot(x_data, y_data, y_errors, out_file=None, **kwargs):
     else:
         fig, ax = plt.subplots()
         ax.errorbar(x, y, yerr=y_err[idx],
-                    color=colors[0], marker=markers[0],
-                    ls=linestyles[0], fillstyle='full',
+                    color=COLORS[0], marker=MARKERS[0],
+                    ls=LINESTYLES[0], fillstyle='full',
                     capsize=1.5, capthick=1.5, alpha=0.75,
                     label=legend_labels[0])
         ax.set_xlabel(x_label, fontsize=14)
@@ -108,7 +170,10 @@ def errorbar_plot(x_data, y_data, y_errors, out_file=None, **kwargs):
     else: 
         return fig, ax
 
+
+# pylint: disable=too-many-statements,too-many-locals
 def annealing_schedule_plot(**kwargs):
+    """Plot annealing schedule."""
     train_steps = kwargs.get('num_training_steps')
     temp_init = kwargs.get('temp_init')
     annealing_factor = kwargs.get('annealing_factor')
@@ -149,4 +214,3 @@ def annealing_schedule_plot(**kwargs):
     plt.savefig(figs_dir + 'annealing_schedule.pdf',
                 dpi=400, bbox_inches='tight')
     return fig, ax
-

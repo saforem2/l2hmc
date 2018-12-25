@@ -19,7 +19,40 @@ except ImportError:
 from definitions import ROOT_DIR
 
 from lattice.gauge_lattice import u1_plaq_exact
-from utils.tf_logging import make_run_dir
+#  from utils.tf_logging import make_run_dir
+
+
+def get_run_num(log_dir):
+    """Determine the next sequential number to use for new run directory."""
+    if not os.path.isdir(log_dir):
+        os.makedirs(log_dir)
+    contents = os.listdir(log_dir)
+    if contents == []:
+        return 1
+    else:
+        run_nums = []
+        for item in contents:
+            try:
+                run_nums.append(int(item.split('_')[-1]))
+            except ValueError:
+                continue
+        return sorted(run_nums)[-1] + 1
+
+
+def make_run_dir(log_dir):
+    """Create directory for new run called `run_num` where `num` is unique."""
+    if log_dir.endswith('/'):
+        _dir = log_dir
+    else:
+        _dir = log_dir + '/'
+    run_num = get_run_num(_dir)
+    run_dir = _dir + f'run_{run_num}/'
+    if os.path.isdir(run_dir):
+        raise f'Directory: {run_dir} already exists, exiting!'
+    else:
+        print(f'Creating directory for new run: {run_dir}')
+        os.makedirs(run_dir)
+    return run_dir
 
 
 def check_log_dir(log_dir):
@@ -38,7 +71,7 @@ def check_log_dir(log_dir):
     return log_dir, info_dir, figs_dir
 
 
-def create_log_dir(base_name='gauge_logs_eager'):
+def create_log_dir(base_name):
     """Create directory for storing information about experiment."""
     root_log_dir = os.path.join(os.path.split(ROOT_DIR)[0], base_name)
     log_dir = make_run_dir(root_log_dir)
@@ -51,14 +84,23 @@ def create_log_dir(base_name='gauge_logs_eager'):
     return log_dir, info_dir, figs_dir
 
 
-def write_run_data(file_path, data, write_mode='a'):
+def print_run_data(data, header=False):
+    """Print information about current run to std out."""
+    data_str = format_run_data(data)
+    if header:
+        header = data_header(test_flag=True)
+        print(header)
+    print(data_str)
+
+
+def write_run_data(file_path, data):
     """Write run `data` to human-readable file at `file_path`."""
     data_str = format_run_data(data)
     header = ''
     step = data['step']
     if step == 1 or step % 100 == 0:
         header = data_header(test_flag=True)
-    with open(file_path, write_mode) as f:
+    with open(file_path, 'a') as f:
         f.write(header)
         f.write('\n')
         f.write(data_str)
@@ -117,17 +159,6 @@ def format_run_data(data):
     return data_str
 
 
-def print_run_data(data):
-    """Print information about current run to std out."""
-    data_str = format_run_data(data)
-    step = data['step']
-    if step == 1 or step % 100 == 0:
-        header = data_header(test_flag=True)
-        print(header)
-    print(data_str)
-    print('\n')
-
-
 def _plot_data(x_data, y_data, x_label, y_label, skip_steps=1):
     """Create plot consisting of `x_data`, `y_data` with x and y labels. 
 
@@ -142,9 +173,9 @@ def _plot_data(x_data, y_data, x_label, y_label, skip_steps=1):
         label_str = f"sample {sample} (avg: {np.mean(y_data[:, sample]):^5.4g})"
         ax.plot(x_data[::skip_steps], y_data[:, sample][::skip_steps],
                 marker='', ls='-', label=label_str)
-    ax.set_xlabel(x_label)
-    ax.set_ylabel(y_label)
-    ax.legend(loc='best')
+    ax.set_xlabel(x_label, fontsize=14)
+    ax.set_ylabel(y_label, fontsize=14)
+    ax.legend(loc='best', fontsize=10)
 
     return fig, ax
 
@@ -190,7 +221,7 @@ def plot_run_data(data, params, steps_arr, out_dir, skip_steps=1):
     print('done.')
 
 
-def save_run_data(checkpointer, log_dir, files, data, params):
+def save_run_data(checkpointer, log_dir, files, data, samples, params):
     """Save run `data` to `files` in `log_dir` using `checkpointer`"""
     saved_path = checkpointer.save(file_prefix=os.path.join(log_dir, "ckpt"))
     print(f"Saved checkpoint to: {saved_path}")
@@ -203,3 +234,5 @@ def save_run_data(checkpointer, log_dir, files, data, params):
         pickle.dump(data, f)
     with open(files['parameters_pkl_file'], 'wb') as f:
         pickle.dump(params, f)
+    with open(file['samples_pkl_file'], 'wb') as f:
+        pickle.dump(samples, f)
