@@ -11,6 +11,7 @@ import pickle
 import argparse
 import numpy as np
 import tensorflow as tf
+import utils.gauge_model_helpers as helpers
 
 try:
     import matplotlib.pyplot as plt
@@ -18,14 +19,13 @@ try:
 except ImportError:
     HAS_MATPLOTLIB = False
 
-from scipy.special import i0, i1 # pylint: disable=no-name-in-module
 
 from l2hmc_eager import gauge_dynamics_eager as gde
-from l2hmc_eager.neural_nets import ConvNet, GenericNet
-from definitions import ROOT_DIR
+#  from l2hmc_eager.neural_nets import ConvNet, GenericNet
+#  from definitions import ROOT_DIR
 from lattice.gauge_lattice import GaugeLattice, u1_plaq_exact
-from utils.tf_logging import variable_summaries, get_run_num, make_run_dir
-import utils.gauge_model_helpers as helpers
+#  from utils.tf_logging import variable_summaries, get_run_num, make_run_dir
+from utils.plot_helper import plot_broken_xaxis
 #  from utils.gauge_model_helpers import *
 
 
@@ -63,6 +63,8 @@ PARAMS = {
 ##############################################################################
 # Helper functions etc.
 ##############################################################################
+
+
 def write_summaries(summary_writer, data):
     """Write `summaries` using `summary_writer` for use in TensorBoard."""
     with summary_writer.as_default():
@@ -126,6 +128,7 @@ def train_one_iter(dynamics, samples, optimizer,
 
     return loss, samples_out, accept_prob, grads
 
+
 def graph_step(dynamics, samples, optimizer, loss_fn, 
                params,  global_step=None, hmc=False):
     """Perform a single training step using a compiled TensorFlow graph."""
@@ -146,16 +149,24 @@ def graph_step(dynamics, samples, optimizer, loss_fn,
 
     return train_op, loss, samples_out, accept_prob, grads
 
+
 class GaugeModel(object):
     """Wrapper class implementing L2HMC algorithm on lattice gauge models. """
     def __init__(self,
                  params=None,
+                 sess=None,
+                 config=None,
                  conv_net=True,
                  hmc=False,
                  log_dir=None,
-                 restore=False):
+                 restore=False,
+                 eps_trainable=True):
+        """Initialization method."""
 
         tf.enable_resource_variables()
+
+        if config is None:
+            config = tf.ConfigProto()
 
         if log_dir is None:
             dirs = helpers.create_log_dir('gauge_logs_graph')
@@ -164,74 +175,69 @@ class GaugeModel(object):
 
         self.log_dir, self.info_dir, self.figs_dir = dirs
 
-        if restore:
-            self.restore_model(log_dir)
-        else:
-            self.summary_writer = (
-                tf.contrib.summary.create_file_writer(self.log_dir)
-            )
-            self.params = params
-            self.data = {}
-            self.conv_net = conv_net
-            self.hmc = hmc
+        self.summary_writer = (
+            tf.contrib.summary.create_file_writer(self.log_dir)
+        )
+        self.params = params
+        self.data = {}
+        self.conv_net = conv_net
+        self.hmc = hmc
 
-            self._init_params(params, log_dir)
+        self._init_params(params)
 
-        self.lattice = self._create_lattice(self.params)
+        self.lattice = GaugeLattice(time_size=self.time_size,
+                                    space_size=self.space_size,
+                                    dim=self.dim,
+                                    beta=self.beta,
+                                    link_type=self.link_type,
+                                    num_samples=self.num_samples,
+                                    rand=self.rand)
+
         self.batch_size = self.lattice.samples.shape[0]
 
-        if self.conv_net:
-            self.samples_np = np.array(self.lattice.samples, dtype=np.float32)
-            #  self.samples = tf.convert_to_tensor(
-            #      self.samples_np, dtype=tf.float32
-            #  )
-            #  self.samples = tf.convert_to_tensor(
-            #      self.lattice.samples, dtype=tf.float32
-            #  )
-        else:
-            self.samples_np = np.array(
-                self.lattice.samples.reshape((self.batch_size, -1)),
-                dtype=np.float32
-            )
-            #  self.samples = tf.convert_to_tensor(
-            #      self.lattice.samples.reshape((self.batch_size, -1)),
-            #      dtype=tf.float32
-            #  )
-        self.samples = tf.convert_to_tensor(self.samples_np, dtype=tf.float32)
+        self.samples_np = np.array(self.lattice.samples, dtype=np.float32)
+        self.samples = tf.convert_to_tensor(
+            self.lattice.samples, dtype=tf.float32
+        )
+        self.x = tf.placeholder(dtype=tf.float32,
+                                shape=self.samples.shape,
+                                name='x')
 
         self.potential_fn = self.lattice.get_energy_function(self.samples)
 
-        self.dynamics = self._create_dynamics(lattice=self.lattice,
-                                              potential_fn=self.potential_fn,
-                                              conv_net=self.conv_net,
-                                              hmc=self.hmc,
-                                              params=self.params)
-
-        self.global_step = tf.train.get_or_create_global_step()
-        self.global_step.assign(1)
-
-        self.learning_rate = tf.train.exponential_decay(
-            self.learning_rate_init,
-            self.global_step,
-            self.learning_rate_decay_steps,
-            self.learning_rate_decay_rate,
-            staircase=True
+        self.dynamics = gde.GaugeDynamicsEager(
+            lattice=self.lattice,
+            num_steps=self.num_steps,
+            eps=self.eps,
+            minus_loglikelihood_fn=self.potential_fn,
+            conv_net=self.conv_net,
+            hmc=self.hmc,
+            eps_trainable=eps_trainable
         )
 
-        with tf.name_scope('train'):
-            self.optimizer = tf.train.AdamOptimizer(self.learning_rate)
+        if restore:
+            self._restore_model(self.log_dir)
 
-        self.loss_fn = gde.compute_loss
+        else:
+            self.global_step = tf.train.get_or_create_global_step()
+            self.global_step.assign(1)
+            tf.add_to_collection('global_step', self.global_step)
 
-        print(80*'#')
-        print('Model parameters:')
-        for key, val in self.__dict__.items():
-            if isinstance(val, (int, float, str)):
-                print(f'{key}: {val}\n')
-        print(80*'#')
-        print('\n')
+            self.learning_rate = tf.train.exponential_decay(
+                self.learning_rate_init,
+                self.global_step,
+                self.learning_rate_decay_steps,
+                self.learning_rate_decay_rate,
+                staircase=True
+            )
 
-    def _init_params(self, params=None, log_dir=None):
+            self.build_graph()
+            if sess is None:
+                self.sess = tf.Session(config=config)
+            else:
+                self.sess = sess
+
+    def _init_params(self, params=None):
         """Parse key value pairs from params and set as class attributes."""
         if params is None:
             params = PARAMS
@@ -277,9 +283,12 @@ class GaugeModel(object):
 
         self.files = {
             'parameters_file': os.path.join(self.info_dir, 'parameters.txt'),
-            'samples_file': os.path.join(self.info_dir, 'samples.npy'),
             'run_info_file': os.path.join(self.info_dir, 'run_info.txt'),
             'data_pkl_file': os.path.join(self.info_dir, 'data.pkl'),
+            'samples_pkl_file': os.path.join(self.info_dir, 'samples.pkl'),
+            'samples_history_file': (
+                os.path.join(self.info_dir, 'samples_history.pkl')
+            ),
             'parameters_pkl_file': (
                 os.path.join(self.info_dir, 'parameters.pkl')
             ),
@@ -296,71 +305,44 @@ class GaugeModel(object):
 
         helpers.write_run_parameters(self.files['parameters_file'],
                                      self.params)
+        print(80*'#')
+        print('Model parameters:')
+        for key, val in self.__dict__.items():
+            if isinstance(val, (int, float, str)):
+                print(f'{key}: {val}\n')
+        print(80*'#')
+        print('\n')
 
-    def _create_lattice(self, params=None):
-        if params is None:
-            params = self.params
-
-        return GaugeLattice(time_size=params.get('time_size', 8),
-                            space_size=params.get('space_size', 8),
-                            dim=params.get('dim', 2),
-                            beta=params.get('beta', '2.5'),
-                            link_type=params.get('link_type', 'U1'),
-                            num_samples=params['num_samples'],
-                            rand=params['rand'])
-
-    def _create_dynamics(self, lattice=None, conv_net=True, 
-                         hmc=False, potential_fn=None, params=None):
+    def calc_observables(self, samples, update=True):
         """
-        Delegate creation logic to private methods.
-
-        Args:
-            lattice (:obj:GaugeLattice, optional): Lattice object containing
-                link variables of interest.
-            potential_fn (function, optional): The minus-loglikelihood function
-                describing the target distribution.
-            params (dict, optional): Dictionary containing parameters for
-                initializing the `dynamics` object.
-        Returns:
-            `GaugeDynamicsEager` object.
-        """
-        if lattice is None:
-            lattice = self.lattice
-        if potential_fn is None:
-            potential_fn = self.potential_fn
-        if params is None:
-            params = self.params
-
-        return gde.GaugeDynamicsEager(lattice=lattice,
-                                      num_steps=params.get('num_steps', 5),
-                                      eps=params.get('eps', 0.1),
-                                      minus_loglikelihood_fn=potential_fn,
-                                      conv_net=conv_net,
-                                      hmc=hmc)
-
-    def calc_observables(self, samples):
-        """Calculate observables of interest for each sample in `samples`.
+        Calculate observables of interest for each sample in `samples`.
         
-         NOTE: `observables` is an array containing `total_actions`,
-         `avg_plaquettes`, and `top_charges` for each sample in batch, with
-         one sample per row, i.e. for `M` observations:
-
-             observables = [[total_actions_1, avg_plaqs_1, top_charges_1],
-                            [total_actions_2, avg_plaqs_2, top_charges_2],
-                            [     ...            ...            ...     ],
-                            [total_actions_M, avg_plaqs_M, top_charges_M],
+         NOTE: 
+             `observables` is an array containing `total_actions`,
+             `avg_plaquettes`, and `top_charges` for each sample in batch, with
+             one sample per row, i.e. for `M` observations:
+                 observables = [[total_actions_1, avg_plaqs_1, top_charges_1],
+                                [total_actions_2, avg_plaqs_2, top_charges_2],
+                                [     ...            ...            ...     ],
+                                [total_actions_M, avg_plaqs_M, top_charges_M],
         """
-        observables = np.array(self.lattice.calc_plaq_observables(samples)).T
+        with tf.name_scope('observables'):
+            observables = self.lattice.calc_plaq_observables(samples)
+            _actions, _plaqs, _charges = observables
+            #  observables = np.array(observables).reshape((-1, 3))
 
-        if tf.executing_eagerly():
-            total_actions, avg_plaquettes, top_charges = observables
-        else:
-            observables = observables.reshape((-1, 3))
-            total_actions = observables[:, 0]
-            avg_plaquettes = observables[:, 1]
-            top_charges = observables[:, 2]
+        #  if tf.executing_eagerly():
+        #      total_actions, avg_plaquettes, top_charges = observables
+        #  else:
+        #      #  observables = observables.reshape((-1, 3))
+        #      total_actions = observables[:, 0]
+        #      avg_plaquettes = observables[:, 1]
+        #      top_charges = observables[:, 2]
 
-        return total_actions, avg_plaquettes, top_charges
+        if update:
+            self._update_data(_actions, _plaqs, _charge)
+
+        return _actions, _plaqs, _charges
 
     def _update_data(self, total_actions, avg_plaquettes, top_charges):
         """Update `self.data` with new values of physical observables."""
@@ -386,56 +368,110 @@ class GaugeModel(object):
 
         self.data['total_actions_arr'] = np.array(self.total_actions_arr)
 
-    def restore_model(self, log_dir=None):
-        if log_dir is not None:
-            assert os.path.isdir(log_dir), (f"log_dir: {log_dir} "
-                                            "does not exist.")
+    def _restore_model(self, log_dir):
+        """Restore model from previous run contained in `log_dir`."""
+        assert os.path.isdir(log_dir), (f"log_dir: {log_dir} does not exist.")
 
-            run_info_dir = os.path.join(log_dir, 'run_info')
-            assert os.path.isdir(run_info_dir), ("run_info_dir: "
-                                                 f"{run_info_dir} "
-                                                 "does not exist.")
+        run_info_dir = os.path.join(log_dir, 'run_info')
+        assert os.path.isdir(run_info_dir), (f"run_info_dir: {run_info_dir}"
+                                             " does not exist.")
 
-        else:
-            log_dir = self.log_dir
-
-        self.summary_writer = tf.contrib.summary.create_file_writer(log_dir)
-
-        saver = tf.train.Saver(max_to_keep=3)
-        self.sess.run(tf.global_variables_initializer())
-        ckpt = tf.train.get_checkpoint_state(log_dir)
-        if ckpt and ckpt.model_checkpoint_path:
-            print("Restoring previous model from: "
-                  f"{ckpt.model_checkpoint_path}")
-            saver.restore(self.sess, ckpt.model_checkpoint_path)
-            print("Model restored.")
-            self.global_step = tf.train.get_global_step()
-
-        params_pkl_file = os.path.join(run_info_dir, 'parameters.pkl')
-        with open(params_pkl_file, 'rb') as f:
+        with open(self.files['parameters_pkl_file'], 'rb') as f:
             self.params = pickle.load(f)
 
         self._init_params(self.params)
 
-        data_pkl_file = os.path.join(run_info_dir, 'data.pkl')
-        with open(data_pkl_file, 'rb') as f:
+        with open(self.files['data_pkl_file'], 'rb') as f:
             self.data = pickle.load(f)
 
-        self.total_actions_arr = list(
-            np.load(os.path.join(run_info_dir, 'total_actions.npy'))
+        with open(self.files['samples_pkl_file'], 'rb') as f:
+            self.samples = pickle.load(f)
+
+        total_actions_arr = np.load(os.path.join(run_info_dir,
+                                                 'total_actions.npy'))
+        average_plaquettes_arr = np.load(
+            os.path.join(run_info_dir, 'average_plaquettes.npy')
         )
-        self.average_plaquettes_arr = list(
-            np.load(os.path.join(run_info_dir, 'average_plaquettes.npy'))
+        topological_charges_arr = np.load(
+            os.path.join(run_info_dir, 'topological_charges.npy')
         )
-        self.topological_charges_arr = list(
-            np.load(os.path.join(run_info_dir, 'topological_charges.npy'))
+        self._update_data(total_actions_arr,
+                          average_plaquettes_arr,
+                          topological_charges_arr)
+
+        self.global_step = tf.train.get_or_create_global_step()
+        self.global_step.assign(1)
+
+        self.global_step = tf.train.get_or_create_global_step()
+        self.learning_rate = tf.train.exponential_decay(
+            self.learning_rate_init,
+            self.global_step,
+            self.learning_rate_decay_steps,
+            self.learning_rate_decay_rate,
+            staircase=True
         )
 
-    def save_model(self, saver, writer, step):
-        """Save current graph and all quantities used in training."""
-        ckpt_file = os.path.join(self.log_dir, 'model.ckpt')
-        saver.save(self.sess, ckpt_file, global_step=step)
-        print(f"Model saved to: {ckpt_file}.")
+        self.summary_writer = tf.contrib.summary.create_file_writer(log_dir)
+        if not tf.executing_eagerly():
+            self.build_graph()
+            try:
+                self.sess = tf.Session(config=self.config)
+            except AttributeError:
+                self.config = tf.ConfigProto()
+                self.sess = tf.Session(config=self.config)
+            saver = tf.train.Saver(max_to_keep=3)
+            self.sess.run(tf.global_variables_initializer())
+            ckpt = tf.train.get_checkpoint_state(log_dir)
+            if ckpt and ckpt.model_checkpoint_path:
+                print("Restoring previous model from: "
+                      f"{ckpt.model_checkpoint_path}")
+                saver.restore(self.sess, ckpt.model_checkpoint_path)
+                print("Model restored.")
+                self.global_step = tf.train.get_global_step()
+        else:
+            latest_path = tf.train.latest_checkpoint(log_dir)
+            self.checkpointer.restore(latest_path)
+            print("Restored latest checkpoint from:\"{}\"".format(latest_path))
+
+        #  _, _, _, self.samples = self.dynamics.apply_transition(self.samples)
+
+        if not self.hmc:
+            if tf.executing_eagerly():
+                self.dynamics.position_fn.load_weights(
+                    os.path.join(self.log_dir, 'position_model_weights.h5')
+                )
+
+                self.dynamics.momentum_fn.load_weights(
+                    os.path.join(self.log_dir, 'momentum_model_weights.h5')
+                )
+        sys.stdout.flush()
+
+    def _save_model(self, samples=None, saver=None, writer=None, step=None):
+        """Save run `data` to `files` in `log_dir` using `checkpointer`"""
+        if samples is None:
+            samples = self.samples
+
+        if not tf.executing_eagerly():
+            ckpt_file = os.path.join(self.log_dir, 'model.ckpt')
+            print(f'Saving checkpoint to: {ckpt_file}\n')
+            saver.save(self.sess, ckpt_file, global_step=step)
+            writer.flush()
+        else:
+            saved_path = self.checkpointer.save(
+                file_prefix=os.path.join(self.log_dir, 'ckpt')
+            )
+            print('\n')
+            print(f"Saved checkpoint to: {saved_path}")
+            print('\n')
+
+        if not self.hmc:
+            if tf.executing_eagerly():
+                self.dynamics.position_fn.save_weights(
+                    os.path.join(self.log_dir, 'position_model_weights.h5')
+                )
+                self.dynamics.momentum_fn.save_weights(
+                    os.path.join(self.log_dir, 'momentum_model_weights.h5')
+                )
 
         np.save(self.files['average_plaquettes_file'],
                 self.data['average_plaquettes_arr'])
@@ -444,53 +480,152 @@ class GaugeModel(object):
         np.save(self.files['topological_charges_file'],
                 self.data['topological_charges_arr'])
 
-        np.save(self.files['samples_file'], self.data['samples'])
-
         with open(self.files['data_pkl_file'], 'wb') as f:
             pickle.dump(self.data, f)
         with open(self.files['parameters_pkl_file'], 'wb') as f:
             pickle.dump(self.params, f)
+        with open(self.files['samples_pkl_file'], 'wb') as f:
+            pickle.dump(samples, f)
+
+
 
         writer.flush()
 
-    def train(self, num_train_steps, keep_samples=False, config=None):
+    def _create_summaries(self):
+        """"Create summary objects for logging in TensorBoard."""
+        with tf.name_scope('summaries'):
+            tf.summary.scalar('loss', self.loss_op)
+            #  tf.summary.histogram('histogram_loss', self.loss_op)
+            #  variable_summaries(self.loss)
+            self.summary_op = tf.summary.merge_all()
+
+    def _create_optimizer(self):
+        """Create optimizer to use during training."""
+        with tf.name_scope('train'):
+            if not self.hmc:
+                clip_value = self.params['clip_value']
+                grads, _ = tf.clip_by_global_norm(
+                    tf.gradients(self.loss_op,
+                                 self.dynamics.trainable_variables),
+                    clip_value
+                )
+                optimizer = tf.train.AdamOptimizer(
+                    learning_rate=self.learning_rate
+                )
+                self.train_op = optimizer.apply_gradients(
+                    zip(grads, self.dynamics.trainable_variables),
+                    global_step=self.global_step,
+                    name='train_op'
+                )
+            else:
+                self.train_op = tf.no_op(name='train_op')  # dummy operation
+
+    def _create_loss(self):
+        """Define loss function to minimize during training."""
+        with tf.name_scope('loss'):
+            scale = self.params['loss_scale']
+
+            #  self.z = tf.random_normal(tf.shape(self.x), name='z')
+            #  z = tf.random_normal(tf.shape(self.x))  # Auxiliary variable
+            outputs = self.dynamics.apply_transition(self.x)
+            #  outputs_z = self.dynamics.apply_transition(z)
+
+            self.x_proposed, _, self.px, self.x_out = outputs
+            #  z_proposed, _, pz, z_out = outputs_z
+
+            self.x_proposed = tf.mod(self.x_proposed, 2*np.pi)
+            self.x_out = tf.mod(self.x_out, 2*np.pi)
+
+            #  z_proposed = tf.mod(z_proposed, 2*np.pi)
+            #  z_out = tf.mod(z_out, 2*np.pi)
+
+            #  outputs = self.dynamics.apply_transition(z)
+            #  z_proposed, _, pz, z_out = outputs
+
+            self.loss_op = tf.Variable(0., trainable=False, name='loss')
+
+            # Squared jump distance
+            x_loss = ((tf.reduce_sum(
+                tf.square(self.x - self.x_proposed),
+                axis=self.dynamics.axes,
+                name='x_loss'
+            ) * self.px) + 1e-4)
+
+            #  z_loss = ((tf.reduce_sum(
+            #      tf.square(z - z_proposed),
+            #      axis=self.dynamics.axes,
+            #      name='z_loss'
+            #  ) * pz) + 1e-4)
+
+            #  self.loss_op = tf.reduce_mean(
+            #      (1. / x_loss + 1. / z_loss) * scale
+            #      - (x_loss - z_loss) / scale, axis=0
+            #  )
+            self.loss_op = tf.reduce_mean(scale / x_loss - x_loss / scale)
+
+    def build_graph(self):
+        """Build graph for TensorFlow."""
+        #  start_time_str = time.strftime("%a, %d %b %Y %H:%M:%S",
+        #                                 time.ctime(time.time()))
+        str0 = f"Building graph... (started at: {time.ctime()})"
+        str1 = "  Creating loss..."
+
+        print(str0)
+        print(str1)
+        with open(self.files['run_info_file'], 'a') as f:
+            f.write(str0 + '\n')
+            f.write(str1 + '\n')
+
+        t0 = time.time()
+        self._create_loss()
+        t1 = time.time()
+
+        str2 = f"    took: {t1 - t0} seconds."
+        str3 = "  Creating optimizer..."
+
+        print(str2)
+        print(str3)
+        with open(self.files['run_info_file'], 'a') as f:
+            f.write(str2 + '\n')
+            f.write(str3 + '\n')
+
+        self._create_optimizer()
+        t2 = time.time()
+
+        str4 = f"    took: {t2 - t1} seconds."
+        str5 = "  Creating summaries..."
+        print(str4)
+        print(str5)
+        with open(self.files['run_info_file'], 'a') as f:
+            f.write(str4 + '\n')
+            f.write(str5 + '\n')
+
+        self._create_summaries()
+
+        str6 = f"    took: {time.time() - t2} seconds."
+        str7 = "done."
+        str8 = f"Time to build graph: {time.time() - t0} seconds."
+        print(str6)
+        print(str7)
+        print(str8)
+        with open(self.files['run_info_file'], 'a') as f:
+            f.write(str6 + '\n')
+            f.write(str7 + '\n')
+            f.write(str8 + '\n')
+            f.write(80 * '-' + '\n')
+
+    def train(self, num_train_steps, kill_sess=True):
         """Train the model."""
         saver = tf.train.Saver(max_to_keep=3)
-
-        samples_np = self.samples_np
-        samples = self.samples
         initial_step = 0
-
-        print("Building graph...")
-        x = tf.placeholder(tf.float32, shape=self.samples.shape)
-
-        loss, _, _ = self.loss_fn(self.dynamics, x, self.params)
-
-
-        train_op, loss, samples_out, accept_prob, _ = graph_step(
-            dynamics=self.dynamics,
-            samples=x,
-            optimizer=self.optimizer,
-            loss_fn=self.loss_fn,
-            params=self.params,
-            global_step=self.global_step,
-            hmc=self.hmc
-        )
-        print('done.\n')
-
-        if config is None:
-            config = tf.ConfigProto()
-
-        self.sess = tf.Session(config=config)
         self.sess.run(tf.global_variables_initializer())
-
         ckpt = tf.train.get_checkpoint_state(self.log_dir)
         time_delay = 0.
         if ckpt and ckpt.model_checkpoint_path:
-            print("Restoring previous model from: "
-                  f"{ckpt.model_checkpoint_path}")
+            print('Restoring previous model from: '
+                  f'{ckpt.model_checkpoint_path}')
             saver.restore(self.sess, ckpt.model_checkpoint_path)
-            print("Model restored.\n")
+            print('Model restored.\n')
             self.global_step = tf.train.get_global_step()
             initial_step = self.sess.run(self.global_step)
             previous_time = self.train_times[initial_step]
@@ -500,94 +635,146 @@ class GaugeModel(object):
         start_time = time.time()
         self.train_times[initial_step] = start_time - time_delay
 
+        # Move attribute look ups outside loop to improve performance
+        loss_op = self.loss_op
+        train_op = self.train_op
+        summary_op = self.summary_op
+        x_out = self.x_out
+        px = self.px
+        learning_rate = self.learning_rate
+        dynamics = self.dynamics
+        samples_np = self.samples_np
         try:
-            print(helpers.data_header())
-            helpers.write_run_data(self.files['run_info_file'], self.data, 'w')
-
-            print("Starting training...\n")
+            print(helpers.data_header(test_flag=True))
             for step in range(initial_step, initial_step + num_train_steps):
                 start_step_time = time.time()
 
-                _, loss_np, samples_np, accept_prob_np, eps_np = self.sess.run(
-                    [train_op, loss, samples_out,
-                     accept_prob, self.dynamics.eps],
-                    feed_dict={x: samples_np}
-                )
+                _, loss_np, samples_np, px_np, lr_np, eps_np = self.sess.run([
+                    train_op,
+                    loss_op,
+                    x_out,
+                    px,
+                    learning_rate,
+                    dynamics.eps
+                ], feed_dict={self.x: samples_np})
 
                 self.data['step'] = step
                 self.data['loss'] = loss_np
-                self.data['accept_prob'] = accept_prob_np
+                self.data['accept_prob'] = px_np
                 self.data['eps'] = eps_np
+                self.data['step_time'] = (
+                    (time.time() - start_step_time)
+                    / (self.num_steps * self.batch_size)
+                )
 
-                self.losses_arr.append(loss_np)
-
-                if keep_samples:
-                    self.data['samples'] = samples_np
+                helpers.print_run_data(self.data)
+                helpers.write_run_data(self.files['run_info_file'], self.data)
 
                 if (step + 1) % self.save_steps == 0:
-                    self.train_times[step+1] = time.time() - time_delay
                     print(helpers.data_header())
-                    self.save_model(saver, writer, step)
+                    #  self.train_times[step+1] = time.time() - time_delay
+                    self._save_model(samples=samples_np,
+                                     saver=saver,
+                                     writer=writer,
+                                     step=step)
                     helpers.write_run_data(self.files['run_info_file'],
-                                           self.data,
-                                           'a')
-
-                if (step + 1) % self.data_steps == 0:
-                    observables = self.calc_observables(samples_np)
-                    total_actions, avg_plaquettes, top_charges = observables
-
-                    _actions_arr = []
-                    _plaqs_arr = []
-                    _charges_arr = []
-                    for i in range(self.batch_size):
-                        action_np, plaqs_np, charges_np = self.sess.run([
-                            total_actions[i],
-                            avg_plaquettes[i],
-                            top_charges[i]
-                        ])
-                        _actions_arr.append(action_np)
-                        _plaqs_arr.append(plaqs_np)
-                        _charges_arr.append(charges_np)
-
-                    self._update_data(_actions_arr,
-                                      _plaqs_arr,
-                                      _charges_arr)
-
-                    helpers.print_run_data(self.data)
-
-                    helpers.write_run_data(self.files['run_info_file'],
-                                           self.data,
-                                           'a')
+                                           self.data)
 
                 if (step + 1) % self.logging_steps == 0:
-                    write_summaries(self.summary_writer, self.data)
+                    summary_str = self.sess.run(summary_op,
+                                                feed_dict={self.x: samples_np})
+                    writer.add_summary(summary_str, global_step=step)
+                    writer.flush()
 
-                self.data['step_time'] = time.time() - start_step_time
+                #  if step % self.data_steps == 0:
+                    #  self.data['step_time'] = (
+                    #      (time.time() - start_step_time)
+                    #      / (self.num_steps * self.batch_size)
+                    #  )
+                    #  self.losses_arr.append(loss_np)
+                    #
+                    #  self.data['step'] = step
+                    #  self.data['loss'] = loss_np
+                    #  self.data['accept_prob'] = px_np
+                    #  self.data['eps'] = eps_np
+                    #
+                    #  self.step_times_arr.append(self.data['step_time'])
+                    #  self.steps_arr.append(step)
+                    #
+                    #  # pylint: disable=bad-option-value
+                    #  observables = self.calc_observables(samples_np,
+                    #                                      update=False)
+                    #
+                    #  total_actions, avg_plaquettes, top_charges = observables
+                    #
+                    #  _actions_arr = []
+                    #  _plaqs_arr = []
+                    #  _charges_arr = []
+                    #  for i in range(self.batch_size):
+                    #      action_np, plaqs_np, charges_np = self.sess.run([
+                    #          total_actions[i],
+                    #          avg_plaquettes[i],
+                    #          top_charges[i]
+                    #      ])
+                    #      _actions_arr.append(action_np)
+                    #      _plaqs_arr.append(plaqs_np)
+                    #      _charges_arr.append(charges_np)
+                    #
+                    #  self._update_data(_actions_arr,
+                    #                    _plaqs_arr,
+                    #                    _charges_arr)
+                    #
+                    #  helpers.print_run_data(self.data)
+                    #  helpers.write_run_data(self.files['run_info_file'],
+                    #                         self.data)
 
             print("Training complete!")
-            sys.stdout.flush()
-            self.save_model(saver, writer, step)
-            helpers.write_run_data(self.files['run_info_file'],
-                                   self.data,
-                                   'a')
+            self._save_model(samples=samples_np,
+                             saver=saver,
+                             writer=writer,
+                             step=step)
 
-            writer.close()
-            self.sess.close()
+            helpers.write_run_data(self.files['run_info_file'], self.data)
+            if kill_sess:
+                writer.close()
+                self.sess.close()
+            sys.stdout.flush()
 
         except (KeyboardInterrupt, SystemExit):
             print("\nKeyboardInterrupt detected! \n"
                   "Saving current state and exiting.\n")
+            self._save_model(samples=samples_np,
+                             saver=saver,
+                             writer=writer,
+                             step=step)
+            if kill_sess:
+                writer.close()
+                self.sess.close()
 
-            self.save_model(saver, writer, step)
-            writer.close()
-            self.sess.close()
+    def run(self, num_steps):
+        """Run the simulation to generate samples and calculate observables."""
+        samples = np.random.randn(*self.samples.shape)
+        samples_history = []
+
+        print(f"Running (trained) L2HMC sampler for {num_steps} steps...")
+        for step in range(num_steps):
+            t0 = time.time()
+            samples = self.sess.run(self.x_out, feed_dict={self.x: samples})
+            print(f'step: {step:^6.4g}  '
+                  f'model invariant time / step: {time.time() - t0:^6.4g}')
+            samples_history.append(samples)
+
+        with open(self.files['samples_history_file'], 'wb') as f:
+            pickle.dump(samples_history, f)
+
+        print(f"done. Samples saved to: {self.files['samples_history_file']}.")
+
+        return samples_history
 
 
 
 def main(args):
     """Main method for creating/training U(1) gauge model from command line."""
-    #  tf.enable_eager_execution()
-
     params = PARAMS  # use default parameters if no command line args passed
 
     params['time_size'] = args.time_size
@@ -599,38 +786,73 @@ def main(args):
     params['num_steps'] = args.num_steps
     params['eps'] = args.eps
     params['loss_scale'] = args.loss_scale
-    params['loss_eps'] = args.loss_eps
     params['learning_rate_init'] = args.learning_rate_init
     params['learning_rate_decay_rate'] = args.learning_rate_decay_rate
     params['train_steps'] = args.train_steps
-    params['record_loss_every'] = args.record_loss_every
     params['data_steps'] = args.data_steps
     params['save_steps'] = args.save_steps
-    params['print_steps'] = args.print_steps
     params['logging_steps'] = args.logging_steps
     params['clip_value'] = args.clip_value
     params['rand'] = args.rand
     params['metric'] = args.metric
 
+    config = tf.ConfigProto()
+
+    eps_trainable = True
+
+    if args.hmc:
+        eps_trainable = False
+
     model = GaugeModel(params=params,
+                       config=config,
+                       sess=None,
                        conv_net=args.conv_net,
                        hmc=args.hmc,
                        log_dir=args.log_dir,
                        restore=args.restore,
-                       defun=args.defun)
+                       eps_trainable=eps_trainable)
 
-    #  import pdb
-    #  pdb.set_trace()
+    #  start_time_str = time.strftime("%a, %d %b %Y %H:%M:%S",
+    #                                 time.ctime(time.time()))
 
-    #  observables = model.calc_observables(model.samples,
-    #                                       _print=True,
-    #                                       _write=True)
+    print(f"Training began at: {time.ctime()}")
 
+    model.train(args.train_steps, kill_sess=False)
 
-    start_time_str = time.strftime("%a, %d %b %Y %H:%M:%S",
-                                   time.gmtime(time.time()))
-    print(f"Training began at: {start_time_str}.")
-    model.train(args.train_steps, args.keep_samples)
+    _ = model.run(500)
+
+    model.sess.close()
+
+    #  lattice = GaugeLattice(model.lattice.time_size,
+    #                         model.lattice.space_size,
+    #                         model.lattice.dim,
+    #                         model.lattice.beta,
+    #                         model.lattice.link_type,
+    #                         model.lattice.num_samples,
+    #                         model.lattice.rand)
+    #  actions_history = []
+    #  plaquettes_history = []
+    #  charges_history = []
+    #  for idx, sample in enumerate(samples_history):
+    #      t0 = time.time()
+    #      observables = np.array(lattice.calc_plaq_observables(sample))
+    #      actions, plaqs, charges = observables
+    #
+    #      actions_history.append(actions)
+    #      plaquettes_history.append(plaqs)
+    #      charges_history.append(charges)
+    #
+    #      print(f'step: {idx}  '
+    #            f'time / step: {time.time() - t0:^6.4g}  '
+    #            f'avg action: {np.mean(actions):^6.4g}  '
+    #            f'avg plaquette: {np.mean(plaqs):^6.4g}  '
+    #            f'top charge: {np.mean(charges):^6.4g}')
+    #
+    #  actions_history = np.array(actions_history)
+    #  plaquettes_history = np.array(plaquettes_history)
+    #  charges_history = np.array(charges_history)
+    #  steps = np.arange(len(actions_history))
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
@@ -686,22 +908,10 @@ if __name__ == '__main__':
                               "must be specified and passed to `--log_dir` "
                               "argument. (Default: False)"))
 
-    parser.add_argument("--defun", action="store_false",
-                        required=False, dest="defun",
-                        help=("Whether or not to use `tfe.defun` to compile "
-                              "functions as a graph to speed up computations. "
-                              "(Default: True)"))
-
     parser.add_argument("--loss_scale", type=float, default=0.1,
                         required=False, dest="loss_scale",
                         help=("Scaling factor to be used in loss function. "
                               "(lambda in Eq. 7 of paper). (Default: 0.1)"))
-
-    parser.add_argument("--loss_eps", type=float, default=1e-4,
-                        required=False, dest="loss_eps",
-                        help=("Small value added at the end of Eq. 7 in the "
-                              "paper used to prevent division by zero errors. "
-                              "(Default: 1e-4)"))
 
     parser.add_argument("--learning_rate_init", type=float, default=1e-4,
                         required=False, dest="learning_rate_init",
@@ -723,10 +933,6 @@ if __name__ == '__main__':
                         help=("Number of training steps to perform. "
                               "(Default: 1000)"))
 
-    parser.add_argument("--record_loss_every", type=int, default=20,
-                        required=False, dest="record_loss_every",
-                        help=("Number of steps after which to record loss "
-                              "value (Default: 20)"))
     parser.add_argument("--data_steps", type=int, default=10,
                         required=False, dest="data_steps",
                         help=("Number of steps after which to compute and "
@@ -739,11 +945,6 @@ if __name__ == '__main__':
                               "and current values of all parameters. "
                               "(Default: 50)"))
 
-    parser.add_argument("--print_steps", type=int, default=1,
-                        required=False, dest="print_steps",
-                        help=("Number of steps after which to print "
-                              "information about current run. (Default: 1)"))
-
     parser.add_argument("--logging_steps", type=int, default=50,
                         required=False, dest="logging_steps",
                         help=("Number of steps after which to write logs for "
@@ -754,10 +955,10 @@ if __name__ == '__main__':
                         help=("Clip value, used for clipping value of "
                               "gradients by global norm. (Default: 100)"))
 
-    parser.add_argument("--rand", action="store_true",
+    parser.add_argument("--rand", action="store_false",
                         required=False, dest="rand",
                         help=("Start lattice from randomized initial "
-                              "configuration. (Default: False)"))
+                              "configuration. (Default: True)"))
 
     parser.add_argument("--metric", type=str, default="l2",
                         required=False, dest="metric",
@@ -777,11 +978,6 @@ if __name__ == '__main__':
                               "integrator described in paper). Used for "
                               "comparing against L2HMC algorithm. "
                               "(Default: False)"))
-
-    parser.add_argument("--keep_samples", action="store_true",
-                        required=False, dest="keep_samples",
-                        help=("Keep samples output from L2HMC algorithm "
-                              "during training iterations. (Default: False)"))
 
     args = parser.parse_args()
 
