@@ -8,6 +8,19 @@ by [Daniel Levy](http://ai.stanford.edu/~danilevy), [Matt D. Hoffman](http://mat
 
 ---
 
+Forked from original version at
+[brain-research/l2hmc/](https://github.com/brain-research/l2hmc). The focus of
+this implementation is on applying the L2HMC algorithm to lattice gauge theory
+models. Current implementation includes U(1) model. 
+
+Additionally, this implementation includes a convolutional neural network
+architecture that is prepended to the network described in the original paper.
+The purpose of this additional structure is to better incorporate information
+about the geometry of the lattice.
+
+Lattice code can be found in `l2hmc/lattice/` with the implementation of gauge
+models in `l2hmc/lattice/gauge_lattice.py`.
+
 Given an analytically described distributions (implemented as in `utils/distributions.py`), L2HMC enables training of fast-mixing samplers. We provide an example, in the case of the Strongly-Correlated Gaussian, in the notebook `SCGExperiment.ipynb` --other details are included in the paper.
 
 
