@@ -935,11 +935,10 @@ class GaussianMixtureModel(object):
         learning_rate = self.learning_rate
         dynamics = self.dynamics
         try:
-            self._print_header()
             #  step = initial_step
             #  tot_steps = initial_step + num_train_steps
             #  while step < tot_steps and self.temp > 1:
-            save_time_steps = 10
+            print(helpers.data_header(test_flag=True))
             for step in range(initial_step, initial_step + num_train_steps):
                 feed_dict = {self.x: _samples,
                              self.dynamics.temperature: self.temp}
