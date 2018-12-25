@@ -10,6 +10,9 @@ by [Daniel Levy](http://ai.stanford.edu/~danilevy), [Matt D. Hoffman](http://mat
 
 Given an analytically described distributions (implemented as in `utils/distributions.py`), L2HMC enables training of fast-mixing samplers. We provide an example, in the case of the Strongly-Correlated Gaussian, in the notebook `SCGExperiment.ipynb` --other details are included in the paper.
 
+---
+## Forked implementation for Lattice Gauge Theory models. 
+
 Forked from original version at
 [brain-research/l2hmc/](https://github.com/brain-research/l2hmc). The focus of
 this implementation is on applying the L2HMC algorithm to lattice gauge theory
@@ -27,9 +30,13 @@ models in `l2hmc/lattice/gauge_lattice.py`.
 
 ## Contact
 
-***Code author:*** Daniel Levy
+***(Original) Code author:*** Daniel Levy
 
-***Pull requests and issues:*** @daniellevy
+***(Modified) Code author:*** Sam Foreman
+
+***Pull requests and issues for original code:*** @daniellevy
+
+***Pull requests and issues with forked code:*** @saforem2
 
 ## Citation
 
