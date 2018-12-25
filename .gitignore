@@ -31,3 +31,6 @@ gauge_logs/
 gauge_logs_eager/
 backups/
 gauge_logs_graph/
+new_mog_logs/
+l2hmc/notebooks/u1_keras_model_with_dataset.ipynb
+cprofile_out.txt
