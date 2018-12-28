@@ -1,10 +1,10 @@
 """L2HMC compatible with TensorFlow's eager execution.
 
 Reference [Generalizing Hamiltonian Monte Carlo with Neural
-Networks](https://arxiv.org/pdf/1711.09268.pdf) 
+Networks](https://arxiv.org/pdf/1711.09268.pdf)
 
 Code adapted from the released TensorFlow graph implementation by original
-authors https://github.com/brain-research/l2hmc. 
+authors https://github.com/brain-research/l2hmc.
 """
 import numpy as np
 import numpy.random as npr
@@ -97,18 +97,8 @@ class GaugeDynamicsEager(tf.keras.Model):
             )
             tf.add_to_collection('eps', self.eps)
 
-    #  @tfe.defun
-    #  def call(self, samples):
-    #      """Call method for tf.keras.Model."""
-    #      output = self.apply_transition(samples)
-    #      samples_post, momentum_post, accept_prob, samples_out = output
-    #      samples_post = tf.mod(samples_post, 2*np.pi)
-    #      samples_out = tf.mod(samples_out, 2*np.pi)
-    #      return samples_post, accept_prob, samples_out
-
     def _build_conv_nets(self):
-        """Build ConvNet architecture for position and momentum functions."""
-
+        """ Build ConvNet architecture for position and momentum functions. """
         input_shape = (1, *self.lattice.links.shape)
         links_shape = self.lattice.links.shape
         num_links = self.lattice.num_links
@@ -119,44 +109,40 @@ class GaugeDynamicsEager(tf.keras.Model):
         filter_size2 = (2, 2)           # filter size in second Conv2D layer
 
         self.position_fn = neural_nets.ConvNet(input_shape,
-                                               links_shape,
-                                               num_links,
+                                               self.lattice.links.shape,
+                                               self.lattice.num_links,
                                                factor=2.,
                                                spatial_size=s_size,
                                                num_filters=n_filters,
                                                filter_size1=filter_size1,
                                                filter_size2=filter_size2,
-                                               num_hidden=n_hidden,
-                                               name='XConvNet',
-                                               scope='XNet')
+                                               num_hidden=int(2*self.x_dim),
+                                               model_name='XNet',
+                                               variable_scope='position')
 
         self.momentum_fn = neural_nets.ConvNet(input_shape,
-                                               links_shape,
-                                               num_links,
+                                               self.lattice.links.shape,
+                                               self.lattice.num_links,
                                                factor=1.,
                                                spatial_size=s_size,
                                                num_filters=n_filters,
                                                filter_size1=filter_size1,
                                                filter_size2=filter_size2,
-                                               num_hidden=n_hidden,
-                                               name='VConvNet',
-                                               scope='VNet')
+                                               num_hidden=int(2*self.x_dim),
+                                               model_name='VNet',
+                                               variable_scope='momentum')
 
     def _build_generic_nets(self):
-        """Build GenericNet FC-architectures for position and momentum fns."""
-        n_hidden = int(2 * self.x_dim)  # num of hidden nodes in FC net
-        links_shape = self.lattice.links.shape
-
-
+        """Build GenericNet FC-architectures for position and momentum fns. """
         self.position_fn = neural_nets.GenericNet(self.x_dim,
-                                                  links_shape,
+                                                  self.lattice.links.shape,
                                                   factor=2.,
-                                                  n_hidden=n_hidden)
+                                                  n_hidden=int(2*self.x_dim))
 
         self.momentum_fn = neural_nets.GenericNet(self.x_dim,
-                                                  links_shape,
+                                                  self.lattice.links.shape,
                                                   factor=1.,
-                                                  n_hidden=n_hidden)
+                                                  n_hidden=int(2*self.x_dim))
 
     def _test_fn(self, *args, **kwargs):
         """Dummy test function used for testing generic HMC sampler.
@@ -184,17 +170,10 @@ class GaugeDynamicsEager(tf.keras.Model):
                                tf.float32)
         backward_mask = 1. - forward_mask
 
-        #  if self.conv_net:
-        #  forward_mask_ = forward_mask[:, None, None, None]
-        #  backward_mask_ = backward_mask[:, None, None, None]
-        #  else:
-            #  forward_mask_ = forward_mask[:, None]
-            #  backward_mask_ = backward_mask[:, None]
-
         # Obtain proposed states
-        position_post = (
-            forward_mask[:, None, None, None] * position_f
-            + backward_mask[:, None, None, None] * position_b
+        position_post = tf.mod(
+            (forward_mask[:, None, None, None] * position_f
+            + backward_mask[:, None, None, None] * position_b), 2*np.pi
         )
         momentum_post = (
             forward_mask[:, None, None, None] * momentum_f
@@ -211,24 +190,15 @@ class GaugeDynamicsEager(tf.keras.Model):
         )
         reject_mask = 1. - accept_mask
 
-        #  accept_mask = mask_idx(accept_mask, conv_net=self.conv_net)
-        #  reject_mask = mask_idx(accept_mask, conv_net=self.conv_net)
-        #  if self.conv_net:
-        #      accept_mask_ = accept_mask[:, None, None, None]
-        #      reject_mask_ = reject_mask[:, None, None, None]
-        #  else:
-        #      accept_mask_ = accept_mask[:, None]
-        #      reject_mask_ = reject_mask[:, None]
 
         # Samples after accept / reject step
-        position_out = (
-            accept_mask[:, None, None, None] * position_post
-            + reject_mask[:, None, None, None] * position
+        position_out = tf.mod(
+            (accept_mask[:, None, None, None] * position_post
+             + reject_mask[:, None, None, None] * position), 2*np.pi
         )
 
         return position_post, momentum_post, accept_prob, position_out
 
-    #  @tfe.defun
     def transition_kernel(self, position, forward=True):
         """Transition kernel of augmented leapfrog integrator."""
         lf_fn = self._forward_lf if forward else self._backward_lf
@@ -240,7 +210,6 @@ class GaugeDynamicsEager(tf.keras.Model):
         sumlogdet = 0.
         # Apply augmented leapfrog steps
         for i in range(self.num_steps):
-            #  print(f"\t\t leapfrog step: {i}")
             position_post, momentum_post, logdet = lf_fn(position_post,
                                                          momentum_post,
                                                          i)
@@ -446,14 +415,7 @@ class GaugeDynamicsEager(tf.keras.Model):
 
     def kinetic(self, v):
         """Compute the kinetic energy."""
-        if len(v.shape) > 1:
-            # i.e. v has not been flattened into a vector
-            # in this case we want to contract over the axes [1:] to calculate
-            # a scalar value for the kinetic energy.
-            # NOTE: The first axis of v indexes samples in a batch of samples.
-            return 0.5 * tf.reduce_sum(v**2, axis=np.arange(1, len(v.shape)))
-        else:
-            return 0.5 * tf.reduce_sum(v**2, axis=1)
+        return 0.5 * tf.reduce_sum(v**2, axis=self.axes)
 
     def hamiltonian(self, position, momentum):
         """Compute the overall Hamiltonian."""
@@ -476,14 +438,6 @@ class GaugeDynamicsEager(tf.keras.Model):
         """
         batch_size = tensor.shape[0]
         return tf.reshape(tensor, shape=(batch_size, -1))
-
-    def expand_tensor(self, tensor, output_shape):
-        """Reshapes tensor of shape
-        [batch_size, spatial-size * spatial_size * time_size] ---->
-            [batch_size, spatial_size, spatial_size, time_size]
-        """
-        batch_size = tensor.shape[0]
-        return tf.reshape(tensor, shape=(batch_size, *output_shape))
 
 
 def get_new_sample(dynamics, x, transition_fn=None, defun=False):
