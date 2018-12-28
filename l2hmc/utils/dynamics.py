@@ -45,7 +45,8 @@ class Dynamics(object):
 
         self.x_dim = x_dim
         self.use_temperature = use_temperature
-        self.temperature = tf.placeholder(TF_FLOAT, shape=(), name='temperature')
+        self.temperature = tf.placeholder(TF_FLOAT, shape=(),
+                                          name='temperature')
         #  self.update_trajectory_length = update_trajectory_length
 
         if not hmc:
