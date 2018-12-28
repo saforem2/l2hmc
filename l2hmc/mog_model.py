@@ -1,11 +1,11 @@
 """
-Gaussian mixture model, sample application of L2HMC algorithm. 
+Gaussian mixture model, sample application of L2HMC algorithm.
 
 Using the L2HMC algorithm, this module learns to effectively sample from a
 mixture of Gaussians target distribution.
 
 ###############################################################################
-#  TODO: 
+#  TODO:
 # -----------------------------------------------------------------------------
 #  (!!)  * Look at using tensorflow.contrib.training.HParams to store
 #          hyperparameter values.
@@ -17,9 +17,9 @@ mixture of Gaussians target distribution.
 #          - Try to get network to be compatible with complex numbers and
 #            eventually complex matrices.
 # -----------------------------------------------------------------------------
-#        * COMPLETED: 
+#        * COMPLETED:
 #            (x)  * Implement model with pair of Gaussians both separated along
-#                   a single axis, and separated diagonally across all 
+#                   a single axis, and separated diagonally across all
 #                   dimensions.
 #            (x)  * Look at replacing self.params['...'] with setattr for
 #                   initalization.
