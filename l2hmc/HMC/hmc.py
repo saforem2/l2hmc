@@ -41,7 +41,10 @@ class HMC(object):
         self.n_leapfrog_steps = n_leapfrog_steps
         self.beta = beta
         self.potential = potential_fn
-        self.grad_potential_fn = grad_potential_fn
+        if grad_potential_fn is None:
+            self.grad_potential_fn = self._grad_potential
+        else:
+            self.grad_potential_fn = self.grad_potential_fn
         self._construct_time()
 
     def apply_transition(self, position):
@@ -76,10 +79,7 @@ class HMC(object):
 
     def _update_momentum(self, position, momentum, t):
         """Update momentum in the leapfrog step."""
-        if self.grad_potential_fn is None:
-            grad = self._grad_potential(position)
-        else:
-            grad = self.grad_potential_fn(position)
+        grad = self.grad_potential_fn(position)
         momentum_out = momentum - 0.5 * self.step_size * grad
 
         return momentum_out
