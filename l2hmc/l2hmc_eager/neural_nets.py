@@ -29,9 +29,9 @@ from utils.tf_logging import variable_summaries
 #  self.dropout_v1 = tf.keras.layers.Dropout(0.25, name='dropout_v1')
 ##############################################################################
 
+# pylint: disable=too-many-instance-attributes
 class ConvNet(tf.keras.Model):
-    """Convolutional neural network with different initializaiton scale based
-    on input."""
+    """Conv. neural network with initializaiton scale based on input."""
     def __init__(self, 
                  input_shape, 
                  links_shape,
@@ -42,11 +42,11 @@ class ConvNet(tf.keras.Model):
                  num_filters=None, 
                  filter_size1=None,
                  filter_size2=None,
-                 name='ConvNet',
-                 scope='Net'):
+                 model_name='ConvNet',
+                 variable_scope='Sequential'):
         """Initialization method."""
 
-        super(ConvNet, self).__init__(name=name)
+        super(ConvNet, self).__init__(name=model_name)
 
         if num_filters is None:
             num_filters = int(2 * spatial_size)
@@ -63,112 +63,12 @@ class ConvNet(tf.keras.Model):
         self._input_shape = input_shape
         self.links_shape = links_shape
 
-        with tf.variable_scope(scope):
-            self.conv_x1 = tf.keras.layers.Conv2D(
-                filters=num_filters,
-                kernel_size=filter_size1,
-                activation=tf.nn.relu,
-                #  data_format='channels_first',
-                input_shape=self._input_shape,
-                name='conv_x1'
-            )
-
-            self.conv_v1 = tf.keras.layers.Conv2D(
-                filters=num_filters,
-                kernel_size=filter_size1,
-                activation=tf.nn.relu,
-                #  data_format='channels_first',
-                input_shape=self._input_shape,
-                name='conv_v1'
-            )
-
-            self.max_pool_x1 = tf.keras.layers.MaxPooling2D(
-                pool_size=(2, 2),
-                strides=2,
-                name='max_pool_x1'
-            )
-
-            self.max_pool_v1 = tf.keras.layers.MaxPooling2D(
-                pool_size=(2, 2),
-                strides=2,
-                name='max_pool_v1'
-            )
-
-            self.conv_x2 = tf.keras.layers.Conv2D(
-                filters=2 * num_filters,
-                kernel_size=filter_size2,
-                #  data_format='channels_first',
-                activation=tf.nn.relu,
-                name='conv_x2'
-            )
-
-            self.conv_v2 = tf.keras.layers.Conv2D(
-                filters=2 * num_filters,
-                kernel_size=filter_size2,
-                #  data_format='channels_first',
-                activation=tf.nn.relu,
-                name='conv_v2'
-            )
-
-            self.max_pool_x2 = tf.keras.layers.MaxPooling2D(
-                pool_size=(2, 2),
-                strides=2,
-                name='max_pool_x2'
-            )
-
-            self.max_pool_v2 = tf.keras.layers.MaxPooling2D(
-                pool_size=(2, 2),
-                strides=2,
-                name='max_pool_v2'
-            )
-
-            self.flatten_x = tf.keras.layers.Flatten(name='flat_x')
-            self.flatten_v = tf.keras.layers.Flatten(name='flat_v')
-
-            self.v_layer = _custom_dense(
-                num_hidden,
-                1. / 3.,
-                name='v_layer'
-            )
-
-            self.x_layer = _custom_dense(
-                num_hidden,
-                factor / 3.,
-                name='x_layer'
-            )
-
-            self.t_layer = _custom_dense(
-                num_hidden,
-                1. / 3.,
-                name='t_layer'
-            )
-
-            self.h_layer = _custom_dense(
-                num_hidden,
-                name='h_layer'
-            )
-
-            self.scale_layer = _custom_dense(
-                self.x_dim,
-                0.001,
-                name='scale_layer'
-            )
-
+        #  with tf.variable_scope(variable_scope, reuse=tf.AUTO_REUSE) as scope:
+        if tf.executing_eagerly():
             self.coeff_scale = tf.contrib.eager.Variable(
                 initial_value=tf.zeros([1, self.x_dim]),
                 name='coeff_scale',
                 trainable=True
-            )
-            self.translation_layer = _custom_dense(
-                self.x_dim,
-                0.001,
-                name='translation_layer'
-            )
-
-            self.transformation_layer = _custom_dense(
-                self.x_dim,
-                0.001,
-                name='transformation_layer'
             )
 
             self.coeff_transformation = tf.contrib.eager.Variable(
@@ -176,6 +76,120 @@ class ConvNet(tf.keras.Model):
                 name='coeff_transformation',
                 trainable=True
             )
+        else:
+            self.coeff_scale = tf.Variable(
+                initial_value=tf.zeros([1, self.x_dim]),
+                name='coeff_scale',
+                trainable=True
+            )
+            self.coeff_transformation = tf.Variable(
+                initial_value=tf.zeros([1, self.x_dim]),
+                name='coeff_transformation',
+                trainable=True
+            )
+
+        self.conv_x1 = tf.keras.layers.Conv2D(
+            filters=num_filters,
+            kernel_size=filter_size1,
+            activation=tf.nn.relu,
+            #  data_format='channels_first',
+            input_shape=self._input_shape,
+            name='conv_x1'
+        )
+
+        self.conv_v1 = tf.keras.layers.Conv2D(
+            filters=num_filters,
+            kernel_size=filter_size1,
+            activation=tf.nn.relu,
+            #  data_format='channels_first',
+            input_shape=self._input_shape,
+            name='conv_v1'
+        )
+
+        self.max_pool_x1 = tf.keras.layers.MaxPooling2D(
+            pool_size=(2, 2),
+            strides=2,
+            name='max_pool_x1'
+        )
+
+        self.max_pool_v1 = tf.keras.layers.MaxPooling2D(
+            pool_size=(2, 2),
+            strides=2,
+            name='max_pool_v1'
+        )
+
+        self.conv_x2 = tf.keras.layers.Conv2D(
+            filters=2 * num_filters,
+            kernel_size=filter_size2,
+            #  data_format='channels_first',
+            activation=tf.nn.relu,
+            name='conv_x2'
+        )
+
+        self.conv_v2 = tf.keras.layers.Conv2D(
+            filters=2 * num_filters,
+            kernel_size=filter_size2,
+            #  data_format='channels_first',
+            activation=tf.nn.relu,
+            name='conv_v2'
+        )
+
+        self.max_pool_x2 = tf.keras.layers.MaxPooling2D(
+            pool_size=(2, 2),
+            strides=2,
+            name='max_pool_x2'
+        )
+
+        self.max_pool_v2 = tf.keras.layers.MaxPooling2D(
+            pool_size=(2, 2),
+            strides=2,
+            name='max_pool_v2'
+        )
+
+        self.flatten_x = tf.keras.layers.Flatten(name='flat_x')
+        self.flatten_v = tf.keras.layers.Flatten(name='flat_v')
+
+        self.v_layer = _custom_dense(
+            num_hidden,
+            1. / 3.,
+            name='v_layer'
+        )
+
+        self.x_layer = _custom_dense(
+            num_hidden,
+            factor / 3.,
+            name='x_layer'
+        )
+
+        self.t_layer = _custom_dense(
+            num_hidden,
+            1. / 3.,
+            name='t_layer'
+        )
+
+        self.h_layer = _custom_dense(
+            num_hidden,
+            name='h_layer'
+        )
+
+        self.scale_layer = _custom_dense(
+            self.x_dim,
+            0.001,
+            name='scale_layer'
+        )
+
+        self.translation_layer = _custom_dense(
+            self.x_dim,
+            0.001,
+            name='translation_layer'
+        )
+
+        self.transformation_layer = _custom_dense(
+            self.x_dim,
+            0.001,
+            name='transformation_layer'
+        )
+
 
     #  @tf.contrib.eager.defun
     def call(self, inputs):
@@ -185,45 +199,61 @@ class ConvNet(tf.keras.Model):
                 CONV, ReLU --> NORM --> MAX_POOL
             
         """
-        #  v = v.reshape((v.shape[0], *self._input_shape[1:]))
-        #  x = x.reshape((x.shape[0], *self._input_shape[1:]))
-        #  v = tf.reshape(v, shape=(v.shape[0], *self._input_shape[1:]))
-        #  x = tf.reshape(x, shape=(x.shape[0], *self._input_shape[1:]))
         v, x, t = inputs
 
-        position = self.conv_x1(x)
-        position = self.max_pool_x1(position)
-        position = self.conv_x2(position)
-        position = self.max_pool_x2(position)
-        position = self.flatten_x(position)
+        # conv1 --> pool1 --> conv2 --> pool2 --> flatten
+        position = self.flatten_x(self.max_pool_x2(self.conv_x2(
+            self.max_pool_x1(self.conv_x1(x))
+        )))
 
-        momentum = self.conv_v1(v)
-        momentum = self.max_pool_v1(momentum)
-        momentum = self.conv_v2(momentum)
-        momentum = self.max_pool_v2(momentum)
-        momentum = self.flatten_v(momentum)
+        # conv1 --> pool1 --> conv2 --> pool2 --> flatten
+        momentum = self.flatten_v(self.max_pool_v2(self.conv_v2(
+            self.max_pool_v1(self.conv_v1(x))
+        )))
 
-        h = self.v_layer(momentum) + self.x_layer(position) + self.t_layer(t)
-        h = tf.nn.relu(h)
-        h = self.h_layer(h)
-        h = tf.nn.relu(h)
+        # x + v + t --> relu --> dense --> relu 
+        h = tf.nn.relu(self.h_layer(tf.nn.relu(
+            self.v_layer(momentum) + self.x_layer(position) + self.t_layer(t)
+        )))
 
-        scale = tf.nn.tanh(self.scale_layer(h)) * tf.exp(self.coeff_scale)
-
-        translation = self.translation_layer(h)
-
-        transformation = (
-            tf.nn.tanh(self.transformation_layer(h)
-                       * tf.exp(self.coeff_transformation))
+        # dense --> tanh --> reshape
+        scale = tf.reshape(
+            (tf.nn.tanh(self.scale_layer(h))
+             * tf.exp(self.coeff_scale)),
+            shape=(-1, *self.links_shape),
+            name='scale'
         )
 
-        scale = tf.reshape(scale, shape=(-1, *self.links_shape), name='scale')
-        translation = tf.reshape(translation,
-                                 shape=(-1, *self.links_shape),
-                                 name='translation')
-        transformation = tf.reshape(transformation,
-                                    shape=(-1, *self.links_shape),
-                                    name='transformation')
+        # dense --> reshape
+        translation = tf.reshape(
+            self.translation_layer(h),
+            shape=(-1, *self.links_shape),
+            name='translation'
+        )
+
+        transformation = tf.reshape(
+            (tf.nn.tanh(self.transformation_layer(h))
+             * tf.exp(self.coeff_transformation)),
+            shape=(-1, *self.links_shape),
+            name='transformation'
+        )
+
+        #  scale = tf.nn.tanh(self.scale_layer(h)) * tf.exp(self.coeff_scale)
+
+        #  translation = self.translation_layer(h)
+
+        #  transformation = (
+        #      tf.nn.tanh(self.transformation_layer(h)
+        #                 * tf.exp(self.coeff_transformation))
+        #  )
+
+        #  scale = tf.reshape(scale, shape=(-1, *self.links_shape), name='scale')
+        #  translation = tf.reshape(translation,
+        #                           shape=(-1, *self.links_shape),
+        #                           name='translation')
+        #  transformation = tf.reshape(transformation,
+        #                              shape=(-1, *self.links_shape),
+        #                              name='transformation')
 
         return scale, translation, transformation
 
@@ -278,18 +308,31 @@ class GenericNet(tf.keras.Model):
         h = tf.nn.relu(h)
         h = self.h_layer(h)
         h = tf.nn.relu(h)
-        scale = tf.nn.tanh(self.scale_layer(h)) * tf.exp(self.coeff_scale)
-        translation = self.translation_layer(h)
-        transformation = (tf.nn.tanh(self.transformation_layer(h))
-                          * tf.exp(self.coeff_transformation))
+        #  scale = tf.nn.tanh(self.scale_layer(h)) * tf.exp(self.coeff_scale)
+        scale = tf.reshape((tf.nn.tanh(self.scale_layer(h))
+                            * tf.exp(self.coeff_scale)),
+                           shape=(-1, *self.links_shape),
+                           name='scale')
 
-        scale = tf.reshape(scale, shape=(-1, *self.links_shape), name='scale')
-        translation = tf.reshape(translation,
+        translation = tf.reshape(self.translation_layer(h),
                                  shape=(-1, *self.links_shape),
                                  name='translation')
-        transformation = tf.reshape(transformation,
+
+        transformation = tf.reshape((tf.nn.tanh(self.transformation_layer(h))
+                                     * tf.exp(self.coeff_transformation)),
                                     shape=(-1, *self.links_shape),
                                     name='transformation')
+        #  translation = self.translation_layer(h)
+        #  transformation = (tf.nn.tanh(self.transformation_layer(h))
+        #                    * tf.exp(self.coeff_transformation))
+
+        #  scale = tf.reshape(scale, shape=(-1, *self.links_shape), name='scale')
+        #  translation = tf.reshape(translation,
+        #                           shape=(-1, *self.links_shape),
+        #                           name='translation')
+        #  transformation = tf.reshape(transformation,
+        #                              shape=(-1, *self.links_shape),
+        #                              name='transformation')
 
         return scale, translation, transformation
 
