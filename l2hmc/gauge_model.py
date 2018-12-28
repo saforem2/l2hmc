@@ -1,8 +1,29 @@
 """
-Augmented Hamiltonian Monte Carlo Sampler using the L2HMC algorithm, applied to
-a U(1) lattice gauge theory model.
+Augmented Hamiltonian Monte Carlo Sampler using the L2HMC algorithm, applied
+to a U(1) lattice gauge theory model.
 
+==============================================================================
+* TODO:
+-----------------------------------------------------------------------------
+    (!!)  *
+
+==============================================================================
+* COMPLETED:
+-----------------------------------------------------------------------------
+    (x)  * Implement model with pair of Gaussians both separated along
+         a single axis, and separated diagonally across all
+         dimensions.
+    (x)  * Look at replacing self.params['...'] with setattr for
+         initalization.
+    (x)  * Go back to 2D case and look at different starting
+         temperatures
+    (x)  * Make trajectory length go with root T, go with higher
+         temperature
+    (x)  * In 2D start with higher initial temp to get around 50%
+         acceptance rate.
+==============================================================================
 """
+
 # pylint: disable=wildcard-import, no-member, too-many-arguments, invalid-name
 import os
 import sys
@@ -63,8 +84,6 @@ PARAMS = {
 ##############################################################################
 # Helper functions etc.
 ##############################################################################
-
-
 def write_summaries(summary_writer, data):
     """Write `summaries` using `summary_writer` for use in TensorBoard."""
     with summary_writer.as_default():
@@ -151,7 +170,7 @@ def graph_step(dynamics, samples, optimizer, loss_fn,
 
 
 class GaugeModel(object):
-    """Wrapper class implementing L2HMC algorithm on lattice gauge models. """
+    """Wrapper class implementing L2HMC algorithm on lattice gauge models."""
     def __init__(self,
                  params=None,
                  sess=None,
@@ -162,7 +181,6 @@ class GaugeModel(object):
                  restore=False,
                  eps_trainable=True):
         """Initialization method."""
-
         tf.enable_resource_variables()
 
         if config is None:
@@ -247,7 +265,7 @@ class GaugeModel(object):
 
         self.params = params
 
-        self.train_times = {}
+        #  self.train_times = {}
         self.total_actions_arr = []
         self.average_plaquettes_arr = []
         self.topological_charges_arr = []
@@ -302,20 +320,17 @@ class GaugeModel(object):
                 os.path.join(self.info_dir, 'topological_charges.npy')
             ),
         }
-
-        helpers.write_run_parameters(self.files['parameters_file'],
-                                     self.params)
-        print(80*'#')
-        print('Model parameters:')
+        self._params = {}
         for key, val in self.__dict__.items():
             if isinstance(val, (int, float, str)):
-                print(f'{key}: {val}\n')
-        print(80*'#')
-        print('\n')
+                self._params[key] = val
+            if isinstance(val, (int, float, str)):
+                self._params[key] = val
+
+        self._write_run_parameters(_print=True)
 
     def calc_observables(self, samples, update=True):
-        """
-        Calculate observables of interest for each sample in `samples`.
+        """Calculate observables of interest for each sample in `samples`.
         
          NOTE: 
              `observables` is an array containing `total_actions`,
@@ -340,7 +355,7 @@ class GaugeModel(object):
         #      top_charges = observables[:, 2]
 
         if update:
-            self._update_data(_actions, _plaqs, _charge)
+            self._update_data(_actions, _plaqs, _charges)
 
         return _actions, _plaqs, _charges
 
@@ -491,6 +506,22 @@ class GaugeModel(object):
 
         writer.flush()
 
+    def _write_run_parameters(self, _print=False):
+        """Write model parameters out to human readable .txt file."""
+        if _print:
+            for key, val in self._params.items():
+                print(f'{key}: {val}')
+
+        with open(self.files['parameters_file'], 'w') as f:
+            f.write('Parameters:\n')
+            f.write(80 * '-' + '\n')
+            for key, val in self._params.items():
+                f.write(f'{key}: {val}\n')
+            #  for key, val in parameters.items():
+            #      f.write(f'{key}: {val}\n')
+            f.write(80*'=')
+            f.write('\n')
+
     def _create_summaries(self):
         """"Create summary objects for logging in TensorBoard."""
         with tf.name_scope('summaries'):
@@ -522,18 +553,17 @@ class GaugeModel(object):
 
     def _create_loss(self):
         """Define loss function to minimize during training."""
+        scale = self.params['loss_scale']
         with tf.name_scope('loss'):
-            scale = self.params['loss_scale']
-
             #  self.z = tf.random_normal(tf.shape(self.x), name='z')
             #  z = tf.random_normal(tf.shape(self.x))  # Auxiliary variable
-            outputs = self.dynamics.apply_transition(self.x)
+            _x, _, self.px, self.x_out = self.dynamics.apply_transition(self.x)
             #  outputs_z = self.dynamics.apply_transition(z)
 
-            self.x_proposed, _, self.px, self.x_out = outputs
             #  z_proposed, _, pz, z_out = outputs_z
 
-            self.x_proposed = tf.mod(self.x_proposed, 2*np.pi)
+                    idx_top = (tl + bl, k + tr - tl, tr + br)
+            _x = tf.mod(_x, 2*np.pi)
             self.x_out = tf.mod(self.x_out, 2*np.pi)
 
             #  z_proposed = tf.mod(z_proposed, 2*np.pi)
@@ -542,11 +572,11 @@ class GaugeModel(object):
             #  outputs = self.dynamics.apply_transition(z)
             #  z_proposed, _, pz, z_out = outputs
 
-            self.loss_op = tf.Variable(0., trainable=False, name='loss')
+            #  self.loss_op = tf.Variable(0., trainable=False, name='loss')
 
             # Squared jump distance
             x_loss = ((tf.reduce_sum(
-                tf.square(self.x - self.x_proposed),
+                tf.square(self.x - _x),
                 axis=self.dynamics.axes,
                 name='x_loss'
             ) * self.px) + 1e-4)
@@ -561,7 +591,8 @@ class GaugeModel(object):
             #      (1. / x_loss + 1. / z_loss) * scale
             #      - (x_loss - z_loss) / scale, axis=0
             #  )
-            self.loss_op = tf.reduce_mean(scale / x_loss - x_loss / scale)
+            self.loss_op = tf.reduce_mean(scale / x_loss - x_loss / scale,
+                                           name='loss')
 
     def build_graph(self):
         """Build graph for TensorFlow."""
@@ -614,6 +645,7 @@ class GaugeModel(object):
             f.write(str8 + '\n')
             f.write(80 * '-' + '\n')
 
+    #pylint: disable=too-many-statements
     def train(self, num_train_steps, kill_sess=True):
         """Train the model."""
         saver = tf.train.Saver(max_to_keep=3)
@@ -628,12 +660,12 @@ class GaugeModel(object):
             print('Model restored.\n')
             self.global_step = tf.train.get_global_step()
             initial_step = self.sess.run(self.global_step)
-            previous_time = self.train_times[initial_step]
-            time_delay = time.time() - previous_time
+            #  previous_time = self.train_times[initial_step-1]
+            #  time_delay = time.time() - previous_time
 
         writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
         start_time = time.time()
-        self.train_times[initial_step] = start_time - time_delay
+        #  self.train_times[initial_step] = start_time - time_delay
 
         # Move attribute look ups outside loop to improve performance
         loss_op = self.loss_op
@@ -644,8 +676,11 @@ class GaugeModel(object):
         learning_rate = self.learning_rate
         dynamics = self.dynamics
         samples_np = self.samples_np
+        self.sess.graph.finalize()
         try:
-            print(helpers.data_header(test_flag=True))
+            print(helpers.data_header())
+            helpers.write_run_data(self.files['run_info_file'], self.data,
+                                   header=True)
             for step in range(initial_step, initial_step + num_train_steps):
                 start_step_time = time.time()
 
@@ -671,62 +706,30 @@ class GaugeModel(object):
                 helpers.write_run_data(self.files['run_info_file'], self.data)
 
                 if (step + 1) % self.save_steps == 0:
-                    print(helpers.data_header())
                     #  self.train_times[step+1] = time.time() - time_delay
+                    tt = time.time()
                     self._save_model(samples=samples_np,
                                      saver=saver,
                                      writer=writer,
                                      step=step)
                     helpers.write_run_data(self.files['run_info_file'],
                                            self.data)
+                    save_str = (
+                        f"Time to complete saving: {time.time() - tt:^6.4g}\n"
+                    )
+                    print(save_str)
+                    print(helpers.data_header())
 
                 if (step + 1) % self.logging_steps == 0:
+                    tt = time.time()
                     summary_str = self.sess.run(summary_op,
                                                 feed_dict={self.x: samples_np})
                     writer.add_summary(summary_str, global_step=step)
                     writer.flush()
-
-                #  if step % self.data_steps == 0:
-                    #  self.data['step_time'] = (
-                    #      (time.time() - start_step_time)
-                    #      / (self.num_steps * self.batch_size)
-                    #  )
-                    #  self.losses_arr.append(loss_np)
-                    #
-                    #  self.data['step'] = step
-                    #  self.data['loss'] = loss_np
-                    #  self.data['accept_prob'] = px_np
-                    #  self.data['eps'] = eps_np
-                    #
-                    #  self.step_times_arr.append(self.data['step_time'])
-                    #  self.steps_arr.append(step)
-                    #
-                    #  # pylint: disable=bad-option-value
-                    #  observables = self.calc_observables(samples_np,
-                    #                                      update=False)
-                    #
-                    #  total_actions, avg_plaquettes, top_charges = observables
-                    #
-                    #  _actions_arr = []
-                    #  _plaqs_arr = []
-                    #  _charges_arr = []
-                    #  for i in range(self.batch_size):
-                    #      action_np, plaqs_np, charges_np = self.sess.run([
-                    #          total_actions[i],
-                    #          avg_plaquettes[i],
-                    #          top_charges[i]
-                    #      ])
-                    #      _actions_arr.append(action_np)
-                    #      _plaqs_arr.append(plaqs_np)
-                    #      _charges_arr.append(charges_np)
-                    #
-                    #  self._update_data(_actions_arr,
-                    #                    _plaqs_arr,
-                    #                    _charges_arr)
-                    #
-                    #  helpers.print_run_data(self.data)
-                    #  helpers.write_run_data(self.files['run_info_file'],
-                    #                         self.data)
+                    log_str = (
+                        f"Time to complete logging: {time.time() - tt:^6.4g}\n"
+                    )
+                    print(log_str)
 
             print("Training complete!")
             self._save_model(samples=samples_np,
@@ -772,44 +775,43 @@ class GaugeModel(object):
         return samples_history
 
 
-
-def main(args):
+def main(flags):
     """Main method for creating/training U(1) gauge model from command line."""
     params = PARAMS  # use default parameters if no command line args passed
 
-    params['time_size'] = args.time_size
-    params['space_size'] = args.space_size
-    params['link_type'] = args.link_type
-    params['dim'] = args.dim
-    params['beta'] = args.beta
-    params['num_samples'] = args.num_samples
-    params['num_steps'] = args.num_steps
-    params['eps'] = args.eps
-    params['loss_scale'] = args.loss_scale
-    params['learning_rate_init'] = args.learning_rate_init
-    params['learning_rate_decay_rate'] = args.learning_rate_decay_rate
-    params['train_steps'] = args.train_steps
-    params['data_steps'] = args.data_steps
-    params['save_steps'] = args.save_steps
-    params['logging_steps'] = args.logging_steps
-    params['clip_value'] = args.clip_value
-    params['rand'] = args.rand
-    params['metric'] = args.metric
+    params['time_size'] = flags.time_size
+    params['space_size'] = flags.space_size
+    params['link_type'] = flags.link_type
+    params['dim'] = flags.dim
+    params['beta'] = flags.beta
+    params['num_samples'] = flags.num_samples
+    params['num_steps'] = flags.num_steps
+    params['eps'] = flags.eps
+    params['loss_scale'] = flags.loss_scale
+    params['learning_rate_init'] = flags.learning_rate_init
+    params['learning_rate_decay_rate'] = flags.learning_rate_decay_rate
+    params['train_steps'] = flags.train_steps
+    params['data_steps'] = flags.data_steps
+    params['save_steps'] = flags.save_steps
+    params['logging_steps'] = flags.logging_steps
+    params['clip_value'] = flags.clip_value
+    params['rand'] = flags.rand
+    params['metric'] = flags.metric
 
     config = tf.ConfigProto()
 
     eps_trainable = True
 
-    if args.hmc:
+    if flags.hmc:
         eps_trainable = False
 
     model = GaugeModel(params=params,
                        config=config,
                        sess=None,
-                       conv_net=args.conv_net,
-                       hmc=args.hmc,
-                       log_dir=args.log_dir,
-                       restore=args.restore,
+                       conv_net=flags.conv_net,
+                       hmc=flags.hmc,
+                       log_dir=flags.log_dir,
+                       restore=flags.restore,
                        eps_trainable=eps_trainable)
 
     #  start_time_str = time.strftime("%a, %d %b %Y %H:%M:%S",
@@ -817,41 +819,11 @@ def main(args):
 
     print(f"Training began at: {time.ctime()}")
 
-    model.train(args.train_steps, kill_sess=False)
+    model.train(flags.train_steps, kill_sess=False)
 
     _ = model.run(500)
 
     model.sess.close()
-
-    #  lattice = GaugeLattice(model.lattice.time_size,
-    #                         model.lattice.space_size,
-    #                         model.lattice.dim,
-    #                         model.lattice.beta,
-    #                         model.lattice.link_type,
-    #                         model.lattice.num_samples,
-    #                         model.lattice.rand)
-    #  actions_history = []
-    #  plaquettes_history = []
-    #  charges_history = []
-    #  for idx, sample in enumerate(samples_history):
-    #      t0 = time.time()
-    #      observables = np.array(lattice.calc_plaq_observables(sample))
-    #      actions, plaqs, charges = observables
-    #
-    #      actions_history.append(actions)
-    #      plaquettes_history.append(plaqs)
-    #      charges_history.append(charges)
-    #
-    #      print(f'step: {idx}  '
-    #            f'time / step: {time.time() - t0:^6.4g}  '
-    #            f'avg action: {np.mean(actions):^6.4g}  '
-    #            f'avg plaquette: {np.mean(plaqs):^6.4g}  '
-    #            f'top charge: {np.mean(charges):^6.4g}')
-    #
-    #  actions_history = np.array(actions_history)
-    #  plaquettes_history = np.array(plaquettes_history)
-    #  charges_history = np.array(charges_history)
-    #  steps = np.arange(len(actions_history))
 
 
 if __name__ == '__main__':
