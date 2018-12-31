@@ -168,7 +168,7 @@ def graph_step(dynamics, samples, optimizer, loss_fn,
 
     return train_op, loss, samples_out, accept_prob, grads
 
-
+# pylint: disable=attribute-defined-outside-init
 class GaugeModel(object):
     """Wrapper class implementing L2HMC algorithm on lattice gauge models."""
     def __init__(self,
@@ -562,7 +562,6 @@ class GaugeModel(object):
 
             #  z_proposed, _, pz, z_out = outputs_z
 
-                    idx_top = (tl + bl, k + tr - tl, tr + br)
             _x = tf.mod(_x, 2*np.pi)
             self.x_out = tf.mod(self.x_out, 2*np.pi)
 
