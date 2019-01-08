@@ -44,3 +44,4 @@ new_mog_logs/
 l2hmc/notebooks/u1_keras_model_with_dataset.ipynb
 cprofile_out.txt
 >>>>>>> U1_gauge
+gauge_logs_by_size/
