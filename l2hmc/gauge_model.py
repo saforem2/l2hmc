@@ -5,22 +5,12 @@ to a U(1) lattice gauge theory model.
 ==============================================================================
 * TODO:
 -----------------------------------------------------------------------------
-    (!!)  *
+    * Look at thermalization times for L2HMC vs generic HMC.
+    * Find out how large of a lattice is feasible for running on local laptop.
 
 ==============================================================================
 * COMPLETED:
 -----------------------------------------------------------------------------
-    (x)  * Implement model with pair of Gaussians both separated along
-         a single axis, and separated diagonally across all
-         dimensions.
-    (x)  * Look at replacing self.params['...'] with setattr for
-         initalization.
-    (x)  * Go back to 2D case and look at different starting
-         temperatures
-    (x)  * Make trajectory length go with root T, go with higher
-         temperature
-    (x)  * In 2D start with higher initial temp to get around 50%
-         acceptance rate.
 ==============================================================================
 """
 
@@ -32,7 +22,6 @@ import pickle
 import argparse
 import numpy as np
 import tensorflow as tf
-import utils.gauge_model_helpers as helpers
 
 try:
     import matplotlib.pyplot as plt
@@ -40,14 +29,10 @@ try:
 except ImportError:
     HAS_MATPLOTLIB = False
 
-
 from l2hmc_eager import gauge_dynamics_eager as gde
-#  from l2hmc_eager.neural_nets import ConvNet, GenericNet
-#  from definitions import ROOT_DIR
 from lattice.gauge_lattice import GaugeLattice, u1_plaq_exact
-#  from utils.tf_logging import variable_summaries, get_run_num, make_run_dir
 from utils.plot_helper import plot_broken_xaxis
-#  from utils.gauge_model_helpers import *
+import utils.gauge_model_helpers as helpers
 
 
 tfe = tf.contrib.eager
@@ -80,93 +65,6 @@ PARAMS = {
     'rand': False,
     'metric': 'l2',
 }
-
-##############################################################################
-# Helper functions etc.
-##############################################################################
-def write_summaries(summary_writer, data):
-    """Write `summaries` using `summary_writer` for use in TensorBoard."""
-    with summary_writer.as_default():
-        with tf.contrib.summary.always_record_summaries():
-            tf.contrib.summary.scalar("Training_loss", data['loss'],
-                                      step=data['step'])
-            tf.contrib.summary.scalar("avg_plaquette", data['avg_plaq'],
-                                      step=data['step'])
-            tf.contrib.summary.scalar("avg_action", data['avg_action'],
-                                      step=data['step'])
-            tf.contrib.summary.scalar("avg_top_charge", data['avg_top_charge'],
-                                      step=data['step'])
-
-
-# pylint: disable=too-many-locals
-def train_one_iter(dynamics, samples, optimizer, 
-                   loss_fn, params, global_step=None, hmc=False):
-    """
-    Peform a single training step for the `dynamics` engine.
-
-    Args:
-        dynamics: Main dynamics engine responsible for implementing L2HMC alg.
-        samples (tf.Tensor): Batch of training samples.
-        optimizer: Tensorflow optimizer (e.g. tf.train.AdamOptimizer)
-        loss_fn (function): Function that computes loss from network output.
-        params (dict): Dictionary of parameters. 
-            We are interested in:
-                * params['loss_eps']: Small constant for numerical stability.
-                * params['metric']: Metric used in calculating loss. 
-                * params['loss_scale']: Scaling factor (lambda) used in
-                    calculating the loss.
-                * params['clip_value']: Value used for clipping the gradients
-                    by global norm during training.
-        global_step (int): Current value of global step.
-
-    Returns:
-        loss (float): `loss` value output from network.
-        samples_out: Output from Metropolis Hastings accept/reject step.
-        accept_prob (float): Probability that proposed states were accepted.
-        gradients: Resulting gradient values from this training step.
-    """
-    clip_value = params.get('clip_value', 10)
-
-    #  print("Computing loss_and_grads...")
-    loss, samples_out, accept_prob, grads = gde.loss_and_grads(
-        dynamics=dynamics,
-        x=samples,
-        params=params,
-        loss_fn=loss_fn,
-        hmc=hmc
-    )
-
-    if not hmc:
-        grads, _ = tf.clip_by_global_norm(grads, clip_value)
-
-        #  print("Applying gradients...")
-        optimizer.apply_gradients(
-            zip(grads, dynamics.trainable_variables), global_step=global_step
-        )
-        #  print("done.")
-
-    return loss, samples_out, accept_prob, grads
-
-
-def graph_step(dynamics, samples, optimizer, loss_fn, 
-               params,  global_step=None, hmc=False):
-    """Perform a single training step using a compiled TensorFlow graph."""
-
-    loss, samples_out, accept_prob, grads = gde.loss_and_grads(
-        dynamics=dynamics,
-        x=samples,
-        params=params,
-        loss_fn=loss_fn,
-        hmc=hmc
-    )
-
-    clip_value = params.get('clip_value', 100)
-    grads, _ = tf.clip_by_global_norm(grads, clip_value)
-    train_op = optimizer.apply_gradients(
-        zip(grads, dynamics.trainable_variables), global_step=global_step
-    )
-
-    return train_op, loss, samples_out, accept_prob, grads
 
 # pylint: disable=attribute-defined-outside-init
 class GaugeModel(object):
@@ -269,6 +167,7 @@ class GaugeModel(object):
         self.total_actions_arr = []
         self.average_plaquettes_arr = []
         self.topological_charges_arr = []
+        self.train_samples = {}
         self.losses_arr = []
         self.steps_arr = []
         self.samples_arr = []
@@ -304,6 +203,9 @@ class GaugeModel(object):
             'run_info_file': os.path.join(self.info_dir, 'run_info.txt'),
             'data_pkl_file': os.path.join(self.info_dir, 'data.pkl'),
             'samples_pkl_file': os.path.join(self.info_dir, 'samples.pkl'),
+            'train_samples_pkl_file': (
+                os.path.join(self.info_dir, 'train_samples.pkl')
+            ),
             'samples_history_file': (
                 os.path.join(self.info_dir, 'samples_history.pkl')
             ),
@@ -501,8 +403,8 @@ class GaugeModel(object):
             pickle.dump(self.params, f)
         with open(self.files['samples_pkl_file'], 'wb') as f:
             pickle.dump(samples, f)
-
-
+        with open(self.files['train_samples_pkl_file'], 'wb') as f:
+            pickle.dump(self.train_samples, f)
 
         writer.flush()
 
@@ -675,6 +577,7 @@ class GaugeModel(object):
         learning_rate = self.learning_rate
         dynamics = self.dynamics
         samples_np = self.samples_np
+        x = self.x
         self.sess.graph.finalize()
         try:
             print(helpers.data_header())
@@ -690,8 +593,9 @@ class GaugeModel(object):
                     px,
                     learning_rate,
                     dynamics.eps
-                ], feed_dict={self.x: samples_np})
+                ], feed_dict={x: samples_np})
 
+                self.train_samples[step] = samples_np
                 self.data['step'] = step
                 self.data['loss'] = loss_np
                 self.data['accept_prob'] = px_np
@@ -758,10 +662,13 @@ class GaugeModel(object):
         samples = np.random.randn(*self.samples.shape)
         samples_history = []
 
+        # Move attribute lookup outside of loop to improve performance
+        x_out = self.x_out
+        x = self.x
         print(f"Running (trained) L2HMC sampler for {num_steps} steps...")
         for step in range(num_steps):
             t0 = time.time()
-            samples = self.sess.run(self.x_out, feed_dict={self.x: samples})
+            samples = self.sess.run(x_out, feed_dict={x: samples})
             print(f'step: {step:^6.4g}  '
                   f'model invariant time / step: {time.time() - t0:^6.4g}')
             samples_history.append(samples)
