@@ -41,6 +41,36 @@ def make_run_dir(log_dir):
     return run_dir
 
 
+def check_log_dir(log_dir):
+    if not os.path.isdir(log_dir):
+        raise ValueError(f'Unable to locate {log_dir}, exiting.')
+    else:
+        if not log_dir.endswith('/'):
+            log_dir += '/'
+        info_dir = log_dir + 'run_info/'
+        figs_dir = log_dir + 'figures/'
+        if not os.path.isdir(info_dir):
+            os.makedirs(info_dir)
+        if not os.path.isdir(figs_dir):
+            os.makedirs(figs_dir)
+    return log_dir, info_dir, figs_dir
+
+
+def create_log_dir():
+    """Create directory for storing information about experiment."""
+    #  root_log_dir = '../../log_mog_tf/'
+    #  root_log_dir = os.path.join(ROOT_DIR, log_mog_tf)
+    root_log_dir = os.path.join(os.path.split(ROOT_DIR)[0], 'log_mog_tf')
+    log_dir = make_run_dir(root_log_dir)
+    info_dir = log_dir + 'run_info/'
+    figs_dir = log_dir + 'figures/'
+    if not os.path.isdir(info_dir):
+        os.makedirs(info_dir)
+    if not os.path.isdir(figs_dir):
+        os.makedirs(figs_dir)
+    return log_dir, info_dir, figs_dir
+
+
 def variable_summaries(var):
     """Attach a lot of summaries to a Tensor (for TensorBoard visualization)"""
     with tf.name_scope('summaries'):
