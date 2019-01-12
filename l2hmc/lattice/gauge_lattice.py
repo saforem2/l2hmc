@@ -270,11 +270,11 @@ class GaugeLattice(object):
 
             total_action += 1 - local_action
             plaquettes_sum += local_action
-            topological_charge = project_angle(plaq_sum)
+            topological_charge += project_angle(plaq_sum)
 
         return [self.beta * total_action,
                 plaquettes_sum / self.num_plaquettes,
-                topological_charge / (2 * np.pi)]
+                int(topological_charge / (2 * np.pi))]
 
     def _calc_plaq_observables_np(self, links):
         """Compute the average plaquette of a particular lattice of links."""
@@ -300,7 +300,8 @@ class GaugeLattice(object):
             local_action = np.cos(plaq_sum)
             total_action += 1 - local_action
             plaquettes_sum += local_action
-            topological_charge = project_angle(plaq_sum)
+            topological_charge += plaq_sum
+            #  topological_charge += project_angle(plaq_sum)
 
         return [self.beta * total_action,
                 plaquettes_sum / self.num_plaquettes,
@@ -389,6 +390,7 @@ class GaugeLattice(object):
         return self.beta * total_action #/ self.num_sites
 
     def total_action(self, samples):
+
         """Return the total action (sum over all plaquettes) for each sample in
         samples, at inverse coupling strength `self.beta`. 
 
