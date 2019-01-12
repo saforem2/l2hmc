@@ -26,34 +26,39 @@ MARKERSIZE = 3
 
 
 # pylint: disable=too-many-arguments
-def plot_broken_xaxis(xdata, 
-                      ydata, 
-                      xlabel, 
-                      ylabel, 
-                      output_file=None,
-                      xlim1=(-2, 100),
-                      xlim2=(398, 500)):
-    """Create plot with a broken x-axis."""
-    # pylint: disable=invalid-name
+def plot_broken_xaxis(x_data, y_data, x_label, y_label, 
+                      xlim1=None, xlim2=None, legend=True, out_file=None):
     fig, (ax, ax2) = plt.subplots(1, 2, sharey=True, facecolor='w')
     # plot the same data on both axes
-    for idx in range(ydata.shape[1]):
-        _ = ax.plot(xdata, ydata[:, idx], marker='', ls='-',
-                    alpha=0.7, lw=1.5, label=f'sample {idx}')
+    for idx in range(y_data.shape[1]):
+        _ = ax.plot(x_data, y_data[:, idx], marker='', ls='-',
+                    alpha=1.0, label=f'sample {idx}')
 
-    _ = ax.plot(xdata, ydata.mean(axis=1), marker='', ls='-',
-                color='k', lw=2., label='average')
+    _ = ax.plot(x_data, y_data.mean(axis=1), marker='', ls='-',
+                alpha=0.7, color='k', label='average')
 
-    for idx in range(ydata.shape[1]):
-        _ = ax2.plot(xdata, ydata[:, idx], marker='', ls='-',
-                     alpha=0.7, lw=1.5, label=f'sample {idx}')
+    for idx in range(y_data.shape[1]):
+        _ = ax2.plot(x_data, y_data[:, idx], marker='', ls='-',
+                     alpha=1.0, label=f'sample {idx}')
 
-    _ = ax2.plot(xdata, ydata.mean(axis=1), marker='', ls='-',
-                 color='k', lw=2., label='average')
+    _ = ax2.plot(x_data, y_data.mean(axis=1), marker='', ls='-',
+                 alpha=0.7, color='k', label='average')
 
     # zoom-in / limit the view to different portions of the data
-    _ = ax.set_xlim(xlim1)
-    _ = ax2.set_xlim(xlim2)
+    num_points = len(x_data)
+    if num_points > 1000:
+        cutoff1 = 255
+    else:
+        cutoff1 = 105
+
+    if xlim1 is None:
+        _ = ax.set_xlim(-2, cutoff1)
+    else:
+        _ = ax.set_xlim(xlim1)
+    if xlim2 is None:
+        _ = ax2.set_xlim(num_points - cutoff1, num_points)
+    else:
+        _ = ax2.set_xlim(xlim2)
 
     # hide the spines between ax and ax2
     _ = ax.spines['right'].set_visible(False)
@@ -62,28 +67,66 @@ def plot_broken_xaxis(xdata,
     _ = ax.tick_params(labelright=False)
     _ = ax2.yaxis.tick_right()
 
-    # pylint: disable=invalid-name
-    d = 0.015  # how big to make the diagonal lines in axes coordinates
+    D = .015 # how big to make the diagonal lines in axes coordinates
     # arguments to pass plot, just so we don't keep repeating them
     kwargs = dict(transform=ax.transAxes, color='k', clip_on=False)
-    _ = ax.plot((1-d, 1+d), (-d, +d), **kwargs)
-    _ = ax.plot((1-d, 1+d), (1-d, 1+d), **kwargs)
+    _ = ax.plot((1 - D, 1 + D), (-D, +D), **kwargs)
+    _ = ax.plot((1 - D, 1 + D), (1 - D, 1 + D), **kwargs)
 
     _ = kwargs.update(transform=ax2.transAxes)  # switch to the bottom axes
-    _ = ax2.plot((-d, +d), (1-d, 1+d), **kwargs)
-    _ = ax2.plot((-d, +d), (-d, +d), **kwargs)
+    _ = ax2.plot((-D, +D), (1 - D, 1 + D), **kwargs)
+    _ = ax2.plot((-D, +D), (-D, +D), **kwargs)
 
-    _ = ax.set_ylabel(ylabel, fontsize=14)
-    _ = ax.set_xlabel(xlabel, fontsize=14)
+    _ = ax.set_ylabel(y_label, fontsize=14)
+    _ = ax.set_xlabel(x_label, fontsize=14)
     _ = ax.xaxis.set_label_coords(1.1, -0.065)
-    _ = ax2.legend(loc='best', fontsize=10)
+    if legend:
+        _ = ax2.legend(loc='best', fontsize=10)
 
-    _ = plt.show()  # pylint: disable=F841
-
-    if output_file is not None:
-        fig.savefig(output_file, dpi=400, bbox_inches='tight')
+    if out_file:
+        print(f'Saving figure to {out_file}.')
+        fig.savefig(out_file, dpi=400, bbox_inches='tight')
 
     return fig, ax, ax2
+
+def plot_shared_xaxis(x_data, y_data, x_label, y_label, out_file,
+                      markers=False, lines=True, legend=False, **kwargs):
+    """Create multiple plots with a shared x-axis."""
+    pass
+
+
+def plot_multiple_lines(x_data, y_data, x_label, y_label, out_file=None,
+                        markers=False, lines=True, legend=False, **kwargs):
+
+    fig, ax = plt.subplots()
+
+    marker=None
+    ls='-'
+    fillstyle='full'
+    for idx, row in enumerate(y_data):
+        if markers:
+            marker = MARKERS[idx]
+            fillstyle='none'
+            ls=':'
+        if not lines:
+            ls = ''
+        _ = ax.plot(x_data, row, label=f'sample {idx}', fillstyle=fillstyle,
+                    marker=marker, ls=ls, **kwargs)
+
+    _ = ax.plot(
+        x_data, y_data.mean(axis=0), label='average', alpha=0.75, **kwargs
+    )
+                #  marker='', ls='-',
+                #  alpha=0.75, color='k', label='average', **kwargs)
+
+    ax.set_xlabel(x_label, fontsize=14)
+    ax.set_ylabel(y_label, fontsize=14)
+    if legend:
+        ax.legend(loc='best')
+    if out_file:
+        print(f'Saving figure to {out_file}.')
+        fig.savefig(out_file, dpi=400, bbox_inches='tight')
+    return fig, ax
 
 
 # pylint: disable=too-many-statements,too-many-locals

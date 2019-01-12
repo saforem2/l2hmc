@@ -71,9 +71,10 @@ def create_log_dir():
     return log_dir, info_dir, figs_dir
 
 
-def variable_summaries(var):
+def variable_summaries(var, name):
     """Attach a lot of summaries to a Tensor (for TensorBoard visualization)"""
-    with tf.name_scope('summaries'):
+    #  with tf.name_scope('summaries'):
+    with tf.name_scope(name):
         mean = tf.reduce_mean(var)
         tf.summary.scalar('mean', mean)
         with tf.name_scope('stddev'):

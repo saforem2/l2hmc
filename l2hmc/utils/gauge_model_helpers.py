@@ -27,7 +27,7 @@ def get_run_num(log_dir):
     if not os.path.isdir(log_dir):
         os.makedirs(log_dir)
     contents = os.listdir(log_dir)
-    if contents == []:
+    if contents == [] or contents == ['.DS_Store']:
         return 1
     else:
         run_nums = []
@@ -36,7 +36,10 @@ def get_run_num(log_dir):
                 run_nums.append(int(item.split('_')[-1]))
             except ValueError:
                 continue
-        return sorted(run_nums)[-1] + 1
+        if run_nums == []:
+            return 1
+        else:
+            return sorted(run_nums)[-1] + 1
 
 
 def make_run_dir(log_dir):
@@ -136,8 +139,8 @@ def write_run_parameters(file_path, parameters):
 
 def data_header():
     """Create formatted (header) string containing labels for printing data."""
-    h_str = ("{:^13s}{:^12s}{:^12s}{:^12s}{:^12s}{:^12s}") #{:^10s}{:^10s}")
-    h_strf = h_str.format("STEP", "LOSS", "TIME/STEP", "ACCEPT %",
+    h_str = ("{:^15s}{:^14s}{:^14s}{:^14s}{:^14s}{:^14s}") #{:^10s}{:^10s}")
+    h_strf = h_str.format("STEP", "LOSS", "NORM. TIME", "ACCEPT %",
                           "EPS", "LR")#, "ACTION", "TOP Q", "PLAQ")
     dash0 = (len(h_strf) + 1) * '-'
     dash1 = (len(h_strf) + 1) * '-'
@@ -148,12 +151,12 @@ def data_header():
 
 def format_run_data(data):
     """Create formatted string containing relevant information from `data`."""
-    data_str = (f"{data['step']:>5g}/{data['train_steps']:<6g} "
-                f"{data['loss']:^11.4g} "
-                f"{data['step_time']:^11.4g} "
-                f"{np.mean(data['accept_prob']):^11.4g} "
-                f"{data['eps']:^11.4g} "
-                f"{data['learning_rate']:^11.4g}")
+    data_str = (f"{data['step']:>6g}/{data['train_steps']:<7g} "
+                f"{data['loss']:^13.4g} "
+                f"{data['step_time']:^13.4g} "
+                f"{np.mean(data['accept_prob']):^13.4g} "
+                f"{data['eps']:^13.4g} "
+                f"{data['learning_rate']:^13.4g}")
                 #  + f"{data['avg_action']:^10.4g}"
                 #  + f"{data['avg_top_charge']:^10.4g}"
                 #  + f"{data['avg_plaq']:^10.4g}")
