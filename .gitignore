@@ -45,3 +45,5 @@ l2hmc/notebooks/u1_keras_model_with_dataset.ipynb
 cprofile_out.txt
 >>>>>>> U1_gauge
 gauge_logs_by_size/
+l2hmc/gauge_model_graph/*
+l2hmc/notebooks/using_tf_datasets.ipynb
