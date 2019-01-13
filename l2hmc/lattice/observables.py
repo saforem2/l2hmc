@@ -66,7 +66,6 @@ def total_action(samples, beta):
         total_actions.append(_total_action(samples[idx], beta))
     return total_actions
 
-
 def _calc_observables(lattice, beta):
     """Calculates all relevant observables for an individual lattice.
 
