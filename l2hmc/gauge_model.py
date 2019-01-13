@@ -574,10 +574,10 @@ class GaugeModel(object):
                 )  # pylint: disable=too-many-locals
                 self.losses_arr.append(loss_np)
 
-                if (step + 1) % 10 == 0:
-                    helpers.print_run_data(self.data)
-                    helpers.write_run_data(self.files['run_info_file'],
-                                           self.data)
+                #  if (step + 1) % 10 == 0:
+                helpers.print_run_data(self.data)
+                helpers.write_run_data(self.files['run_info_file'],
+                                       self.data)
 
                 if (step + 1) % self.save_steps == 0:
                     tt = time.time()
