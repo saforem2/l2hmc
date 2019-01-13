@@ -437,8 +437,8 @@ class GaugeModel(object):
 
                 # Squared jump distance
                 self.loss_op = tf.reduce_mean(
-                    (1. / x_loss + 1. / z_loss) * scale
-                    - (x_loss + z_loss) / scale, axis=0, name='loss'
+                    (1. / self.x_loss + 1. / z_loss) * scale
+                    - (self.x_loss + z_loss) / scale, axis=0, name='loss'
                 )
 
             else:
