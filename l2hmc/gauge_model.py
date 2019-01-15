@@ -30,7 +30,8 @@ except ImportError:
     HAS_MATPLOTLIB = False
 
 from l2hmc_eager import gauge_dynamics_eager as gde
-from lattice.gauge_lattice import GaugeLattice, u1_plaq_exact
+from lattice.lattice import GaugeLattice, u1_plaq_exact
+from dynamics.gauge_dynamics import GaugeDynamics
 from utils.plot_helper import plot_broken_xaxis
 import utils.gauge_model_helpers as helpers
 from utils.tf_logging import variable_summaries
@@ -54,6 +55,8 @@ PARAMS = {
     'link_type': 'U1',
     'dim': 2,
     'beta': 8.,
+    'beta_init': 1.,
+    'beta_final': 8.,
     'num_samples': 2,
     'num_steps': 5,
     'eps': 0.05,
@@ -68,6 +71,8 @@ PARAMS = {
     'save_steps': 50,
     'print_steps': 1,
     'logging_steps': 50,
+    'annealing_steps': 100,
+    'annealing_factor': 0.95,
     'clip_value': 100,
     'rand': False,
     'metric': 'l2',
@@ -107,13 +112,13 @@ class GaugeModel(object):
         self.hmc = hmc
         self.aux = aux
         self.eps_trainable = eps_trainable
+        self.beta = params.get('beta_init', 1.,)
 
         self._init_params(params)
 
         self.lattice = GaugeLattice(time_size=self.time_size,
                                     space_size=self.space_size,
                                     dim=self.dim,
-                                    beta=self.beta,
                                     link_type=self.link_type,
                                     num_samples=self.num_samples,
                                     rand=self.rand)
@@ -134,15 +139,15 @@ class GaugeModel(object):
             self._restore_model(self.log_dir)
 
         else:
-            self.dynamics = gde.GaugeDynamicsEager(
-                lattice=self.lattice,
-                num_steps=self.num_steps,
-                eps=self.eps,
-                minus_loglikelihood_fn=self.potential_fn,
-                conv_net=self.conv_net,
-                hmc=self.hmc,
-                eps_trainable=eps_trainable
-            )
+            self.dynamics = GaugeDynamics(lattice=self.lattice,
+                                          potential_fn=self.potential_fn,
+                                          beta_init=1.,
+                                          num_steps=self.num_steps,
+                                          eps=self.eps,
+                                          conv_net=self.conv_net,
+                                          hmc=self.hmc,
+                                          eps_trainable=eps_trainable)
+
             if eps_trainable:
                 self.global_step = tf.train.get_or_create_global_step()
                 self.global_step.assign(1)
@@ -186,6 +191,8 @@ class GaugeModel(object):
             'accept_prob': 0.,
             'samples': [],
             'eps': params.get('eps', 0.),
+            'beta_init': params.get('beta_init', 1.),
+            'beta': params.get('beta', 1.),
             'train_steps': params.get('train_steps', 1000),
             'learning_rate': params.get('learning_rate_init', 1e-4),
         }
@@ -244,15 +251,15 @@ class GaugeModel(object):
         with open(self.files['samples_pkl_file'], 'rb') as f:
             self.samples = pickle.load(f)
 
-        self.dynamics = gde.GaugeDynamicsEager(
-            lattice=self.lattice,
-            num_steps=self.num_steps,
-            eps=self.data['eps'],
-            minus_loglikelihood_fn=self.potential_fn,
-            conv_net=self.conv_net,
-            hmc=self.hmc,
-            eps_trainable=self.eps_trainable
-        )
+        #  self.dynamics = gde.GaugeDynamicsEager(
+        #      lattice=self.lattice,
+        #      num_steps=self.num_steps,
+        #      eps=self.data['eps'],
+        #      minus_loglikelihood_fn=self.potential_fn,
+        #      conv_net=self.conv_net,
+        #      hmc=self.hmc,
+        #      eps_trainable=self.eps_trainable
+        #  )
 
         self.learning_rate = tf.train.exponential_decay(
             self.data['learning_rate'],
@@ -415,9 +422,6 @@ class GaugeModel(object):
                 self.dynamics.apply_transition(self.x)
             )
 
-            self._x = tf.mod(self._x, 2*np.pi)
-            self.x_out = tf.mod(self.x_out, 2*np.pi, name='x_out')
-
             self.x_loss = ((tf.reduce_sum(
                 tf.square(self.x - self._x),
                 axis=self.dynamics.axes,
@@ -427,8 +431,6 @@ class GaugeModel(object):
             if self.aux:
                 z = tf.random_normal(tf.shape(self.x), name='z')
                 _z, _, pz, z_out = self.dynamics.apply_transition(z)
-                _z = tf.mod(_z, 2*np.pi)
-                z_out = tf.mod(z_out, 2*np.pi)
                 z_loss = ((tf.reduce_sum(
                     tf.square(z - _z),
                     axis=self.dynamics.axes,
@@ -541,7 +543,8 @@ class GaugeModel(object):
         dynamics = self.dynamics
         samples_np = self.samples_np
         x = self.x
-        self.sess.graph.finalize()
+        dynamics_beta = self.dynamics.beta
+        #  self.sess.graph.finalize()
         try:
             print(helpers.data_header())
             helpers.write_run_data(
@@ -559,13 +562,15 @@ class GaugeModel(object):
                     px,
                     learning_rate,
                     dynamics.eps
-                ], feed_dict={x: samples_np})
+                ], feed_dict={x: samples_np,
+                              dynamics_beta: self.beta})
 
                 self.train_samples[step] = samples_np
                 self.data['step'] = step
                 self.data['loss'] = loss_np
                 self.data['accept_prob'] = px_np
                 self.data['eps'] = eps_np
+                self.data['beta'] = self.beta
                 self.data['learning_rate'] = lr_np
                 self.data['step_time'] = (
                     (time.time() - start_step_time)
@@ -578,6 +583,20 @@ class GaugeModel(object):
                 helpers.print_run_data(self.data)
                 helpers.write_run_data(self.files['run_info_file'],
                                        self.data)
+
+                if (step + 1) % self.annealing_steps == 0:
+                    beta = self.beta / self.annealing_factor
+                    if beta < self.beta_final:
+                        self.beta = beta
+                    else:
+                        self.beta = self.beta_final
+                        #  print("Annealing schedule finished. "
+                        #        "Saving current state and exiting.")
+                        #
+                        #  self._save_model(samples=samples_np, step=step)
+                        #
+                        #  helpers.write_run_data(self.files['run_info_file'],
+                        #                         self.data)
 
                 if (step + 1) % self.save_steps == 0:
                     tt = time.time()
@@ -593,7 +612,10 @@ class GaugeModel(object):
                 if (step + 1) % self.logging_steps == 0 or step == 1:
                     tt = time.time()
                     summary_str = self.sess.run(summary_op,
-                                                feed_dict={self.x: samples_np})
+                                                feed_dict={
+                                                    x: samples_np,
+                                                    dynamics_beta: self.beta
+                                                })
                     self.writer.add_summary(summary_str, global_step=step)
                     self.writer.flush()
                     log_str = (
@@ -631,10 +653,14 @@ class GaugeModel(object):
         num_links = self.lattice.num_links
         num_steps = self.num_steps
         batch_size = self.batch_size
+        dynamics_beta = self.dynamics.beta
         print(f"Running (trained) L2HMC sampler for {run_steps} steps...")
         for step in range(run_steps):
             t0 = time.time()
-            samples = self.sess.run(x_out, feed_dict={x: samples})
+            samples = self.sess.run(x_out, feed_dict={
+                x: samples,
+                dynamics_beta: self.beta_final
+            })
             tt = (time.time() - t0) / (num_links * num_steps * batch_size)
             #  tt /= (self.lattice.num_links * self.num_steps * self.batch_size)
             print(f'step: {step:^6.4g}/{run_steps} '
