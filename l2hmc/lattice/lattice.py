@@ -1,14 +1,25 @@
+"""
+lattice.py
+
+Contains implementation of GaugeLattice class.
+
+Author: Sam Foreman (github: @saforem2)
+Date: 01/15/2019
+"""
+import random
+
 import numpy as np
 import tensorflow as tf
-import random
 from functools import reduce
 from scipy.linalg import expm
 from scipy.special import i0, i1
 from .gauge_generators import generate_SU2, generate_SU3, generate_SU3_array
 
-from HMC.hmc import HMC
 
-import tensorflow.contrib.eager as tfe
+
+tfe = tf.contrib.eager
+
+EPS = 0.1
 
 NUM_SAMPLES = 500
 PHASE_MEAN = 0
@@ -19,16 +30,23 @@ PHASE_SAMPLES = np.random.normal(PHASE_MEAN, PHASE_SIGMA, NUM_SAMPLES // 2)
 RANDOM_PHASES = np.append(PHASE_SAMPLES, -PHASE_SAMPLES)
 
 def u1_plaq_exact(beta):
+    """Computes the expected value of the `average` plaquette for U(1)."""
     return i1(beta) / i0(beta)
 
 def pbc(tup, shape):
+    """Returns tup % shape for implementing periodic boundary conditions."""
     return list(np.mod(tup, shape))
 
+def pbc_tf(tup, shape):
+    """Tensorflow implementation of `pbc` defined above."""
+    return list(tf.mod(tup, shape))
+
 def mat_adj(mat):
+    """Returns the adjoint (i.e. conjugate transpose) of a matrix `mat`."""
     return tf.transpose(tf.conj(mat))  # conjugate transpose
 
 def project_angle(x):
-    """Function to project an angle from [-4pi, 4pi] to [-pi, pi]."""
+    """Returns the projection of an angle `x` from [-4pi, 4pi] to [-pi, pi]."""
     return x - 2 * np.pi * tf.math.floor((x + np.pi) / (2 * np.pi))
 
 
@@ -253,28 +271,6 @@ class GaugeLattice(object):
 
         return np.array(plaq_observables).reshape((-1, 3)).T
 
-    def local_action(self, *links, all_links):
-        """Compute local action (internal energy) of a collection of `links`
-        that belong to lattice.
-
-        Args:
-            *links (array-like):
-                Collection of links over which to calculate the local action.
-            all_links (array-like):
-                Links array, shape = self.links.shape 
-        """
-        S = 0.0
-        for link in links:
-            site1 = link[:-1]
-            u = link[-1]
-            for v in range(self.dim):
-                if v != u:
-                    site2 = np.array(site1) - self.bases[v]
-                    plaq1 = self.plaquette_operator(site1, u, v, all_links)
-                    plaq2 = self.plaquette_operator(site2, u, v, all_links)
-                    S += (plaq1 + plaq2)
-        return S
-
     def _total_action(self, links):
         """Computes the total action of an individual lattice by summing the
         internal energy of each plaquette over all plaquettes.
@@ -342,17 +338,35 @@ class GaugeLattice(object):
 
     def _plaquette_operator_U1(self, site, u, v, links):
         """Local (counter-clockwise) plaquette operator calculated at `site`
-            Args:
-                site (tuple): 
-                    Starting point (lower left site) of plaquette loop
-                    calculation.
-                u (int): 
-                    First direction (0 <= u <= self.dim - 1)
-                v (int): 
-                    Second direction (0 <= v <= self.dim - 1)
-                links (array-like): 
-                    Array of link variables (shape = self.links.shape). If none
-                    is provided, self.links will be used.
+
+
+        Example: Let [u] denote self.bases[u]. We compute the link sum l1 + l2
+        - l3 - l4 for the Wilson action.
+
+                     site - [v]          site + [u] + [v]
+                                   l3
+                            +------<<------+
+                            |     (-u)     |
+                            v              ^ 
+                       l4   v (-v)    (+v) ^  l2
+                            |      (u)     |
+                            +------>>------+
+                                   l1
+                          site           site + [u]
+
+        Args:
+            site (tuple): 
+                Starting point (lower left site) of plaquette loop
+                calculation.
+            u (int): 
+                First direction (0 <= u <= self.dim - 1)
+            v (int): 
+                Second direction (0 <= v <= self.dim - 1)
+            links (array-like): 
+                Array of link variables (shape = self.links.shape). If none
+                is provided, self.links will be used.
+        Returns:
+            _ (float): Plaquette sum l1 + l2 - l3 - l4
         """
         shape = self.site_idxs
 
@@ -419,12 +433,9 @@ class GaugeLattice(object):
 
         return staples
 
-    def _update_link(self, site, d, links=None):
+    def _update_link(self, site, d, links, beta):
         """Update the link located at site + d using Metropolis-Hastings
         accept/reject."""
-        if links is None:
-            links = self.links
-
         if links.shape != self.links.shape:
             links = tf.reshape(links, self.links.shape)
 
@@ -444,7 +455,7 @@ class GaugeLattice(object):
 
         # note that if the proposed action is smaller than the current action,
         # prob > 1 and we accept the new link
-        prob = min(1, np.exp(self.beta * (minus_proposed_action
+        prob = min(1, np.exp(beta * (minus_proposed_action
                                           - minus_current_action)))
         accept = 0
         if np.random.uniform() < prob:
@@ -452,7 +463,7 @@ class GaugeLattice(object):
             accept = 1
         return accept
 
-    def run_metropolis(self, links=None):
+    def run_metropolis(self, beta, links=None):
         """Run the MCMC simulation using Metropolis-Hastings accept/reject. """
         if links is None:
             links = self.links
@@ -460,16 +471,16 @@ class GaugeLattice(object):
             links = tf.reshape(links, self.links.shape)
         # relax the initial configuration
         eq_steps = 1000
-        for step in range(eq_steps):
+        for _ in range(eq_steps):
             for site in self.iter_sites():
                 for d in range(self.dim):
-                    _ = self._update_link(self, site, d)
+                    _ = self._update_link(self, site, d, beta)
 
         num_acceptances = 0  # keep track of acceptance rate
         for step in range(10000):
             for site in self.iter_sites():
                 for d in range(self.dim):
-                    num_acceptances += self._update_link(self, site, d)
+                    num_acceptances += self._update_link(self, site, d, beta)
 
 
 
