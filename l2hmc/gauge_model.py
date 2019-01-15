@@ -90,6 +90,8 @@ class GaugeModel(object):
                  log_dir=None,
                  restore=False,
                  eps_trainable=True,
+                 annealing=True,
+                 clip_grads=True,
                  aux=False):
         """Initialization method."""
 
@@ -112,7 +114,12 @@ class GaugeModel(object):
         self.hmc = hmc
         self.aux = aux
         self.eps_trainable = eps_trainable
-        self.beta = params.get('beta_init', 1.,)
+        self.clip_grads = clip_grads
+        self.annealing = annealing
+        if self.annealing:
+            self.beta = params.get('beta_init', 1.,)
+        else:
+            self.beta = params.get('beta_final')
 
         self._init_params(params)
 
@@ -251,6 +258,21 @@ class GaugeModel(object):
         with open(self.files['samples_pkl_file'], 'rb') as f:
             self.samples = pickle.load(f)
 
+        self.dynamics = GaugeDynamics(
+            lattice=self.lattice,
+            potential_fn=self.potential_fn,
+            beta_init=self.data['beta'],
+            num_steps=self.num_steps,
+            eps=self.data['eps'],
+            conv_net=self.conv_net,
+            hmc=self.hmc,
+            eps_trainable=self.eps_trainable
+        )
+
+        self.global_step = tf.train.get_or_create_global_step()
+        #  self.global_step.assign(self.data['step'])
+        #  tf.add_to_collection('global_step', self.global_step)
+
         #  self.dynamics = gde.GaugeDynamicsEager(
         #      lattice=self.lattice,
         #      num_steps=self.num_steps,
@@ -278,13 +300,13 @@ class GaugeModel(object):
                 self.config = tf.ConfigProto()
                 self.sess = tf.Session(config=self.config)
             self.saver = tf.train.Saver(max_to_keep=3)
-            #  self.sess.run(tf.global_variables_initializer())
+            self.sess.run(tf.global_variables_initializer())
             ckpt = tf.train.get_checkpoint_state(log_dir)
             if ckpt and ckpt.model_checkpoint_path:
                 print("Restoring previous model from: "
                       f"{ckpt.model_checkpoint_path}")
                 self.saver.restore(self.sess, ckpt.model_checkpoint_path)
-                self.sess.run(tf.global_variables_initializer())
+                #  self.sess.run(tf.global_variables_initializer())
                 print("Model restored.")
                 self.global_step = tf.train.get_global_step()
         else:
@@ -361,6 +383,21 @@ class GaugeModel(object):
         """"Create summary objects for logging in TensorBoard."""
         with tf.name_scope('summaries'):
             tf.summary.scalar('loss', self.loss_op)
+
+            if self.clip_grads:
+                with tf.name_scope('grads'):
+                    for grad, var in self.grads:
+                        try:
+                            layer, type = var.name.split('/')[-2:]
+                            name = layer + '_' + type[:-2]
+                        except:
+                            name = var.name[:-2]
+                        try:
+                            variable_summaries(grad, name + '_gradient')
+                        except:
+                            import pdb
+                            pdb.set_trace()
+
             with tf.name_scope('position_fn'):
                 for var in self.dynamics.position_fn.trainable_variables:
                     try:
@@ -387,6 +424,7 @@ class GaugeModel(object):
                         import pdb
                         pdb.set_trace()
 
+
             #  tf.summary.histogram('histogram_loss', self.loss_op)
             #  variable_summaries(self.loss)
             self.summary_op = tf.summary.merge_all(name='summary_op')
@@ -395,22 +433,38 @@ class GaugeModel(object):
         """Create optimizer to use during training."""
         with tf.name_scope('train'):
             if not self.hmc:
-                clip_value = self.params['clip_value']
-                grads, _ = tf.clip_by_global_norm(
-                    tf.gradients(self.loss_op,
-                                 self.dynamics.trainable_variables),
-                    clip_value,
-                    name='clip_grads'
-                )
-                self.optimizer = tf.train.AdamOptimizer(
-                    learning_rate=self.learning_rate,
-                    name='AdamOptimizer'
-                )
-                self.train_op = self.optimizer.apply_gradients(
-                    zip(grads, self.dynamics.trainable_variables),
-                    global_step=self.global_step,
-                    name='train_op'
-                )
+                if self.clip_grads:
+                    clip_value = self.params['clip_value']
+                    grads = tf.gradients(self.loss_op,
+                                         self.dynamics.trainable_variables)
+                    self.grads = list(
+                        zip(grads, self.dynamics.trainable_variables)
+                    )
+                    clipped_grads, _ = tf.clip_by_global_norm(
+                        grads,
+                        clip_value,
+                        name='clipped_grads'
+                    )
+                    #  self.grads, _ = tf.clip_by_global_norm(
+                    #      tf.gradients(self.loss_op,
+                    #                   self.dynamics.trainable_variables),
+                    #      clip_value,
+                    #      name='clip_grads'
+                    #  )
+                    self.optimizer = tf.train.AdamOptimizer(
+                        learning_rate=self.learning_rate,
+                        name='AdamOptimizer'
+                    )
+                    self.train_op = self.optimizer.apply_gradients(
+                        zip(clipped_grads, self.dynamics.trainable_variables),
+                        global_step=self.global_step,
+                        name='train_op'
+                    )
+                else:
+                    self.train_op = tf.train.AdamOptimizer(
+                        learning_rate=self.learning_rate,
+                        name='AdamOptimizer'
+                    ).minimize(self.loss_op)
             else:
                 self.train_op = tf.no_op(name='train_op')  # dummy operation
 
@@ -457,7 +511,7 @@ class GaugeModel(object):
         """
         scale = self.params['loss_scale']
         _, _, self.px, self.x_out = self.dynamics.apply_transition(self.x)
-        self.x_out = tf.mod(self.x_out, 2 * np.pi, name='x_out')
+        #  self.x_out = tf.mod(self.x_out, 2 * np.pi, name='x_out')
 
     def build_graph(self):
         """Build graph for TensorFlow."""
@@ -585,11 +639,12 @@ class GaugeModel(object):
                                        self.data)
 
                 if (step + 1) % self.annealing_steps == 0:
-                    beta = self.beta / self.annealing_factor
-                    if beta < self.beta_final:
-                        self.beta = beta
-                    else:
-                        self.beta = self.beta_final
+                    if self.annealing:
+                        beta = self.beta / self.annealing_factor
+                        if beta < self.beta_final:
+                            self.beta = beta
+                        else:
+                            self.beta = self.beta_final
                         #  print("Annealing schedule finished. "
                         #        "Saving current state and exiting.")
                         #
@@ -609,7 +664,7 @@ class GaugeModel(object):
                     print(save_str)
                     print(helpers.data_header())
 
-                if (step + 1) % self.logging_steps == 0 or step == 1:
+                if (step + 1) % self.logging_steps == 0 or (step + 1) == 1:
                     tt = time.time()
                     summary_str = self.sess.run(summary_op,
                                                 feed_dict={
