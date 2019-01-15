@@ -17,7 +17,8 @@ import matplotlib.pyplot as plt
 
 from pandas.plotting import autocorrelation_plot
 
-from lattice.gauge_lattice import GaugeLattice, u1_plaq_exact
+from lattice.lattice import GaugeLattice, u1_plaq_exact
+#  from lattice.gauge_lattice import GaugeLattice, u1_plaq_exact
 #  from l2hmc_eager import gauge_dynamics_eager as gde
 
 from .plot_helper import plot_broken_xaxis, plot_multiple_lines
@@ -159,7 +160,6 @@ def _make_lattice(params):
     return GaugeLattice(time_size=params['time_size'],
                         space_size=params['space_size'],
                         dim=params['dim'],
-                        beta=params['beta'],
                         link_type=params['link_type'],
                         num_samples=params['num_samples'],
                         rand=params['rand'])
@@ -214,9 +214,10 @@ def _calc_observables(samples, params):
     total_actions = []
     avg_plaquettes = []
     top_charges = []
+    beta = params['beta_final']
     for idx, sample in enumerate(samples):
         t0 = time.time()
-        observables = np.array(observables_fn(sample))
+        observables = np.array(observables_fn(sample, beta))
         actions, plaqs, charges = observables
 
         total_actions.append(actions)
@@ -311,9 +312,12 @@ def calc_top_charges_autocorr(top_charges_history):
     """
     autocorr_arr = []
     num_samples = top_charges_history.shape[1]
-    for i in range(num_samples):
-        autocorr_arr.append(autocorr(top_charges_history[:, i]))
-    autocorr_arr = np.array(autocorr_arr)
+    autocorr_arr = np.array([
+        autocorr(top_charges_history[:, i]) for i in range(num_samples)
+    ])
+    #  for i in range(num_samples):
+    #      autocorr_arr.append(autocorr(top_charges_history[:, i]))
+    #  autocorr_arr = np.array(autocorr_arr)
     autocorr_avg = np.mean(autocorr_arr, axis=0)
 
     return autocorr_arr, autocorr_avg

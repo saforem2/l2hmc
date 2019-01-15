@@ -139,9 +139,9 @@ def write_run_parameters(file_path, parameters):
 
 def data_header():
     """Create formatted (header) string containing labels for printing data."""
-    h_str = ("{:^15s}{:^14s}{:^14s}{:^14s}{:^14s}{:^14s}") #{:^10s}{:^10s}")
+    h_str = ("{:^15s}{:^14s}{:^14s}{:^14s}{:^14s}{:^14s}{:^14s}")
     h_strf = h_str.format("STEP", "LOSS", "NORM. TIME", "ACCEPT %",
-                          "EPS", "LR")#, "ACTION", "TOP Q", "PLAQ")
+                          "EPS", "BETA", "LR")#, "ACTION", "TOP Q", "PLAQ")
     dash0 = (len(h_strf) + 1) * '-'
     dash1 = (len(h_strf) + 1) * '-'
     header_str = dash0 + '\n' + h_strf + '\n' + dash1
@@ -151,15 +151,15 @@ def data_header():
 
 def format_run_data(data):
     """Create formatted string containing relevant information from `data`."""
-    data_str = (f"{data['step']:>6g}/{data['train_steps']:<7g} "
-                f"{data['loss']:^13.4g} "
-                f"{data['step_time']:^13.4g} "
-                f"{np.mean(data['accept_prob']):^13.4g} "
-                f"{data['eps']:^13.4g} "
-                f"{data['learning_rate']:^13.4g}")
-                #  + f"{data['avg_action']:^10.4g}"
-                #  + f"{data['avg_top_charge']:^10.4g}"
-                #  + f"{data['avg_plaq']:^10.4g}")
+    data_str = (
+        f"{data['step']:>6g}/{data['train_steps']:<7g} "
+        f"{data['loss']:^13.4g} "
+        f"{data['step_time']:^13.4g} "
+        f"{np.mean(data['accept_prob']):^13.4g} "
+        f"{data['eps']:^13.4g} "
+        f"{data['beta']:^13.4g} "
+        f"{data['learning_rate']:^13.4g}"
+    )
 
     return data_str
 

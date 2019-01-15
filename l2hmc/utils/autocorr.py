@@ -36,11 +36,7 @@ def autocorr_fast(X, kappa=500):
 def autocorr(X):
     """Alternative method for calculating the autocorrelation spectrum."""
     result = np.correlate(X, X, mode='full')
-    if result[result.argmax()] == 1:
-        return result[result.size//2]
-
     result /= result[result.argmax()]
-
     return result[result.size//2:]
 
 def autocovariance(X, tau=0):
