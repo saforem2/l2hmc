@@ -457,15 +457,14 @@ class GaugeModel(object):
         """Create optimizer to use during training."""
         with tf.name_scope('train'):
             if not self.hmc:
+                self.grads = tf.gradients(self.loss_op,
+                                          self.dynamics.trainable_variables)
                 if self.clip_grads:
                     clip_value = self.params['clip_value']
-                    grads = tf.gradients(self.loss_op,
-                                         self.dynamics.trainable_variables)
-                    self.grads = list(
-                        zip(grads, self.dynamics.trainable_variables)
-                    )
-                    clipped_grads, _ = tf.clip_by_global_norm(
-                        grads,
+                    #  grads = tf.gradients(self.loss_op,
+                    #                       self.dynamics.trainable_variables)
+                    self.grads, _ = tf.clip_by_global_norm(
+                        self.grads,
                         clip_value,
                         name='clipped_grads'
                     )
@@ -475,20 +474,23 @@ class GaugeModel(object):
                     #      clip_value,
                     #      name='clip_grads'
                     #  )
-                    self.optimizer = tf.train.AdamOptimizer(
-                        learning_rate=self.learning_rate,
-                        name='AdamOptimizer'
-                    )
-                    self.train_op = self.optimizer.apply_gradients(
-                        zip(clipped_grads, self.dynamics.trainable_variables),
-                        global_step=self.global_step,
-                        name='train_op'
-                    )
-                else:
-                    self.train_op = tf.train.AdamOptimizer(
-                        learning_rate=self.learning_rate,
-                        name='AdamOptimizer'
-                    ).minimize(self.loss_op)
+                self.grads_and_vars = list(
+                    zip(self.grads, self.dynamics.trainable_variables)
+                )
+                self.optimizer = tf.train.AdamOptimizer(
+                    learning_rate=self.learning_rate,
+                    name='AdamOptimizer'
+                )
+                self.train_op = self.optimizer.apply_gradients(
+                    zip(self.grads, self.dynamics.trainable_variables),
+                    global_step=self.global_step,
+                    name='train_op'
+                )
+                #  else:
+                #      self.train_op = tf.train.AdamOptimizer(
+                #          learning_rate=self.learning_rate,
+                #          name='AdamOptimizer'
+                #      ).minimize(self.loss_op)
             else:
                 self.train_op = tf.no_op(name='train_op')  # dummy operation
 
@@ -768,6 +770,7 @@ class GaugeModel(object):
         else:
             print(f"Running (trained) L2HMC sampler for {run_steps} steps...")
 
+        start_time = time.time()
         for step in range(run_steps):
             t0 = time.time()
             samples = self.sess.run(x_out, feed_dict={
@@ -797,8 +800,8 @@ class GaugeModel(object):
         with open(out_file, 'wb') as f:
             pickle.dump(samples_history, f)
 
-        print('done.')
-        print(f'Samples saved to: {out_file}.')
+        print(f'\nSamples saved to: {out_file}.')
+        print(f'\n Time to complete run: {time.time() - start_time} seconds.')
         print(80*'-' + '\n')
 
         if ret:
