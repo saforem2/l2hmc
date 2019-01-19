@@ -114,7 +114,8 @@ def plot_multiple_lines(x_data, y_data, x_label, y_label, out_file=None,
                     marker=marker, ls=ls, **kwargs)
 
     _ = ax.plot(
-        x_data, y_data.mean(axis=0), label='average', alpha=0.75, **kwargs
+        x_data, y_data.mean(axis=0), color='k', label='average', alpha=0.75,
+        **kwargs
     )
                 #  marker='', ls='-',
                 #  alpha=0.75, color='k', label='average', **kwargs)
@@ -210,7 +211,7 @@ def errorbar_plot(x_data, y_data, y_errors, out_file=None, **kwargs):
 
     if num_entries > 1:
         return fig, axes
-    else: 
+    else:
         return fig, ax
 
 

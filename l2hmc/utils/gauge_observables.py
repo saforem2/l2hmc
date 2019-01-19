@@ -63,6 +63,13 @@ def _load_params(log_dir):
         print(f"Unable to find {params_file} in {info_dir}. Returning 0.")
         return 0
 
+def _load_samples_from_file(samples_file):
+    """Load samples from file `f`."""
+    with open(samples_file, 'rb') as f:
+        print(f"Reading samples from {samples_file}.")
+        samples = pickle.load(f)
+    return samples
+
 def _load_multiple_samples(samples_history_dir):
     """Load all of the `samples_history` data from `samples_history_dir`"""
     _files = os.listdir(samples_history_dir)
@@ -75,8 +82,9 @@ def _load_multiple_samples(samples_history_dir):
     for _file in samples_files:
         print(f'Loading samples history from: {_file}.')
         num_steps = int(_file.split('/')[-1].split('_')[-1].rstrip('.pkl'))
-        with open(_file, 'rb') as f:
-            samples_dict[num_steps] = np.array(pickle.load(f))
+        samples_dict[num_steps] = np.array(_load_samples_from_file(_file))
+        #  with open(_file, 'rb') as f:
+        #      samples_dict[num_steps] = np.array(pickle.load(f))
 
     return samples_dict
 
@@ -461,7 +469,7 @@ def make_broken_xaxis_plots(figs_dir, beta, observables,
 
     return broken_xaxis_figs_axes
 
-def make_multiple_lines_plots(figs_dir, beta, observables, legend=False):
+def make_multiple_lines_plots(beta, observables, figs_dir=None, legend=False):
     """Create all relevant plots."""
     actions, avg_plaquettes, top_charges = observables
 
@@ -482,7 +490,16 @@ def make_multiple_lines_plots(figs_dir, beta, observables, legend=False):
     ###########################################################################
     # Topological charge
     ###########################################################################
-    out_file = os.path.join(figs_dir, 'topological_charge_vs_step.pdf')
+    if figs_dir is None:
+        charges_file, plaquettes_file, actions_file = None, None, None
+
+    else:
+        charges_file = os.path.join(figs_dir,
+                                    'topological_charge_vs_step.pdf')
+        plaquettes_file = os.path.join(figs_dir,
+                                       'average_plaquette_vs_step.pdf')
+        actions_file = os.path.join(figs_dir,
+                                    'average_action_vs_step.pdf')
     #  kwargs = {
     #      marker=''
     #  }
@@ -492,32 +509,32 @@ def make_multiple_lines_plots(figs_dir, beta, observables, legend=False):
                                   markers=True,
                                   lines=False,
                                   legend=True,
-                                  out_file=out_file)
+                                  out_file=charges_file)
     multiple_lines_figs_axes.append((fig, ax))
 
     ###########################################################################
     # Average plaquette
     ###########################################################################
-    out_file = os.path.join(figs_dir, 'average_plaquette_vs_step.pdf')
     fig, ax = plot_multiple_lines(steps, avg_plaquettes.T,
                                   x_label='step',
                                   y_label='Average plaquette',
-                                  legend=legend)
+                                  legend=legend,
+                                  out_file=plaquettes_file)
     _ = ax.axhline(y=u1_plaq_exact(beta),
                    color='r', ls='--', lw=2.5, label='exact')
 
     multiple_lines_figs_axes.append((fig, ax))
-    plt.savefig(out_file, dpi=400, bbox_inches='tight')
+    if plaquettes_file is not None:
+        plt.savefig(plaquettes_file, dpi=400, bbox_inches='tight')
 
     ###########################################################################
     # Average action
     ###########################################################################
-    out_file = os.path.join(figs_dir, 'average_action_vs_step.pdf')
     fig, ax = plot_multiple_lines(steps, actions.T,
                                   x_label='step',
                                   y_label='Total action',
                                   legend=legend,
-                                  out_file=out_file)
+                                  out_file=actions_file)
     multiple_lines_figs_axes.append((fig, ax))
 
     return multiple_lines_figs_axes
@@ -671,21 +688,21 @@ def make_plots_from_log_dir(log_dir):
 
     #  samples_autocorr, _ = calc_samples_autocorr(samples)
 
-    broken_xaxis_figs_axes = _make_broken_xaxis_plots(
+    #  broken_xaxis_figs_axes = make_broken_xaxis_plots(
+    #      figs_dir,
+    #      beta,
+    #      observables,
+    #      top_charges_autocorr
+    #  )
+
+    multiple_lines_figs_axes = make_multiple_lines_plots(
         figs_dir,
         beta,
         observables,
         top_charges_autocorr
     )
 
-    multiple_lines_figs_axes = _make_multiple_lines_plots(
-        figs_dir,
-        beta,
-        observables,
-        top_charges_autocorr
-    )
-
-    return multiple_lines_figs_axes, broken_xaxis_figs_axes
+    return multiple_lines_figs_axes #, broken_xaxis_figs_axes
 
 def calc_observables_generate_plots(log_dir):
     """Wrapper function for calculating all relevant observables and plots."""
@@ -732,20 +749,18 @@ def calc_observables_generate_plots(log_dir):
     # Create plots
     #########################################################################
     multiple_lines_figs_axes = make_multiple_lines_plots(
-        figs_dir,
         params['beta'],
         observables,
-        top_charges_autocorr,
+        figs_dir=figs_dir,
         legend=False
     )
 
-    broken_xaxis_figs_axes = make_broken_xaxis_plots(
-        figs_dir,
-        params['beta'],
-        observables,
-        top_charges_autocorr,
-        legend=False,
-    )
+    #  broken_xaxis_figs_axes = make_broken_xaxis_plots(
+    #      params['beta'],
+    #      observables,
+    #      figs_dir,
+    #      legend=False,
+    #  )
 
     for idx in range(top_charges.shape[1]):
         out_file = os.path.join(
