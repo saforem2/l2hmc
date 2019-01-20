@@ -12,12 +12,15 @@ import tensorflow as tf
 from scipy.special import i0, i1
 
 def u1_plaq_exact(beta):
+    """Exact value of the average plaquette calculated at `beta`."""
     return i1(beta) / i0(beta)
 
 def pbc(tup, shape):
+    """Enforce periodic boundary condiditions for tup. Put `tup` in `shape`."""
     return list(np.mod(tup, shape))
 
 def pbc_tf(tup, shape):
+    """Same as `pbc` method above, in tensorflow."""
     return list(tf.mod(tup, shape))
 
 def project_angle(x):
@@ -25,7 +28,7 @@ def project_angle(x):
     return x - 2 * np.pi * tf.math.floor((x + np.pi) / (2 * np.pi))
 
 # pylint: disable=invalid-name
-def _total_action(lattice, beta):
+def _calc_total_action(lattice, beta):
     """Computes the total action of an individual lattice by summing the
     internal energy of each plaquette over all plaquettes.
 
@@ -54,16 +57,16 @@ def _total_action(lattice, beta):
 
     return beta * total_action
 
-def total_action(samples, beta):
+def calc_total_action(samples, beta):
     """Computes the total action of each sample lattice in samples."""
     if tf.executing_eagerly():
         return np.array([
-            _total_action(sample, beta) for sample in samples
+            _calc_total_action(sample, beta) for sample in samples
         ])
 
     total_actions = []
     for idx in range(samples.shape[0]):
-        total_actions.append(_total_action(samples[idx], beta))
+        total_actions.append(_calc_total_action(samples[idx], beta))
     return total_actions
 
 def _calc_observables(lattice, beta):
@@ -83,16 +86,16 @@ def _calc_observables(lattice, beta):
 
     for plaq in lattice.plaquette_idxs:
         *site, u, v = plaq
-        plaq_sum = lattice.plaquette_operator(site, u, v, links)
+        plaq_sum = lattice.plaquette_operator(site, u, v, lattice.links)
         local_action = np.cos(plaq_sum)
 
         total_action += 1 - local_action
         plaquettes_sum+= local_action
         topological_charge += project_angle(plaq_sum)
 
-    return [total_action,
+    return [beta * total_action,
             plaquettes_sum /  lattice.num_plaquettes,
-            int(topological_charge / (2 (np.pi)))]
+            int(topological_charge / (2 * np.pi))]
 
 def calc_observables(samples, beta):
     """Calculates all relevant observables for each lattice in `samples`."""
