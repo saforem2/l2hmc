@@ -174,7 +174,12 @@ class GaugeModel(object):
                     staircase=True
                 )
 
-            self.build_graph()
+            if self.hmc:
+                # if running generic HMC, all we need is self.x_out to sample
+                #  self.sess.run(tf.global_variables_initializer())
+                self._create_sampler()
+            else:
+                self.build_graph()
 
             if sess is None:
                 self.sess = tf.Session(config=config)
@@ -265,6 +270,10 @@ class GaugeModel(object):
 
     def _restore_model(self, log_dir):
         """Restore model from previous run contained in `log_dir`."""
+        if self.hmc:
+            print(f"ERROR: self.hmc: {self.hmc}. No model to restore. Exiting.")
+            sys.exit(1)
+
         assert os.path.isdir(log_dir), (f"log_dir: {log_dir} does not exist.")
 
         run_info_dir = os.path.join(log_dir, 'run_info')
@@ -296,16 +305,6 @@ class GaugeModel(object):
         self.global_step = tf.train.get_or_create_global_step()
         #  self.global_step.assign(self.data['step'])
         #  tf.add_to_collection('global_step', self.global_step)
-
-        #  self.dynamics = gde.GaugeDynamicsEager(
-        #      lattice=self.lattice,
-        #      num_steps=self.num_steps,
-        #      eps=self.data['eps'],
-        #      minus_loglikelihood_fn=self.potential_fn,
-        #      conv_net=self.conv_net,
-        #      hmc=self.hmc,
-        #      eps_trainable=self.eps_trainable
-        #  )
 
         self.learning_rate = tf.train.exponential_decay(
             self.data['learning_rate'],
@@ -404,7 +403,7 @@ class GaugeModel(object):
             f.write('\n')
 
     def _create_summaries(self):
-        """"Create summary objects for logging in TensorBoard."""
+        """Create summary objects for logging in TensorBoard."""
         with tf.name_scope('summaries'):
             tf.summary.scalar('loss', self.loss_op)
 
@@ -456,43 +455,27 @@ class GaugeModel(object):
     def _create_optimizer(self):
         """Create optimizer to use during training."""
         with tf.name_scope('train'):
-            if not self.hmc:
-                self.grads = tf.gradients(self.loss_op,
-                                          self.dynamics.trainable_variables)
-                if self.clip_grads:
-                    clip_value = self.params['clip_value']
-                    #  grads = tf.gradients(self.loss_op,
-                    #                       self.dynamics.trainable_variables)
-                    self.grads, _ = tf.clip_by_global_norm(
-                        self.grads,
-                        clip_value,
-                        name='clipped_grads'
-                    )
-                    #  self.grads, _ = tf.clip_by_global_norm(
-                    #      tf.gradients(self.loss_op,
-                    #                   self.dynamics.trainable_variables),
-                    #      clip_value,
-                    #      name='clip_grads'
-                    #  )
-                self.grads_and_vars = list(
-                    zip(self.grads, self.dynamics.trainable_variables)
+            self.grads = tf.gradients(self.loss_op,
+                                      self.dynamics.trainable_variables)
+            if self.clip_grads:
+                clip_value = self.params['clip_value']
+                self.grads, _ = tf.clip_by_global_norm(
+                    self.grads,
+                    clip_value,
+                    name='clipped_grads'
                 )
-                self.optimizer = tf.train.AdamOptimizer(
-                    learning_rate=self.learning_rate,
-                    name='AdamOptimizer'
-                )
-                self.train_op = self.optimizer.apply_gradients(
-                    zip(self.grads, self.dynamics.trainable_variables),
-                    global_step=self.global_step,
-                    name='train_op'
-                )
-                #  else:
-                #      self.train_op = tf.train.AdamOptimizer(
-                #          learning_rate=self.learning_rate,
-                #          name='AdamOptimizer'
-                #      ).minimize(self.loss_op)
-            else:
-                self.train_op = tf.no_op(name='train_op')  # dummy operation
+            self.grads_and_vars = list(
+                zip(self.grads, self.dynamics.trainable_variables)
+            )
+            self.optimizer = tf.train.AdamOptimizer(
+                learning_rate=self.learning_rate,
+                name='AdamOptimizer'
+            )
+            self.train_op = self.optimizer.apply_gradients(
+                zip(self.grads, self.dynamics.trainable_variables),
+                global_step=self.global_step,
+                name='train_op'
+            )
 
     def _create_loss(self):
         """Define loss function to minimize during training."""
@@ -571,14 +554,7 @@ class GaugeModel(object):
         _write_strs_to_file([str0, str1])
         t0 = time.time()
 
-        if not self.hmc:
-            self._create_loss()
-
-        else:
-            self._create_sampler()
-            # if running generic HMC, all we need is self.x_out to sample
-            #  self.sess.run(tf.global_variables_initializer())
-            return 0
+        self._create_loss()
 
         t1 = time.time()
         print(t_diff_str(t0, t1) + '\n' + str3 + '\n')
@@ -591,12 +567,6 @@ class GaugeModel(object):
         _write_strs_to_file([t_diff_str(t1, t2), str5])
 
         self._create_summaries()
-
-        #  self.checkpoint = tf.train.Checkpoint(
-        #      optimizer=self.optimizer,
-        #      dynamics=self.dynamics,
-        #      global_step=self.global_step,
-        #  )
 
         print(t_diff_str(t2, time.time()) + '\n' + t_diff_str1(t0) + '\n')
         _write_strs_to_file(

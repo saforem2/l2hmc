@@ -95,18 +95,19 @@ class GaugeDynamics(tf.keras.Model):
         # over the first, second and third axes.
         self.axes = np.arange(1, len(self.samples.shape))
 
-        if not hmc:
-            if conv_net:
-                self._build_conv_nets()
-            else:
-                self._build_generic_nets()
-        else:
+        if hmc:
             self.position_fn = lambda inp: [
                 tf.zeros_like(inp[0]) for t in range(3)
             ]
             self.momentum_fn = lambda inp: [
                 tf.zeros_like(inp[0]) for t in range(3)
             ]
+
+        else:
+            if conv_net:
+                self._build_conv_nets()
+            else:
+                self._build_generic_nets()
 
     def _build_conv_nets(self):
         """Build ConvNet architecture for position and momentum functions."""
