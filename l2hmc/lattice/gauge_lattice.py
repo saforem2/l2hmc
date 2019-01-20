@@ -261,6 +261,19 @@ class GaugeLattice(object):
                 return self.total_action(samples)
         return fn
 
+    def get_grad_potential_fn(self, samples=None):
+        """
+        Returns function object used for calculating the gradient of the
+        potential.
+        """
+        if samples is None:
+            def fn(links):
+                return self._grad_action(links)
+        else:
+            def fn(samples):
+                return self.grad_action(samples)
+        return fn
+
     def _calc_plaq_observables(self, links):
         """Computes the average plaquette of a particular lattice of links."""
         if links.shape != self.links.shape:
