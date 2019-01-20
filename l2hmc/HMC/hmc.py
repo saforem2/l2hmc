@@ -49,24 +49,43 @@ class HMC(object):
 
     def apply_transition(self, position):
         """Propose a new state and perform accept/reject step."""
-        if not isinstance(position, np.ndarray):
-            position = np.array(position)
+        #  if not isinstance(position, np.ndarray):
+        #      position = np.array(position)
 
         #  momentum = tf.random_normal(tf.shape(position))
         momentum = np.random.randn(*position.shape)
         position_post, momentum_post = position, momentum
         # Apply leapfrog steps
+        #  leapfrog_out = [
+        #      self._leapfrog_fn(position_post, momentum_post, i)
+        #      for i in range(self.n_leapfrog_steps)
+        #  ]
+        #  position_post, momentum_post = leapfrog_out
         for i in range(self.n_leapfrog_steps):
             leapfrog_out = self._leapfrog_fn(position_post, momentum_post, i)
             position_post, momentum_post = leapfrog_out
 
+        #  old_hamil = self.hamiltonian(position, momentum)
+        #  new_hamil = self.hamiltonian(position_post, momentum_post)
+        #  prob = np.exp(np.minimum((old_hamil - new_hamil), 0.))
+        #  #  prob = np.minimum(np.exp(old_hamil - new_hamil), 1)
+        #  if np.random.uniform() <= prob:
+        #      return position_post, momentum_post, prob
+
         old_hamil = self.hamiltonian(position, momentum)
         new_hamil = self.hamiltonian(position_post, momentum_post)
-        prob = np.exp(np.minimum((old_hamil - new_hamil), 0.))
-        #  prob = np.minimum(np.exp(old_hamil - new_hamil), 1)
-        if np.random.uniform() <= prob:
-            return position_post, momentum_post, prob
-        return position, momentum, prob
+        prob = tf.exp(tf.minimum((old_hamil - new_hamil), 0.))
+
+        mask = np.zeros(prob.shape)
+        mask[np.random.uniform(size=prob.shape) <= prob] = 1
+        not_mask = 1. - mask
+
+        new_position = (mask[:, None] * position_post
+                        + not_mask[:, None] * position)
+        new_momentum = (mask[:, None] * momentum_post
+                        + not_mask[:, None] * momentum)
+
+        return new_position, new_momentum, prob
 
     def _leapfrog_fn(self, position, momentum, i):
         """One leapfrog step."""
@@ -77,14 +96,14 @@ class HMC(object):
 
         return position, momentum
 
-    def _update_momentum(self, position, momentum, t):
+    def _update_momentum(self, position, momentum):
         """Update momentum in the leapfrog step."""
         grad = self.grad_potential_fn(position)
         momentum_out = momentum - 0.5 * self.step_size * grad
 
         return momentum_out
 
-    def _update_position(self, position, momentum, t):
+    def _update_position(self, position, momentum):
         """Update position in the leapfrog step."""
         return position + self.step_size * momentum
 
@@ -121,10 +140,11 @@ class HMC(object):
             # a scalar value for the kinetic energy.
             # NOTE: The first axis of v indexes samples in a batch of samples.
             axes = np.arange(1, len(v.shape))
-            #  return 0.5 * tf.reduce_sum(v**2, axis=axes)
-            return 0.5 * np.sum(v**2, axis=axes)
+            return 0.5 * tf.reduce_sum(v**2, axis=axes)
+            #  return 0.5 * np.sum(v**2, axis=axes)
         else:
-            return 0.5 * np.sum(v**2, axis=0)
+            #  return 0.5 * np.sum(v**2, axis=0)
+            return 0.5 * tf.reduce_sum(v**2, axis=0)
 
     def hamiltonian(self, position, momentum):
         """Compute the overall Hamiltonian."""
