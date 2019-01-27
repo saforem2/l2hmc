@@ -95,8 +95,12 @@ def plot_shared_xaxis(x_data, y_data, x_label, y_label, out_file,
     pass
 
 
-def plot_multiple_lines(x_data, y_data, x_label, y_label, out_file=None,
-                        markers=False, lines=True, legend=False, **kwargs):
+def plot_multiple_lines(x_data, y_data, x_label, y_label, **kwargs):
+    """Plot multiple lines along with their average."""
+    out_file = kwargs.get('out_file', None)
+    markers = kwargs.get('markers', False)
+    lines = kwargs.get('lines', True)
+    legend = kwargs.get('legend', False)
 
     fig, ax = plt.subplots()
 
@@ -111,14 +115,11 @@ def plot_multiple_lines(x_data, y_data, x_label, y_label, out_file=None,
         if not lines:
             ls = ''
         _ = ax.plot(x_data, row, label=f'sample {idx}', fillstyle=fillstyle,
-                    marker=marker, ls=ls, **kwargs)
+                    marker=marker, ls=ls)
 
     _ = ax.plot(
         x_data, y_data.mean(axis=0), color='k', label='average', alpha=0.75,
-        **kwargs
     )
-                #  marker='', ls='-',
-                #  alpha=0.75, color='k', label='average', **kwargs)
 
     ax.set_xlabel(x_label, fontsize=14)
     ax.set_ylabel(y_label, fontsize=14)

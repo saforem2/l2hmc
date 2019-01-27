@@ -15,6 +15,8 @@ import pandas as pd
 import tensorflow as tf
 import matplotlib.pyplot as plt
 
+from scipy.optimize import curve_fit
+
 from pandas.plotting import autocorrelation_plot
 
 from lattice.lattice import GaugeLattice, u1_plaq_exact
@@ -279,6 +281,10 @@ def calc_observables_from_log_dir(log_dir):
 
     return params, samples, observables
 
+
+##############################################################################
+# Calculate thermalization time by fitting observable to exponential
+##############################################################################
 def _calc_thermalization_time(samples):
     """Calculate the time required for `samples` to sufficiently thermalize.
 
@@ -286,7 +292,14 @@ def _calc_thermalization_time(samples):
         There doesn't seem to be a general consesus on how best to approach
         this problem. Further thought required.
     """
-    pass
+    def exp_fn(x, A, B, C, D):
+        return A * np.exp(B * (x - C)) + D
+
+    xdata = np.arange(samples.shape[0])
+
+    popt, pcov = curve_fit(f, xdata=xdata, ydata=samples)
+
+    return popt, pcov
 
 
 ##############################################################################
@@ -469,8 +482,12 @@ def make_broken_xaxis_plots(figs_dir, beta, observables,
 
     return broken_xaxis_figs_axes
 
-def make_multiple_lines_plots(beta, observables, figs_dir=None, legend=False):
+def make_multiple_lines_plots(beta, observables, **kwargs):
     """Create all relevant plots."""
+
+    figs_dir = kwargs.get('figs_dir', None)
+    legend = kwargs.get('legend', False)
+
     actions, avg_plaquettes, top_charges = observables
 
     steps = np.arange(len(actions))
@@ -503,23 +520,31 @@ def make_multiple_lines_plots(beta, observables, figs_dir=None, legend=False):
     #  kwargs = {
     #      marker=''
     #  }
+    kwargs = {
+        'out_file': charges_file,
+        'markers': True,
+        'lines': False,
+        'legend': True
+    }
     fig, ax = plot_multiple_lines(steps, top_charges.T,
                                   x_label='step',
-                                  y_label='Topological charge',
-                                  markers=True,
-                                  lines=False,
-                                  legend=True,
-                                  out_file=charges_file)
+                                  y_label='Topological charge')
+
     multiple_lines_figs_axes.append((fig, ax))
 
     ###########################################################################
     # Average plaquette
     ###########################################################################
+    kwargs = {
+        'out_file': plaquettes_file,
+        'lines': True,
+        'markers': False
+    }
     fig, ax = plot_multiple_lines(steps, avg_plaquettes.T,
                                   x_label='step',
                                   y_label='Average plaquette',
-                                  legend=legend,
-                                  out_file=plaquettes_file)
+                                  **kwargs)
+
     _ = ax.axhline(y=u1_plaq_exact(beta),
                    color='r', ls='--', lw=2.5, label='exact')
 
@@ -530,11 +555,13 @@ def make_multiple_lines_plots(beta, observables, figs_dir=None, legend=False):
     ###########################################################################
     # Average action
     ###########################################################################
+    kwargs = {
+        'out_file': actions_file,
+    }
     fig, ax = plot_multiple_lines(steps, actions.T,
                                   x_label='step',
                                   y_label='Total action',
-                                  legend=legend,
-                                  out_file=actions_file)
+                                  **kwargs)
     multiple_lines_figs_axes.append((fig, ax))
 
     return multiple_lines_figs_axes
