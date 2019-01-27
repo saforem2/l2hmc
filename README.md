@@ -24,7 +24,7 @@ The purpose of this additional structure is to better incorporate information
 about the geometry of the lattice.
 
 Lattice code can be found in `l2hmc/lattice/` with the implementation of gauge
-models in `l2hmc/lattice/gauge_lattice.py`.
+models in `l2hmc/lattice/lattice.py`.
 
 
 
