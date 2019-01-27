@@ -6,7 +6,9 @@ Contains implementation of GaugeLattice class.
 Author: Sam Foreman (github: @saforem2)
 Date: 01/15/2019
 """
+import os
 import random
+import pickle
 
 import numpy as np
 import tensorflow as tf
@@ -49,6 +51,15 @@ def project_angle(x):
     """Returns the projection of an angle `x` from [-4pi, 4pi] to [-pi, pi]."""
     return x - 2 * np.pi * tf.math.floor((x + np.pi) / (2 * np.pi))
 
+def save_params_to_pkl_file(params, out_dir):
+    if not os.path.isdir(out_dir):
+        print(f'Creating directory: {out_dir}.')
+        os.makedirs(out_dir)
+
+    out_file = os.path.join(out_dir)
+    with open(out_file, 'wb') as f:
+        pickle.dump(params, f)
+
 
 class GaugeLattice(object):
     """Lattice with Gauge field existing on links."""
@@ -81,6 +92,14 @@ class GaugeLattice(object):
         self.link_shape = None
 
         self._init_lattice(link_type, num_samples, rand)
+
+        self.params = {
+            'time_size': time_size,
+            'space_size': space_size,
+            'dim': dim,
+            'link_type': link_type,
+        }
+
 
 
     # pylint:disable=invalid-name
