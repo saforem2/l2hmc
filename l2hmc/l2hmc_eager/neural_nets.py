@@ -9,9 +9,9 @@ authors https://github.com/brain-research/l2hmc.
 """
 import numpy as np
 import tensorflow as tf
-from keras.layers import Dense, Dropout, Flatten
-from keras.layers.convolutional import Conv2D, MaxPooling2D
-from keras.models import Sequential
+#  from keras.layers import Dense, Dropout, Flatten
+#  from keras.layers.convolutional import Conv2D, MaxPooling2D
+#  from keras.models import Sequential
 
 from utils.tf_logging import variable_summaries
 
