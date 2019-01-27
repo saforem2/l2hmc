@@ -52,7 +52,7 @@ class GaugeDynamics(tf.keras.Model):
                 be trainable. Defaults to True.
             np_seed: Seed to use for numpy.random.
         """
-        super(GaugeDynamics, self).__init__()
+        super(GaugeDynamics, self).__init__(name='GaugeDynamics')
         npr.seed(np_seed)
 
         self.lattice = lattice
@@ -75,8 +75,8 @@ class GaugeDynamics(tf.keras.Model):
 
         self.beta = tf.placeholder(tf.float32, shape=(), name='dynamics_beta')
 
-        tf.add_to_collection('eps', self.eps)
-        tf.add_to_collection('dynamics_beta', self.beta)
+        #  tf.add_to_collection('eps', self.eps)
+        #  tf.add_to_collection('dynamics_beta', self.beta)
 
         self.potential = potential_fn
 
@@ -183,16 +183,11 @@ class GaugeDynamics(tf.keras.Model):
         backward_mask = 1. - forward_mask
 
         # Obtain proposed states
-        position_post = tf.mod(
-            (forward_mask[:, None, None, None] * position_f
-             + backward_mask[:, None, None, None] * position_b),
-            2 * np.pi
-        )
+        position_post = (forward_mask[:, None, None, None] * position_f
+                         + backward_mask[:, None, None, None] * position_b)
 
-        momentum_post = (
-            forward_mask[:, None, None, None] * momentum_f
-            + backward_mask[:, None, None, None] * momentum_b
-        )
+        momentum_post = (forward_mask[:, None, None, None] * momentum_f
+                         + backward_mask[:, None, None, None] * momentum_b)
 
         # Probability of accepting the proposed states
         accept_prob = (forward_mask * accept_prob_f
@@ -205,11 +200,8 @@ class GaugeDynamics(tf.keras.Model):
         reject_mask = 1. - accept_mask
 
         # Samples after accept / reject step
-        position_out = tf.mod(
-            (accept_mask[:, None, None, None] * position_post
-             + reject_mask[:, None, None, None] * position),
-            2  * np.pi
-        )
+        position_out = (accept_mask[:, None, None, None] * position_post
+                        + reject_mask[:, None, None, None] * position)
 
         return position_post, momentum_post, accept_prob, position_out
 
@@ -336,10 +328,11 @@ class GaugeDynamics(tf.keras.Model):
         scale *= self.eps
         transformed *= self.eps
 
-        position = (
-            mask * position
-            + mask_inv * (position * tf.exp(scale) + self.eps *
-                          (tf.exp(transformed) * momentum + translation))
+        position = tf.mod(
+            (mask * position
+             + mask_inv * (position * tf.exp(scale) + self.eps *
+                           (tf.exp(transformed) * momentum + translation))),
+            2 * np.pi
         )
 
         return position, tf.reduce_sum(mask_inv * scale, axis=self.axes)
@@ -355,9 +348,12 @@ class GaugeDynamics(tf.keras.Model):
         scale *= -0.5 * self.eps
         transformed *= self.eps
         momentum = (
-            tf.exp(scale) * (momentum + 0.5 * self.eps * (tf.exp(transformed) *
-                                                          grad - translation))
+            tf.exp(scale) * (
+                momentum + 0.5 * self.eps * (tf.exp(transformed)
+                                             * grad - translation)
+            )
         )
+
 
         return momentum, tf.reduce_sum(scale, axis=self.axes)
 
@@ -369,13 +365,15 @@ class GaugeDynamics(tf.keras.Model):
             [momentum, mask * position, t]
         )
 
-        scale *= self.eps
+        scale *= -self.eps
         transformed *= self.eps
 
-        position = (
-            mask * position + mask_inv * tf.exp(scale)
-            * (position - self.eps * (tf.exp(transformed)
-                                      * momentum + translation))
+        position = tf.mod(
+            (mask * position
+             + mask_inv * tf.exp(scale) * (position - self.eps
+                                           * (tf.exp(transformed) * momentum
+                                              + translation))),
+            2 * np.pi
         )
 
         return position, tf.reduce_sum(mask_inv * scale, axis=self.axes)
