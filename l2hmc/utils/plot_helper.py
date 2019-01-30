@@ -101,6 +101,7 @@ def plot_multiple_lines(x_data, y_data, x_label, y_label, **kwargs):
     markers = kwargs.get('markers', False)
     lines = kwargs.get('lines', True)
     legend = kwargs.get('legend', False)
+    title = kwargs.get('title', None)
 
     fig, ax = plt.subplots()
 
@@ -125,6 +126,8 @@ def plot_multiple_lines(x_data, y_data, x_label, y_label, **kwargs):
     ax.set_ylabel(y_label, fontsize=14)
     if legend:
         ax.legend(loc='best')
+    if title is not None:
+        ax.set_title(title)
     if out_file:
         print(f'Saving figure to {out_file}.')
         fig.savefig(out_file, dpi=400, bbox_inches='tight')
