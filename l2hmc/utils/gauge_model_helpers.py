@@ -41,7 +41,6 @@ def get_run_num(log_dir):
         else:
             return sorted(run_nums)[-1] + 1
 
-
 def make_run_dir(log_dir):
     """Create directory for new run called `run_num` where `num` is unique."""
     if log_dir.endswith('/'):
@@ -56,7 +55,6 @@ def make_run_dir(log_dir):
         print(f'Creating directory for new run: {run_dir}')
         os.makedirs(run_dir)
     return run_dir
-
 
 def check_log_dir(log_dir):
     """Check that log_dir and subdirectories `run_info`, `figures` exist."""
@@ -73,7 +71,6 @@ def check_log_dir(log_dir):
             os.makedirs(figs_dir)
     return log_dir, info_dir, figs_dir
 
-
 def create_log_dir(base_name):
     """Create directory for storing information about experiment."""
     root_log_dir = os.path.join(os.path.split(ROOT_DIR)[0], base_name)
@@ -86,7 +83,6 @@ def create_log_dir(base_name):
         os.makedirs(figs_dir)
     return log_dir, info_dir, figs_dir
 
-
 def print_run_data(data, header=False):
     """Print information about current run to std out."""
     data_str = format_run_data(data)
@@ -94,7 +90,6 @@ def print_run_data(data, header=False):
         header = data_header(test_flag=True)
         print(header)
     print(data_str)
-
 
 def write_run_data(file_path, data, header=False):
     """Write run `data` to human-readable file at `file_path`."""
@@ -107,16 +102,9 @@ def write_run_data(file_path, data, header=False):
             f.write('\n')
 
     step = data['step']
-    #  if step == 1 or step % 100 == 0:
-    #      header = data_header(test_flag=True)
     with open(file_path, 'a') as f:
         f.write(data_str)
         f.write('\n')
-        #  f.write('avg_plaquettes: {}\n'.format(data['avg_plaquettes']))
-        #  f.write('topological_charges: {}\n'.format(data['top_charges']))
-        #  f.write('total_actions: {}\n'.format(data['total_actions']))
-        #  f.write(separator)
-
 
 def write_run_parameters(file_path, parameters):
     """Write `parameters` to human-readable file at `file_path`.
@@ -136,7 +124,6 @@ def write_run_parameters(file_path, parameters):
         f.write(80*'=')
         f.write('\n')
 
-
 def data_header():
     """Create formatted (header) string containing labels for printing data."""
     h_str = ("{:^15s}{:^14s}{:^14s}{:^14s}{:^14s}{:^14s}{:^14s}")
@@ -147,7 +134,6 @@ def data_header():
     header_str = dash0 + '\n' + h_strf + '\n' + dash1
 
     return header_str
-
 
 def format_run_data(data):
     """Create formatted string containing relevant information from `data`."""
@@ -162,7 +148,6 @@ def format_run_data(data):
     )
 
     return data_str
-
 
 def _plot_data(x_data, y_data, x_label, y_label, skip_steps=1):
     """Create plot consisting of `x_data`, `y_data` with x and y labels. 
@@ -183,7 +168,6 @@ def _plot_data(x_data, y_data, x_label, y_label, skip_steps=1):
     ax.legend(loc='best', fontsize=10)
 
     return fig, ax
-
 
 def plot_run_data(data, params, steps_arr, out_dir, skip_steps=1):
     """Create plots of relevant lattice observables using `_plot_data` above."""
@@ -224,7 +208,6 @@ def plot_run_data(data, params, steps_arr, out_dir, skip_steps=1):
     print(f"Saving plot to {file_name}...")
     fig.savefig(file_name, dpi=400, bbox_inches='tight')
     print('done.')
-
 
 def save_run_data(checkpointer, log_dir, files, data, samples, params):
     """Save run `data` to `files` in `log_dir` using `checkpointer`"""
