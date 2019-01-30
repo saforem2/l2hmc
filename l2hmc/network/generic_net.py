@@ -34,8 +34,8 @@ class GenericNet(tf.keras.Model):
         self.x_dim = x_dim
 
         with tf.variable_scope(variable_scope):
-            #  self.flatten_x = tf.keras.layers.Flatten(name='flat_x')
-            self.flatten = tf.keras.layers.Flatten(name='flat_v')
+            self.flatten_x = tf.keras.layers.Flatten(name='flat_x')
+            self.flatten_v = tf.keras.layers.Flatten(name='flat_v')
 
             self.x_layer = _custom_dense(num_hidden, factor/3., name='x_layer')
             self.v_layer = _custom_dense(num_hidden, 1./3., name='v_layer')
@@ -105,10 +105,8 @@ class GenericNet(tf.keras.Model):
         """
         v, x, t = inputs
 
-        x = self.flatten(x)
-        v = self.flatten(v)
-        #  x = self.flatten_x(x)
-        #  v = self.flatten_v(v)
+        x = self.flatten_x(x)
+        v = self.flatten_v(v)
 
         h = self.v_layer(v) + self.x_layer(x) + self.t_layer(t)
         h = tf.nn.relu(h)
