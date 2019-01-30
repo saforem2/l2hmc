@@ -30,6 +30,8 @@ from .autocorr import (
 )
 
 COLORS = ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9']
+MARKERS = ['o', 's', 'x', 'v', 'h', '^', 'p', '<', 'd', '>', 'o']
+LINESTYLES = ['-', '--', ':', '-.', '-', '--', ':', '-.', '-', '--']
 
 ##############################################################################
 # File I/O helpers.
@@ -250,37 +252,123 @@ def _calc_observables(samples, params):
             np.array(avg_plaquettes),
             np.array(top_charges))
 
-def calc_observables_from_log_dir(log_dir):
+def find_samples(log_dir):
     """Calculate observables from collection of samples stored in log_dir.
 
     Args:
         log_dir: Root directory containing information about run.
     Returns:
-        params, samples, observables: Tuple of parameters used during run,
-            samples generated from learned sampler, and the observables
-            calculated from those samples.
+        params: Dictionary of parameters. 
+            keys: name of parameter
+            value: parameter value
+        step_keys: List containing the number of steps the sampler was
+            evaluated for.
+        samples_files: List of files containing samples generated from sampler. 
+        figs_dir_dict: Dictionary of directories containing directories to hold
+            figures of observables plots.
     """
     params = _load_params(log_dir)
-    samples = _load_samples(log_dir)
-    observables = _load_observables(log_dir)
+    info_dir = os.path.join(log_dir, 'run_info/')
+    figs_dir = os.path.join(log_dir, 'figures')
 
-    if isinstance(samples, dict):
-        if not observables:
-            observables = {}
-            for key, val in samples.items():
-                observables[key] = _calc_observables(val, params)
-                _save_observables_to_file(
-                    observables[key],
-                    log_dir,
-                    out_file=f'observables_{key}.pkl'
-                )
+    samples_dir = os.path.join(log_dir, 'samples_history/')
+    samples_files = [
+        samples_dir + i for i in os.listdir(samples_dir)
+        if i.endswith('.pkl') and i.startswith('samples_history')
+    ]
+
+    step_keys = [
+        int(i.split('/')[-1].split('_')[-1].rstrip('.pkl'))
+        for i in samples_files
+    ]
+
+    figs_dir_dict = {}
+
+    for key in step_keys:
+        _figs_dir = os.path.join(figs_dir, f'{key}_steps')
+        check_else_make_dir(_figs_dir)
+        figs_dir_dict[key] = _figs_dir
+
+    return params, step_keys, samples_files, figs_dir_dict
+
+def calc_observables(log_dir, observables_dicts=None):
+    """Calculate observables from samples generated from trained sampler."""
+    params, step_keys, samples_files, figs_dir_dict = find_samples(log_dir)
+
+    if observables_dicts is None:
+        actions_dict, plaqs_dict, charges_dict = {}, {}, {}
     else:
-        if not observables:
-            observables = _calc_observables(samples, params)
-            _save_observables_to_file(observables, log_dir)
+        actions_dict, plaqs_dict, charges_dict = observables_dicts
 
-    return params, samples, observables
+    for idx, sample_file in enumerate(samples_files):
+        step = step_keys[idx]
+        if step not in charges_dict.keys():
+            print(f"Calculating observables for {step}...")
+            with open(sample_file, 'rb') as f:
+                samples = pickle.load(f)
 
+            actions, plaqs, charges = _calc_observables(samples, params)
+            actions_dict[step] = actions
+            plaqs_dict[step] = plaqs
+            charges_dict[step] = charges
+
+            del samples
+        else:
+            print(f"Observables alredy calculated for {step} eval steps.")
+
+    observables_dir = os.path.join(log_dir, 'observables/')
+    #  observables_dir_dict = {}
+    for key in step_keys:
+        obs_dir = os.path.join(observables_dir, f'{key}_steps')
+        check_else_make_dir(obs_dir)
+        actions_file = os.path.join(obs_dir, f'actions_{key}.pkl')
+        plaqs_file = os.path.join(obs_dir, f'plaqs_{key}.pkl')
+        charges_file = os.path.join(obs_dir, f'charges_{key}.pkl')
+        if not os.path.isfile(actions_file):
+            with open(actions_file, 'wb') as f:
+                pickle.dump(actions_dict[key], f)
+        if not os.path.isfile(plaqs_file):
+            with open(plaqs_file, 'wb') as f:
+                pickle.dump(plaqs_dict[key], f)
+        if not os.path.isfile(charges_file):
+            with open(charges_file, 'wb') as f:
+                pickle.dump(charges_dict[key], f)
+
+    observables_dicts = (actions_dict, plaqs_dict, charges_dict)
+
+    return observables_dicts
+
+def plot_top_charges(log_dir, charges_dict):
+    """Plot top. charge history using samples generated during training."""
+    params, _, _, figs_dir_dict = find_samples(log_dir)
+    plt.close('all')
+
+    for key, val in charges_dict.items():
+        for idx in range(val.shape[1]):
+            fig, ax = plt.subplots()
+            _ = ax.plot(val[:, idx],
+                        marker=MARKERS[idx],
+                        color=COLORS[idx],
+                        ls='',
+                        fillstyle='none',
+                        label=f'sample {idx}')
+            _ = ax.legend(loc='best')
+            _ = ax.set_xlabel('Step', fontsize=14)
+            _ = ax.set_ylabel('Topological charge', fontsize=14)
+            title_str = (r"$\beta = $"
+                         + f"{params['beta_final']}, {key} steps")
+            _ = ax.set_title(title_str, fontsize=16)
+            out_dir = os.path.join(
+                figs_dir_dict[key], 'topological_charges_history'
+            )
+            check_else_make_dir(out_dir)
+            out_file = os.path.join(
+                out_dir,
+                f'topological_charge_history_sample_{idx}.pdf'
+            )
+            if not os.path.isfile(out_file):
+                print(f"Saving figure to {out_file}.")
+                _ = fig.savefig(out_file, dpi=400, bbox_inches='tight')
 
 ##############################################################################
 # Calculate thermalization time by fitting observable to exponential
@@ -300,6 +388,177 @@ def _calc_thermalization_time(samples):
     popt, pcov = curve_fit(f, xdata=xdata, ydata=samples)
 
     return popt, pcov
+
+##############################################################################
+# Load samples and calculate observables generated during training
+##############################################################################
+def find_training_samples(log_dir):
+    """Find files containing samples generated during training."""
+    info_dir = os.path.join(log_dir, 'run_info/')
+    samples_dir = os.path.join(log_dir, 'samples_history/')
+    train_samples_dir = os.path.join(samples_dir, 'training/')
+    params = _load_params(log_dir)
+
+    figs_dir = os.path.join(log_dir, 'figures')
+
+    train_samples_files = [
+        train_samples_dir + i for i in os.listdir(train_samples_dir)
+        if i.endswith('.pkl') and i.startswith('samples_history')
+    ]
+
+    step_keys = [
+        int(i.split('/')[-1].split('_')[2]) for i in train_samples_files
+    ]
+
+    training_figs_dir = os.path.join(figs_dir, 'training/')
+    check_else_make_dir(training_figs_dir)
+    training_figs_dir_dict = {}
+
+    for key in step_keys:
+        _dir = os.path.join(training_figs_dir, f'{key}_train_steps/')
+        check_else_make_dir(_dir)
+        training_figs_dir_dict[key] = _dir
+
+    return params, step_keys, train_samples_files, training_figs_dir_dict
+
+def calc_training_observables(log_dir, observables_dicts=None):
+    """Calculate observables from samples generated during training."""
+    output = find_training_samples(log_dir)
+    params, step_keys, train_samples_files, training_figs_dir_dict = output
+
+
+    if observables_dicts is None:
+        actions_dict, plaqs_dict, charges_dict = {}, {}, {}
+    else:
+        actions_dict, plaqs_dict, charges_dict = observables_dicts
+
+    for idx, sample_file in enumerate(train_samples_files):
+        step = step_keys[idx]
+
+        if step not in charges_dict.keys():
+            print(f"Calculating observables for {step} training steps...")
+            with open(sample_file, 'rb') as f:
+                samples = pickle.load(f)
+
+            actions, plaqs, charges = _calc_observables(samples, params)
+
+            actions_dict[step] = actions
+            plaqs_dict[step] = plaqs
+            charges_dict[step] = charges
+
+            del samples  # free up memory
+        else:
+            print(f"Observables alredy calculated for {step} training steps.")
+
+    observables_dir = os.path.join(log_dir, 'observables/')
+    train_observables_dir = os.path.join(observables_dir, 'training')
+    #  train_observables_dir_dict = {}
+    for key in step_keys:
+        obs_dir = os.path.join(train_observables_dir, f'{key}_steps')
+        check_else_make_dir(obs_dir)
+        #  train_observables_dir_dict[key] = obs_dir
+        actions_file = os.path.join(obs_dir, f'actions_{key}.pkl')
+        plaqs_file = os.path.join(obs_dir, f'plaqs_{key}.pkl')
+        charges_file = os.path.join(obs_dir, f'charges_{key}.pkl')
+        if not os.path.isfile(actions_file):
+            print(f"Saving actions to: {actions_file}.")
+            with open(actions_file, 'wb') as f:
+                pickle.dump(actions_dict[key], f)
+        if not os.path.isfile(plaqs_file):
+            print(f"Saving plaquettes to: {plaqs_file}.")
+            with open(plaqs_file, 'wb') as f:
+                pickle.dump(plaqs_dict[key], f)
+        if not os.path.isfile(charges_file):
+            print(f"Saving topological charges to: {charges_file}.")
+            with open(charges_file, 'wb') as f:
+                pickle.dump(charges_dict[key], f)
+
+    #  for key, val in train_observables_dir_dict.items():
+    #      actions_file = os.path.join(val, f'actions_{key}.pkl')
+    #      plaqs_file = os.path.join(val, f'plaqs_{key}.pkl')
+    #      charges_file = os.path.join(val, f'charges_{key}.pkl')
+    #      if not os.path.isfile(actions_file):
+    #          print(f"Saving actions to: {actions_file}.")
+    #          with open(actions_file, 'wb') as f:
+    #              pickle.dump(actions_dict[key], f)
+    #      if not os.path.isfile(plaqs_file):
+    #          print(f"Saving plaquettes to: {plaqs_file}.")
+    #          with open(plaqs_file, 'wb') as f:
+    #              pickle.dump(plaqs_dict[key], f)
+    #      if not os.path.isfile(charges_file):
+    #          print(f"Saving topological charges to: {charges_file}.")
+    #          with open(charges_file, 'wb') as f:
+    #              pickle.dump(charges_dict[key], f)
+
+    observables_dicts = (actions_dict, plaqs_dict, charges_dict)
+
+    return observables_dicts
+
+def plot_observables(log_dir, observables_dicts, training=False):
+    """Plot observables stored in `observables_dicts`."""
+    if training:
+        params, _, _, figs_dir_dict = find_training_samples(log_dir)
+        title_str_key = 'training'
+    else:
+        params, _, _, figs_dir_dict = find_samples(log_dir)
+        title_str_key = 'evaluation'
+
+    actions_dict, plaqs_dict, charges_dict = observables_dicts
+
+    plt.close('all')
+    for key in charges_dict.keys():
+        observables = (actions_dict[key], plaqs_dict[key], charges_dict[key])
+        title_str = (r"$\beta = $"
+                     + f"{params['beta_final']}, {key} {title_str_key} steps")
+
+        kwargs = {
+            'figs_dir': figs_dir_dict[key],
+            'title': title_str
+        }
+
+        figs_axes = make_multiple_lines_plots(
+            params['beta_final'],
+            observables,
+            **kwargs
+        )
+
+    return figs_axes
+
+
+
+
+
+def plot_top_charges_training(log_dir, charges_dict):
+    """Plot top. charge history using samples generated during training."""
+    params, _, _, training_figs_dir_dict = find_training_samples(log_dir)
+    plt.close('all')
+
+    for key, val in charges_dict.items():
+        for idx in range(val.shape[1]):
+            fig, ax = plt.subplots()
+            _ = ax.plot(val[:, idx],
+                        marker=MARKERS[idx],
+                        color=COLORS[idx],
+                        ls='',
+                        fillstyle='none',
+                        label=f'sample {idx}')
+            _ = ax.legend(loc='best')
+            _ = ax.set_xlabel('Step', fontsize=14)
+            _ = ax.set_ylabel('Topological charge', fontsize=14)
+            title_str = (r"$\beta = $"
+                         + f"{params['beta_final']}, {key} training steps")
+            _ = ax.set_title(title_str, fontsize=16)
+            out_dir = os.path.join(
+                training_figs_dir_dict[key], 'topological_charges_history'
+            )
+            check_else_make_dir(out_dir)
+            out_file = os.path.join(
+                out_dir,
+                f'topological_charge_history_sample_{idx}.pdf'
+            )
+            if not os.path.isfile(out_file):
+                print(f"Saving figure to {out_file}.")
+                _ = fig.savefig(out_file, dpi=400, bbox_inches='tight')
 
 
 ##############################################################################
@@ -487,26 +746,13 @@ def make_multiple_lines_plots(beta, observables, **kwargs):
 
     figs_dir = kwargs.get('figs_dir', None)
     legend = kwargs.get('legend', False)
+    title = kwargs.get('title', None)
 
     actions, avg_plaquettes, top_charges = observables
 
     steps = np.arange(len(actions))
     multiple_lines_figs_axes = []
 
-    ###########################################################################
-    # Topological charge autocorrelation function
-    ###########################################################################
-    #  out_file = os.path.join(figs_dir, 'topological_charge_autocorr_fn.pdf')
-    #  fig, ax = plot_multiple_lines(steps, top_charges_autocorr,
-    #                                x_label='step',
-    #                                y_label='Autocorrelation (top. charge)',
-    #                                legend=legend,
-    #                                out_file=out_file)
-    #  multiple_lines_figs_axes.append((fig, ax))
-
-    ###########################################################################
-    # Topological charge
-    ###########################################################################
     if figs_dir is None:
         charges_file, plaquettes_file, actions_file = None, None, None
 
@@ -517,31 +763,32 @@ def make_multiple_lines_plots(beta, observables, **kwargs):
                                        'average_plaquette_vs_step.pdf')
         actions_file = os.path.join(figs_dir,
                                     'average_action_vs_step.pdf')
-    #  kwargs = {
-    #      marker=''
-    #  }
+
+    ###########################################################################
+    # Topological charge
+    ###########################################################################
     kwargs = {
         'out_file': charges_file,
         'markers': True,
         'lines': False,
-        'legend': True
+        'legend': True,
+        'title': title,
     }
     fig, ax = plot_multiple_lines(steps, top_charges.T,
-                                  x_label='step',
-                                  y_label='Topological charge')
+                                  x_label='Step',
+                                  y_label='Topological charge',
+                                  **kwargs)
 
     multiple_lines_figs_axes.append((fig, ax))
 
     ###########################################################################
     # Average plaquette
     ###########################################################################
-    kwargs = {
-        'out_file': plaquettes_file,
-        'lines': True,
-        'markers': False
-    }
+    kwargs['out_file'] = None
+    kwargs['lines'] = True
+    kwargs['markers'] = False
     fig, ax = plot_multiple_lines(steps, avg_plaquettes.T,
-                                  x_label='step',
+                                  x_label='Step',
                                   y_label='Average plaquette',
                                   **kwargs)
 
@@ -550,16 +797,15 @@ def make_multiple_lines_plots(beta, observables, **kwargs):
 
     multiple_lines_figs_axes.append((fig, ax))
     if plaquettes_file is not None:
+        print(f"Saving figure to: {plaquettes_file}.")
         plt.savefig(plaquettes_file, dpi=400, bbox_inches='tight')
 
     ###########################################################################
     # Average action
     ###########################################################################
-    kwargs = {
-        'out_file': actions_file,
-    }
+    kwargs['out_file'] = actions_file
     fig, ax = plot_multiple_lines(steps, actions.T,
-                                  x_label='step',
+                                  x_label='Step',
                                   y_label='Total action',
                                   **kwargs)
     multiple_lines_figs_axes.append((fig, ax))
@@ -832,3 +1078,6 @@ def calc_observables_generate_plots(log_dir):
         'out_file': out_file
     }
     fig, ax = plot_autocorr_with_iat(acf_arr, iat_arr, ESS_arr, **kwargs)
+
+
+
