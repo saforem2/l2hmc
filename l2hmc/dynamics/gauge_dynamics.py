@@ -14,7 +14,8 @@ import numpy as np
 import numpy.random as npr
 import tensorflow as tf
 
-from l2hmc_eager import neural_nets
+from network.conv_net import ConvNet
+from network.generic_net import GenericNet
 
 from lattice.lattice import GaugeLattice
 
@@ -29,8 +30,7 @@ class GaugeDynamics(tf.keras.Model):
                  eps=0.1,
                  conv_net=True,
                  hmc=False,
-                 eps_trainable=True,
-                 np_seed=1):
+                 eps_trainable=True):
         """Initialization.
 
         Args:
@@ -45,7 +45,7 @@ class GaugeDynamics(tf.keras.Model):
             eps: Initial step size to use in leapfrog integrator.
             conv_net: Flag specifying whether to use ConvNet architecture or
                 GenericNet architecture. Defaults to True. (Defined in
-                `l2hmc_eager/neural_nets.py`)
+                `network/conv_net.py`)
             hmc: Flag indicating whether generic HMC (no augmented leapfrog)
                 should be used instead of L2HMC. Defaults to False.
             eps_trainable: Flag indiciating whether the step size (eps) should
@@ -53,7 +53,7 @@ class GaugeDynamics(tf.keras.Model):
             np_seed: Seed to use for numpy.random.
         """
         super(GaugeDynamics, self).__init__(name='GaugeDynamics')
-        npr.seed(np_seed)
+        #  npr.seed(np_seed)
 
         self.lattice = lattice
         self.batch_size = self.lattice.samples.shape[0]
@@ -75,25 +75,23 @@ class GaugeDynamics(tf.keras.Model):
 
         self.beta = tf.placeholder(tf.float32, shape=(), name='dynamics_beta')
 
-        #  tf.add_to_collection('eps', self.eps)
-        #  tf.add_to_collection('dynamics_beta', self.beta)
-
         self.potential = potential_fn
 
         # In the case of two-dimensions, samples_tensor has shape:
         #     [batch_size, time_size, space_size, dim]
-        self.samples = tf.convert_to_tensor(
-            self.lattice.samples, dtype=tf.float32  # batch of link configs
-        )
+        #  self.samples = tf.convert_to_tensor(
+        #      self.lattice.samples, dtype=tf.float32  # batch of link configs
+        #  )
 
         self._construct_time()
         self._construct_masks()
 
         # when performing `tf.reduce_sum` we want to sum over all extra axes.
         # For example, when using conv_net, the input data will have the
-        # same shape as self.samples_tensor, so we would want to reduce the sum
-        # over the first, second and third axes.
-        self.axes = np.arange(1, len(self.samples.shape))
+        # same shape as self.lattice.samples, so we would want to reduce the
+        # sum over the first, second and third axes.
+        #  self.axes = np.arange(1, len(self.samples.shape))
+        self.axes = np.arange(1, len(self.lattice.samples.shape))
 
         if hmc:
             self.position_fn = lambda inp: [
@@ -111,13 +109,13 @@ class GaugeDynamics(tf.keras.Model):
 
     def _build_conv_nets(self):
         """Build ConvNet architecture for position and momentum functions."""
-        input_shape = (1, *self.lattice.links.shape)
+        input_shape = (self.batch_size, *self.lattice.links.shape)
         num_hidden = int(2 * self.x_dim)             # num hidden nodes in MLP
         num_filters = 2 * self.lattice.space_size    # num filters in Conv2D
         filter_size1 = (3, 3)  # filter size in 1st Conv2D layer
         filter_size2 = (2, 2)  # filter size in 2nd Conv2D layer
 
-        self.position_fn = neural_nets.ConvNet(
+        self.position_fn = ConvNet(
             input_shape,
             self.lattice.links.shape,
             self.lattice.num_links,
@@ -131,7 +129,7 @@ class GaugeDynamics(tf.keras.Model):
             variable_scope='position'
         )
 
-        self.momentum_fn = neural_nets.ConvNet(
+        self.momentum_fn = ConvNet(
             input_shape,
             self.lattice.links.shape,
             self.lattice.num_links,
@@ -147,18 +145,18 @@ class GaugeDynamics(tf.keras.Model):
 
     def _build_generic_nets(self):
         """Build GenericNet FC-architectures for position and momentum fns. """
-        self.position_fn = neural_nets.GenericNet(
+        self.position_fn = GenericNet(
             self.x_dim,
             self.lattice.links.shape,
             factor=2.,
-            n_hidden=int(2*self.x_dim)
+            num_hidden=int(2*self.x_dim)
         )
 
-        self.momentum_fn = neural_nets.GenericNet(
+        self.momentum_fn = GenericNet(
             self.x_dim,
             self.lattice.links.shape,
             factor=1.,
-            n_hidden=int(2*self.x_dim)
+            num_hidden=int(2*self.x_dim)
         )
 
     # pylint:disable=too-many-locals
@@ -183,8 +181,11 @@ class GaugeDynamics(tf.keras.Model):
         backward_mask = 1. - forward_mask
 
         # Obtain proposed states
-        position_post = (forward_mask[:, None, None, None] * position_f
-                         + backward_mask[:, None, None, None] * position_b)
+        position_post = tf.mod(
+            (forward_mask[:, None, None, None] * position_f
+             + backward_mask[:, None, None, None] * position_b),
+            2 * np.pi
+        )
 
         momentum_post = (forward_mask[:, None, None, None] * momentum_f
                          + backward_mask[:, None, None, None] * momentum_b)
@@ -200,8 +201,10 @@ class GaugeDynamics(tf.keras.Model):
         reject_mask = 1. - accept_mask
 
         # Samples after accept / reject step
-        position_out = (accept_mask[:, None, None, None] * position_post
-                        + reject_mask[:, None, None, None] * position)
+        position_out = (
+            accept_mask[:, None, None, None] * position_post
+            + reject_mask[:, None, None, None] * position
+        )
 
         return position_post, momentum_post, accept_prob, position_out
 
@@ -215,25 +218,6 @@ class GaugeDynamics(tf.keras.Model):
 
         position_post, momentum_post = position, momentum
         sumlogdet = 0.
-
-        #  Apply augmented leapfrog steps
-        #  num_samples = tf.shape(position)[0]
-        #  t = tf.constant(0., dtype=tf.float32)
-        #  _sumlogdet = tf.zeros((num_samples,))
-        #
-        #  # pylint:disable=missing-docstring
-        #  def body(x, v, t, j):
-        #      new_position, new_momentum, logdet = lf_fn(x, v, j)
-        #      return new_position, new_momentum, t+1, j+logdet
-        #
-        #  def cond(x, v, t, j):
-        #      return tf.less(t, self.num_steps)
-        #
-        #  position_post, momentum_post, t, sumlogdet = tf.while_loop(
-        #      cond=cond,
-        #      body=body,
-        #      loop_vars=[position, momentum, t, _sumlogdet]
-        #  )
 
         #  Apply augmented leapfrog steps
         for i in range(self.num_steps):
@@ -311,8 +295,9 @@ class GaugeDynamics(tf.keras.Model):
         scale *= 0.5 * self.eps
         transformed *= self.eps
         momentum = (
-            momentum * tf.exp(scale)
-            - 0.5 * self.eps * (tf.exp(transformed) * grad - translation)
+            momentum * tf.exp(scale, name='vf_scale')
+            - 0.5 * self.eps * (tf.exp(transformed, name='vf_transformed')
+                                * grad - translation)
         )
 
         return momentum, tf.reduce_sum(scale, axis=self.axes)
@@ -328,11 +313,10 @@ class GaugeDynamics(tf.keras.Model):
         scale *= self.eps
         transformed *= self.eps
 
-        position = tf.mod(
-            (mask * position
-             + mask_inv * (position * tf.exp(scale) + self.eps *
-                           (tf.exp(transformed) * momentum + translation))),
-            2 * np.pi
+        position = (
+            mask * position
+             + mask_inv * (position * tf.exp(scale) + self.eps
+                           * (tf.exp(transformed) * momentum + translation))
         )
 
         return position, tf.reduce_sum(mask_inv * scale, axis=self.axes)
@@ -348,10 +332,8 @@ class GaugeDynamics(tf.keras.Model):
         scale *= -0.5 * self.eps
         transformed *= self.eps
         momentum = (
-            tf.exp(scale) * (
-                momentum + 0.5 * self.eps * (tf.exp(transformed)
-                                             * grad - translation)
-            )
+            tf.exp(scale) * (momentum + 0.5 * self.eps
+                             * (tf.exp(transformed) * grad - translation))
         )
 
 
@@ -368,12 +350,11 @@ class GaugeDynamics(tf.keras.Model):
         scale *= -self.eps
         transformed *= self.eps
 
-        position = tf.mod(
-            (mask * position
+        position = (
+            mask * position
              + mask_inv * tf.exp(scale) * (position - self.eps
                                            * (tf.exp(transformed) * momentum
-                                              + translation))),
-            2 * np.pi
+                                              + translation))
         )
 
         return position, tf.reduce_sum(mask_inv * scale, axis=self.axes)
@@ -442,6 +423,7 @@ class GaugeDynamics(tf.keras.Model):
     def grad_potential(self, position, check_numerics=True):
         """Get gradient of potential function at current location."""
         if tf.executing_eagerly():
+            import tf.contrib.eager as tfe
             grad = tfe.gradients_function(self.potential_energy)(position)[0]
         else:
             grad = tf.gradients(self.potential_energy(position), position)[0]
