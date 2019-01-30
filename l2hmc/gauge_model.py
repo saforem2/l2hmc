@@ -29,7 +29,6 @@ try:
 except ImportError:
     HAS_MATPLOTLIB = False
 
-from l2hmc_eager import gauge_dynamics_eager as gde
 from lattice.lattice import GaugeLattice, u1_plaq_exact
 from dynamics.gauge_dynamics import GaugeDynamics
 from utils.plot_helper import plot_broken_xaxis
@@ -93,22 +92,16 @@ def save_params_to_pkl_file(params, out_dir):
         pickle.dump(params, f)
 
 # pylint: disable=attribute-defined-outside-init
-class GaugeModel(tf.keras.Model):
+class GaugeModel(object):
     """Wrapper class implementing L2HMC algorithm on lattice gauge models."""
     def __init__(self,
                  params=None,
                  sess=None,
                  config=None,
-                 conv_net=True,
-                 hmc=False,
                  log_dir=None,
-                 restore=False,
-                 eps_trainable=True,
-                 annealing=True,
-                 clip_grads=True,
-                 aux=False):
+                 restore=False):
         """Initialization method."""
-        super(GaugeModel, self).__init__(name='GaugeModel')
+        super(GaugeModel, self).__init__()
 
         if config is None:
             config = tf.ConfigProto()
@@ -124,13 +117,6 @@ class GaugeModel(tf.keras.Model):
             tf.contrib.summary.create_file_writer(self.log_dir)
         )
 
-        self.params = params
-        self.conv_net = conv_net
-        self.hmc = hmc
-        self.aux = aux
-        self.eps_trainable = eps_trainable
-        self.clip_grads = clip_grads
-        self.annealing = annealing
         self.data = {}
         self.train_samples = {}
         self.losses_arr = []
@@ -139,56 +125,48 @@ class GaugeModel(tf.keras.Model):
         self.accept_prob_arr = []
         self.step_times_arr = []
 
-
+        # create attributes using key, value pairs in params
         self._init_params(params)
 
-        self.lattice = GaugeLattice(time_size=self.time_size,
-                                    space_size=self.space_size,
-                                    dim=self.dim,
-                                    link_type=self.link_type,
-                                    num_samples=self.num_samples,
-                                    rand=self.rand)
 
-        self.batch_size = self.lattice.samples.shape[0]
 
-        self.samples_np = np.array(self.lattice.samples, dtype=np.float32)
-        self.samples = tf.convert_to_tensor(
-            self.lattice.samples, dtype=tf.float32
-        )
-        self.x = tf.placeholder(dtype=tf.float32,
-                                shape=self.samples.shape,
-                                name='x')
+        with tf.name_scope('input'):
+            with tf.name_scope('lattice'):
+                self.lattice = GaugeLattice(time_size=self.time_size,
+                                            space_size=self.space_size,
+                                            dim=self.dim,
+                                            link_type=self.link_type,
+                                            num_samples=self.num_samples,
+                                            rand=self.rand)
 
-        self.potential_fn = self.lattice.get_energy_function(self.samples)
+            self.batch_size = self.lattice.samples.shape[0]
+            self.samples = tf.convert_to_tensor(
+                self.lattice.samples, dtype=tf.float32
+            )
+            self.x = tf.placeholder(dtype=tf.float32,
+                                    shape=self.samples.shape,
+                                    name='x')
+
+        with tf.name_scope('potential_fn'):
+            self.potential_fn = self.lattice.get_energy_function(self.samples)
 
         if restore:
             self._restore_model(self.log_dir)
 
         else:
-            self.dynamics = GaugeDynamics(lattice=self.lattice,
-                                          potential_fn=self.potential_fn,
-                                          beta_init=1.,
-                                          num_steps=self.num_steps,
-                                          eps=self.eps,
-                                          conv_net=self.conv_net,
-                                          hmc=self.hmc,
-                                          eps_trainable=eps_trainable)
+            with tf.name_scope('dynamics'):
+                self.dynamics = GaugeDynamics(lattice=self.lattice,
+                                              potential_fn=self.potential_fn,
+                                              beta_init=self.beta_init,
+                                              num_steps=self.num_steps,
+                                              eps=self.eps,
+                                              conv_net=self.conv_net,
+                                              hmc=self.hmc,
+                                              eps_trainable=self.eps_trainable)
 
-            self.global_step = tf.train.get_or_create_global_step()
-            self.global_step.assign(1)
-            tf.add_to_collection('global_step', self.global_step)
 
-            self.learning_rate = tf.train.exponential_decay(
-                self.learning_rate_init,
-                self.global_step,
-                self.learning_rate_decay_steps,
-                self.learning_rate_decay_rate,
-                staircase=True
-            )
-
+            # if running generic HMC, all we need is self.x_out to sample
             if self.hmc:
-                # if running generic HMC, all we need is self.x_out to sample
-                #  self.sess.run(tf.global_variables_initializer())
                 self._create_sampler()
             else:
                 self.build_graph()
@@ -214,15 +192,7 @@ class GaugeModel(tf.keras.Model):
         else:
             self.beta = params.get('beta_final')
 
-        params['conv_net'] = self.conv_net
-        params['hmc'] = self.hmc
-        params['aux'] = self.aux
-        params['eps_trainable'] = self.eps_trainable
-        params['clip_grads'] = self.clip_grads
-        params['annealing'] = self.annealing
-        params['beta'] = self.beta
-
-        save_params_to_pkl_file(params, self.info_dir)
+        self.params = params
 
         self.data = {
             'step': 0,
@@ -237,14 +207,20 @@ class GaugeModel(tf.keras.Model):
             'learning_rate': params.get('learning_rate_init', 1e-4),
         }
 
+        self._create_dir_structure()
+
+        self._write_run_parameters(_print=True)
+
+    def _create_dir_structure(self):
+        """Create self.files and directory structure."""
         self.files = {
             'parameters_file': os.path.join(self.info_dir, 'parameters.txt'),
             'run_info_file': os.path.join(self.info_dir, 'run_info.txt'),
             'data_pkl_file': os.path.join(self.info_dir, 'data.pkl'),
             'samples_pkl_file': os.path.join(self.info_dir, 'samples.pkl'),
-            'train_samples_pkl_file': (
-                os.path.join(self.info_dir, 'train_samples.pkl')
-            ),
+            #  'train_samples_pkl_file': (
+            #      os.path.join(self.info_dir, 'train_samples.pkl')
+            #  ),
             'parameters_pkl_file': (
                 os.path.join(self.info_dir, 'parameters.pkl')
             ),
@@ -260,12 +236,6 @@ class GaugeModel(tf.keras.Model):
 
         self.train_samples_dir = os.path.join(self.log_dir, 'train_samples')
         check_else_make_dir(self.train_samples_dir)
-
-        #  self.annealing_samples_dir = os.path.join(self.log_dir,
-        #                                            'annealing_samples')
-        #  check_else_make_dir(self.annealing_samples_dir)
-
-        self._write_run_parameters(_print=True)
 
     def _restore_checkpoint(self, log_dir):
         """Restore from `tf.train.Checkpoint`."""
@@ -362,14 +332,22 @@ class GaugeModel(tf.keras.Model):
         if samples is None:
             samples = self.samples
 
+        #  def pkl_dump(out_file, data):
+        #      with open(out_file, 'wb') as f:
+        #          pickle.dump(data, out_file)
+        #
+        #  pkl_dump(self.files['data_pkl_file'], self.data)
+        #  pkl_dump(self.files['samples_pkl_file'], samples)
+        #  pkl_dump(self.files['train_samples_pkl_file'], self.train_samples)
+
         with open(self.files['data_pkl_file'], 'wb') as f:
             pickle.dump(self.data, f)
-        with open(self.files['parameters_pkl_file'], 'wb') as f:
-            pickle.dump(self.params, f)
+        #  with open(self.files['parameters_pkl_file'], 'wb') as f:
+        #      pickle.dump(self.params, f)
         with open(self.files['samples_pkl_file'], 'wb') as f:
             pickle.dump(samples, f)
-        with open(self.files['train_samples_pkl_file'], 'wb') as f:
-            pickle.dump(self.train_samples, f)
+        #  with open(self.files['train_samples_pkl_file'], 'wb') as f:
+        #      pickle.dump(self.train_samples, f)
 
         if not tf.executing_eagerly():
             ckpt_prefix = os.path.join(self.log_dir, 'ckpt')
@@ -392,7 +370,6 @@ class GaugeModel(tf.keras.Model):
                 self.dynamics.momentum_fn.save_weights(
                     os.path.join(self.log_dir, 'momentum_model_weights.h5')
                 )
-
 
         self.writer.flush()
 
@@ -418,15 +395,15 @@ class GaugeModel(tf.keras.Model):
             #  tf.summary.scalar('accept_prob', self.px)
 
             #  if self.clip_grads:
-            with tf.name_scope('grads'):
-                for grad, var in self.grads_and_vars:
-                    try:
-                        layer, type = var.name.split('/')[-2:]
-                        name = layer + '_' + type[:-2]
-                    except:
-                        name = var.name[:-2]
-
-                    variable_summaries(grad, name + '_gradient')
+            #  with tf.name_scope('grads'):
+            #      for grad, var in self.grads_and_vars:
+            #          try:
+            #              layer, type = var.name.split('/')[-2:]
+            #              name = layer + '_' + type[:-2]
+            #          except:
+            #              name = var.name[:-2]
+            #
+            #          variable_summaries(grad, name + '_gradient')
 
             with tf.name_scope('position_fn'):
                 for var in self.dynamics.position_fn.trainable_variables:
@@ -448,33 +425,48 @@ class GaugeModel(tf.keras.Model):
 
                     variable_summaries(var, name)
 
-            #  tf.summary.histogram('histogram_loss', self.loss_op)
-            #  variable_summaries(self.loss)
             self.summary_op = tf.summary.merge_all(name='summary_op')
 
     def _create_optimizer(self):
         """Create optimizer to use during training."""
         with tf.name_scope('train'):
-            self.grads = tf.gradients(self.loss_op,
-                                      self.dynamics.trainable_variables)
-            if self.clip_grads:
-                clip_value = self.params['clip_value']
-                self.grads, _ = tf.clip_by_global_norm(
-                    self.grads,
-                    clip_value,
-                    name='clipped_grads'
-                )
-            self.grads_and_vars = list(
-                zip(self.grads, self.dynamics.trainable_variables)
+            #  self.grads = tf.gradients(self.loss_op,
+            #                            self.dynamics.trainable_variables)
+            #  if self.clip_grads:
+            #      clip_value = self.params['clip_value']
+            #      self.grads, _ = tf.clip_by_global_norm(
+            #          self.grads,
+            #          clip_value,
+            #          name='clipped_grads'
+            #      )
+            #  self.grads_and_vars = list(
+            #      zip(self.grads, self.dynamics.trainable_variables)
+            #  )
+            #  self.optimizer = tf.train.AdamOptimizer(
+            #      learning_rate=self.learning_rate,
+            #      name='AdamOptimizer'
+            #  )
+            #  self.train_op = self.optimizer.apply_gradients(
+            #      zip(self.grads, self.dynamics.trainable_variables),
+            #      global_step=self.global_step,
+            #      name='train_op'
+            #  )
+            self.global_step = tf.train.get_or_create_global_step()
+            self.global_step.assign(1)
+            tf.add_to_collection('global_step', self.global_step)
+
+            self.learning_rate = tf.train.exponential_decay(
+                self.learning_rate_init,
+                self.global_step,
+                self.learning_rate_decay_steps,
+                self.learning_rate_decay_rate,
+                staircase=True
             )
-            self.optimizer = tf.train.AdamOptimizer(
-                learning_rate=self.learning_rate,
-                name='AdamOptimizer'
-            )
-            self.train_op = self.optimizer.apply_gradients(
-                zip(self.grads, self.dynamics.trainable_variables),
-                global_step=self.global_step,
-                name='train_op'
+
+            self.optimizer = tf.train.AdamOptimizer(self.learning_rate)
+            self.train_op = self.optimizer.minimize(
+                self.loss_op,
+                global_step=self.global_step
             )
 
     def _create_loss(self):
@@ -489,45 +481,49 @@ class GaugeModel(tf.keras.Model):
             distance = lambda x1, x2: tf.abs(tf.cos(x1) - tf.cos(x2))
         if self.metric == 'cos2':
             distance = lambda x1, x2: tf.square(tf.cos(x1) - tf.cos(x2))
-        if self.metric == 'euc2':
-            distance = lambda x1, x2: (tf.square(tf.cos(x1) - tf.cos(x2))
-                                       + tf.square(tf.sin(x1) - tf.sin(x2)))
-        if self.metric == 'euc':
-            distance = lambda x1, x2: (tf.abs(tf.cos(x1) - tf.cos(x2))
-                                       + tf.abs(tf.sin(x1) - tf.sin(x2)))
+        #  if self.metric == 'euc2':
+        #      distance = lambda x1, x2: (tf.square(tf.cos(x1) - tf.cos(x2))
+        #                                 + tf.square(tf.sin(x1) - tf.sin(x2)))
+        #  if self.metric == 'euc':
+        #      distance = lambda x1, x2: (tf.abs(tf.cos(x1) - tf.cos(x2))
+        #                                 + tf.abs(tf.sin(x1) - tf.sin(x2)))
 
         with tf.name_scope('loss'):
             self._x, _, self.px, self.x_out = (
                 self.dynamics.apply_transition(self.x)
             )
 
-            self.x_loss = ((tf.reduce_sum(
-                distance(self.x, self._x),
-                #  tf.square(self.x - self._x),
-                axis=self.dynamics.axes,
-                name='x_loss'
-            ) * self.px) + 1e-4)
+            with tf.name_scope('x_loss'):
+                self.x_loss = ((tf.reduce_sum(
+                    distance(self.x, self._x),
+                    #  tf.square(self.x - self._x),
+                    axis=self.dynamics.axes,
+                    name='x_loss'
+                ) * self.px) + 1e-4)
 
             if self.aux:
                 z = tf.random_normal(tf.shape(self.x), name='z')
                 _z, _, pz, z_out = self.dynamics.apply_transition(z)
-                z_loss = ((tf.reduce_sum(
-                    distance(z, _z),
-                    #  tf.square(z - _z),
-                    axis=self.dynamics.axes,
-                    name='z_loss'
-                ) * pz) + 1e-4)
+                with tf.name_scope('z_loss'):
+                    z_loss = ((tf.reduce_sum(
+                        distance(z, _z),
+                        #  tf.square(z - _z),
+                        axis=self.dynamics.axes,
+                        name='z_loss'
+                    ) * pz) + 1e-4)
 
                 # Squared jump distance
-                self.loss_op = tf.reduce_mean(
-                    (1. / self.x_loss + 1. / z_loss) * scale
-                    - (self.x_loss + z_loss) / scale, axis=0, name='loss'
-                )
+                with tf.name_scope('total_loss'):
+                    self.loss_op = scale * tf.reduce_mean(
+                        (1. / self.x_loss + 1. / z_loss) * scale
+                        - (self.x_loss + z_loss) / scale, axis=0, name='loss_op'
+                    )
 
             else:
-                self.loss_op = tf.reduce_mean(scale * (1. / self.x_loss)
-                                              - self.x_loss / scale,
-                                              axis=0, name='loss')
+                with tf.name_scope('total_loss'):
+                    self.loss_op = tf.reduce_mean(scale / self.x_loss
+                                                  - self.x_loss / scale,
+                                                  axis=0, name='loss_op')
 
     def _create_sampler(self):
         """Create operation for generating new samples using dynamics engine.
@@ -537,7 +533,8 @@ class GaugeModel(tf.keras.Model):
         unnecessary operations for calculating loss.
         """
         #  scale = self.params['loss_scale']
-        _, _, self.px, self.x_out = self.dynamics.apply_transition(self.x)
+        with tf.name_scope('sampler'):
+            _, _, self.px, self.x_out = self.dynamics.apply_transition(self.x)
 
     def build_graph(self):
         """Build graph for TensorFlow."""
@@ -609,12 +606,14 @@ class GaugeModel(tf.keras.Model):
         #  px = self.px
         #  learning_rate = self.learning_rate
         #  dynamics = self.dynamics
-        #  samples_np = self.samples_np
         #  x = self.x
         #  dynamics_beta = self.dynamics.beta
+        samples_np = np.array(self.lattice.samples, dtype=np.float32)
         tsl = self.training_samples_length
         data_header = helpers.data_header()
+        norm_factor = self.num_steps * self.batch_size * self.lattice.num_links
         #  self.sess.graph.finalize()
+        self.data['learning_rate'] = self.sess.run(self.learning_rate)
         try:
             print(data_header)
             helpers.write_run_data(
@@ -625,17 +624,19 @@ class GaugeModel(tf.keras.Model):
             for step in range(initial_step, initial_step + num_train_steps):
                 start_step_time = time.time()
 
-                _, loss_np, samples_np, px_np, lr_np, eps_np = self.sess.run([
+                _, loss_np, samples_np, px_np, eps_np = self.sess.run([
                     self.train_op,
                     self.loss_op,
                     self.x_out,
                     self.px,
-                    self.learning_rate,
+                    #  self.learning_rate,
                     self.dynamics.eps
-                ], feed_dict={self.x: self.samples_np,
+                ], feed_dict={self.x: samples_np,
                               self.dynamics.beta: self.beta})
 
-                self.train_samples[step] = samples_np
+                if step % self.learning_rate_decay_steps == 0:
+                    lr_np = self.sess.run(self.learning_rate)
+
                 self.data['step'] = step
                 self.data['loss'] = loss_np
                 self.data['accept_prob'] = px_np
@@ -643,10 +644,8 @@ class GaugeModel(tf.keras.Model):
                 self.data['beta'] = self.beta
                 self.data['learning_rate'] = lr_np
                 self.data['step_time'] = (
-                    (time.time() - start_step_time)
-                    / (self.num_steps * self.batch_size *
-                       self.lattice.num_links)
-                )  # pylint: disable=too-many-locals
+                    (time.time() - start_step_time) / norm_factor
+                )
                 self.losses_arr.append(loss_np)
 
                 #  if (step + 1) % 10 == 0:
@@ -654,26 +653,18 @@ class GaugeModel(tf.keras.Model):
                 helpers.write_run_data(self.files['run_info_file'],
                                        self.data)
 
-                if (step + 1) % self.annealing_steps == 0:
-                    if self.annealing:
+                if self.annealing:
+                    if (step + 1) % self.annealing_steps == 0:
                         beta = self.beta / self.annealing_factor
                         if beta < self.beta_final:
                             self.beta = beta
                         else:
                             self.beta = self.beta_final
-                        #  print("Annealing schedule finished. "
-                        #        "Saving current state and exiting.")
-                        #
-                        #  self._save_model(samples=samples_np, step=step)
-                        #
-                        #  helpers.write_run_data(self.files['run_info_file'],
-                        #                         self.data)
 
+                # Intermittently run sampler and save samples to pkl file.
+                # We can calculate observables from these samples to
+                # evaluate the samplers performance while we continue training.
                 if (step + 1) % self.training_samples_steps == 0:
-                    # Intermittently run sampler and save samples to pkl file.
-                    # We can calculate observables from these samples to
-                    # evaluate the samplers performance while we continue
-                    # training.
                     t0 = time.time()
                     print(80 * '-')
                     print(f"\nEvaluating sampler for {tsl} steps"
@@ -685,20 +676,11 @@ class GaugeModel(tf.keras.Model):
                     print(data_header)
 
                 if (step + 2) % self.save_steps == 0:
-                    #  tt = time.time()
                     self._save_model(samples=samples_np, step=step-2)
                     helpers.write_run_data(self.files['run_info_file'],
                                            self.data)
-                    #  save_str = (
-                    #      f"Time to complete saving: {time.time() - tt:^6.4g}\n"
-                    #  )
-                    #  print('\n' + 80 * '-')
-                    #  print(save_str)
-                    #  print(data_header)
-                    #  print(80 * '-' + '\n')
 
                 if step % self.logging_steps == 0:
-                    #  tt = time.time()
                     summary_str = self.sess.run(
                         self.summary_op, feed_dict={
                             self.x: samples_np,
@@ -707,12 +689,6 @@ class GaugeModel(tf.keras.Model):
                     )
                     self.writer.add_summary(summary_str, global_step=step)
                     self.writer.flush()
-                    #  print('\n' + 80 * '-')
-                    #  log_str = (
-                    #      f"Time to complete logging: {time.time() - tt:^6.4g}\n"
-                    #  )
-                    #  print(log_str)
-                    #  print(80 * '-' + '\n')
 
             print("Training complete!")
             step = self.sess.run(self.global_step)
@@ -737,39 +713,69 @@ class GaugeModel(tf.keras.Model):
         """Run the simulation to generate samples and calculate observables."""
         samples = np.random.randn(*self.samples.shape)
         samples_history = []
+        px_history = []
+        #  eps_history = []
 
-        # Move attribute lookup outside of loop to improve performance
-        #  x_out = self.x_out
-        #  x = self.x
-        #  num_links = self.lattice.num_links
-        #  num_steps = self.num_steps
-        #  batch_size = self.batch_size
-        #  dynamics_beta = self.dynamics.beta
-        #  norm_factor = num_links * num_steps * batch_size
         if self.hmc:
             print(f"Running generic HMC sampler for {run_steps} steps...")
         else:
             print(f"Running (trained) L2HMC sampler for {run_steps} steps...")
 
+        if current_step is None:
+            eval_file = os.path.join(
+                self.info_dir,
+                'eval_info_{run_steps}.txt'
+            )
+        else:
+            eval_file = os.path.join(
+                self.info_dir,
+                'eval_info_{current_step}_TRAIN_{run_steps}.pkl'
+            )
+
+
+        eps = self.sess.run(self.dynamics.eps)
+
         start_time = time.time()
         for step in range(run_steps):
             t0 = time.time()
-            samples = self.sess.run(self.x_out, feed_dict={
-                self.x: samples,
-                self.dynamics.beta: self.beta_final
-            })
+            samples, px = self.sess.run(
+                [self.x_out,
+                self.px],
+                feed_dict={self.x: samples,
+                          self.dynamics.beta: self.beta_final}
+            )
 
             samples_history.append(samples)
+            px_history.append(px)
 
             if step % 10 == 0:
                 tt = (time.time() - t0)# / (norm_factor)
-                print(f'step: {step:>6.4g}/{run_steps:<6.4g} '
-                      f'\t time/step: {tt:^6.4g}')
+                eval_str = (f'step: {step:>6.4g}/{run_steps:<6.4g} '
+                            f'accept prob (avg): {np.mean(px):^9.4g} '
+                            f'step size: {eps:^6.4g} '
+                            f'\t time/step: {tt:^6.4g}\n')
+
+                print(eval_str)
+                print('accept prob: ', px)
+                print('\n')
+
+                try:
+                    with open(eval_file, 'a') as f:
+                        f.write(eval_str)
+                        f.write('accept_prob: ', px)
+                        f.write('\n')
+                except:
+                    continue
+
 
         if current_step is None:
             out_file = os.path.join(
                 self.samples_history_dir,
                 f'samples_history_{run_steps}.pkl'
+            )
+            px_file = os.path.join(
+                self.samples_history_dir,
+                f'accept_prob_history_{run_steps}.pkl'
             )
 
         else:
@@ -777,11 +783,18 @@ class GaugeModel(tf.keras.Model):
                 self.train_samples_history_dir,
                 f'samples_history_{current_step}_TRAIN_{run_steps}.pkl'
             )
+            px_file = os.path.join(
+                self.train_samples_history_dir,
+                f'accept_prob_history_{current_step}_TRAIN_{run_steps}.pkl'
+            )
 
         with open(out_file, 'wb') as f:
             pickle.dump(samples_history, f)
+        with open(px_file, 'wb') as f:
+            pickle.dump(px_history, f)
 
         print(f'\nSamples saved to: {out_file}.')
+        print(f'Accept probabilities saved to: {px_file}.')
         print(f'\n Time to complete run: {time.time() - start_time} seconds.')
         print(80*'-' + '\n')
 
@@ -814,6 +827,13 @@ def main(flags):
     params['rand'] = flags.rand
     params['metric'] = flags.metric
 
+    #  params['conv_net'] = flags.conv_net
+    #  params['hmc'] = flags.hmc
+    #  params['eps_trainable'] = flags.eps_trainable
+    #  params['aux'] = flags.aux
+
+
+
     config = tf.ConfigProto()
 
     eps_trainable = True
@@ -830,6 +850,8 @@ def main(flags):
                        restore=flags.restore,
                        eps_trainable=eps_trainable,
                        aux=flags.aux)
+
+    save_params_to_pkl_file(params, model.info_dir)
 
     #  start_time_str = time.strftime("%a, %d %b %Y %H:%M:%S",
     #                                 time.ctime(time.time()))
