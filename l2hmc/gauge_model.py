@@ -49,33 +49,45 @@ tf.enable_resource_variables()
 #      sys.path.append(MODULE_PATH)
 
 PARAMS = {
-    'time_size': 8,
-    'space_size': 8,
+#--------------------- Lattice parameters ----------------------------
+    'time_size': 12,
+    'space_size': 12,
     'link_type': 'U1',
     'dim': 2,
-    'beta': 8.,
-    'beta_init': 1.,
-    'beta_final': 8.,
-    'num_samples': 2,
-    'num_steps': 5,
-    'eps': 0.05,
-    'loss_scale': 0.1,
-    'loss_eps': 1e-4,
-    'learning_rate_init': 1e-4,
-    'learning_rate_decay_steps': 100,
-    'learning_rate_decay_rate': 0.96,
-    'train_iters': 1000,
-    'record_loss_every': 50,
-    'data_steps': 10,
-    'save_steps': 50,
-    'print_steps': 1,
-    'logging_steps': 50,
-    'annealing_steps': 100,
-    'annealing_factor': 0.95,
-    'clip_value': 100,
+    'num_samples': 6,
     'rand': False,
+#--------------------- Leapfrog parameters ---------------------------
+    'num_steps': 5,
+    'eps': 0.2,
+    'loss_scale': 1.,
+    'loss_eps': 1e-4,
+#--------------------- Learning rate parameters ----------------------
+    'learning_rate_init': 1e-3,
+    'learning_rate_decay_steps': 500,
+    'learning_rate_decay_rate': 0.96,
+#--------------------- Annealing rate parameters ---------------------
+    'annealing': True,
+    'annealing_steps': 200,
+    'annealing_factor': 0.97,
+    'beta': 2.,
+    'beta_init': 2.,
+    'beta_final': 8.,
+#--------------------- Training parameters ---------------------------
+    'train_steps': 10000,
+    'save_steps': 1000,
+    'logging_steps': 50,
+    'training_samples_steps': 500,
+    'training_samples_length': 100,
+#--------------------- Model parameters ------------------------------
+    'conv_net': True,
+    'hmc': False,
+    'eps_trainable': True,
     'metric': 'l2',
+    'aux': True,
+    'clip_grads': False,
+    'clip_value': 10.,
 }
+
 
 def check_else_make_dir(d):
     """If directory `d` doesn't exist, it is created."""
@@ -546,14 +558,14 @@ class GaugeModel(object):
                     f.write(80 * '-' + '\n')
 
         str0 = f"Building graph... (started at: {time.ctime()})\n"
-        str1 = "  Creating loss..."
-        str3 = "  Creating optimizer..."
-        str5 = "  Creating summaries..."
+        str1 = "  Creating loss...\n"
+        str3 = "  Creating optimizer...\n"
+        str5 = "  Creating summaries...\n"
         t_diff_str = lambda ti, tf : f"    took: {tf - ti} seconds."
         t_diff_str1 = lambda t : f"Time to build graph: {time.time() - t}."
 
         print(80*'-' + '\n')
-        print(str0 + '\n' + str1 + '\n')
+        print(str0 + str1)
         _write_strs_to_file([str0, str1])
         t0 = time.time()
 
@@ -808,29 +820,42 @@ def main(flags):
     """Main method for creating/training U(1) gauge model from command line."""
     params = PARAMS  # use default parameters if no command line args passed
 
+########################### Lattice parameters ###############################
     params['time_size'] = flags.time_size
     params['space_size'] = flags.space_size
     params['link_type'] = flags.link_type
     params['dim'] = flags.dim
-    params['beta'] = flags.beta
     params['num_samples'] = flags.num_samples
+########################### Leapfrog parameters ##############################
     params['num_steps'] = flags.num_steps
     params['eps'] = flags.eps
     params['loss_scale'] = flags.loss_scale
+    params['loss_eps'] = 1e-4
+########################### Learning rate parameters #########################
     params['learning_rate_init'] = flags.learning_rate_init
     params['learning_rate_decay_rate'] = flags.learning_rate_decay_rate
+    params['learning_rate_decay_steps'] = flags.learning_rate_decay_steps
+########################### Annealing parameters #############################
+    params['annealing'] = flags.annealing
+    params['annealing_steps'] = flags.annealing_steps
+    params['annealing_factor'] = flags.annealing_factor
+    params['beta'] = flags.beta
+    params['beta_init'] = flags.beta_init
+    params['beta_final'] = flags.beta_final
+########################### Training parameters ##############################
     params['train_steps'] = flags.train_steps
-    params['data_steps'] = flags.data_steps
     params['save_steps'] = flags.save_steps
     params['logging_steps'] = flags.logging_steps
-    params['clip_value'] = flags.clip_value
-    params['rand'] = flags.rand
+    params['training_samples_steps'] = flags.training_samples_steps
+    params['training_samples_length'] = flags.training_samples_length
+########################### Model parameters ################################
+    params['conv_net'] = flags.conv_net
+    params['hmc'] = flags.hmc
+    params['eps_trainable'] = flags.eps_trainable
     params['metric'] = flags.metric
-
-    #  params['conv_net'] = flags.conv_net
-    #  params['hmc'] = flags.hmc
-    #  params['eps_trainable'] = flags.eps_trainable
-    #  params['aux'] = flags.aux
+    params['aux'] = flags.aux
+    params['clip_grads'] = flags.clip_grads
+    params['clip_value'] = flags.clip_value
 
 
 
@@ -844,12 +869,9 @@ def main(flags):
     model = GaugeModel(params=params,
                        config=config,
                        sess=None,
-                       conv_net=flags.conv_net,
-                       hmc=flags.hmc,
                        log_dir=flags.log_dir,
-                       restore=flags.restore,
-                       eps_trainable=eps_trainable,
-                       aux=flags.aux)
+                       restore=flags.restore)
+
 
     save_params_to_pkl_file(params, model.info_dir)
 
@@ -890,6 +912,7 @@ if __name__ == '__main__':
         description=('L2HMC model using U(1) lattice gauge theory for target '
                      'distribution.')
     )
+########################### Lattice parameters ###############################
     parser.add_argument("-s", "--space_size", type=int,
                         default=8, required=False, dest="space_size",
                         help="Spatial extent of lattice. (Default: 8)")
@@ -906,15 +929,17 @@ if __name__ == '__main__':
                         default=2, dest="dim",
                         help="Dimensionality of lattice (Default: 2)")
 
-    parser.add_argument("-b", "--beta", type=float,
-                        required=False, dest="beta",
-                        help=("Beta (inverse coupling constant) used in "
-                              "gauge model. (Default: 8.)"))
-
     parser.add_argument("-N", "--num_samples", type=int,
                         default=2, required=False, dest="num_samples",
                         help=("Number of samples (batch size) to use for "
                               "training. (Default: 2)"))
+
+    parser.add_argument("--rand", action="store_true",
+                        required=False, dest="rand",
+                        help=("Start lattice from randomized initial "
+                              "configuration. (Default: False)"))
+
+########################### Leapfrog parameters ##############################
 
     parser.add_argument("-n", "--num_steps", type=int,
                         default=5, required=False, dest="num_steps",
@@ -926,55 +951,67 @@ if __name__ == '__main__':
                         help=("Step size to use in leapfrog integrator. "
                               "(Default: 0.1)"))
 
-    parser.add_argument("--log_dir", default=None,
-                        required=False, dest="log_dir",
-                        help=("Log directory to use from previous run. "
-                              "If this argument is not passed, a new "
-                              "directory will be created. (Default: None)"))
-
-    parser.add_argument("--restore", action="store_true",
-                        required=False, dest="restore",
-                        help=("Restore model from previous run. "
-                              "If this argument is passed, a `log_dir` "
-                              "must be specified and passed to `--log_dir` "
-                              "argument. (Default: False)"))
-
     parser.add_argument("--loss_scale", type=float, default=0.1,
                         required=False, dest="loss_scale",
                         help=("Scaling factor to be used in loss function. "
                               "(lambda in Eq. 7 of paper). (Default: 0.1)"))
+
+########################### Learning rate parameters ##########################
 
     parser.add_argument("--learning_rate_init", type=float, default=1e-4,
                         required=False, dest="learning_rate_init",
                         help=("Initial value of learning rate. "
                               "(Deafult: 1e-4)"))
 
-    parser.add_argument("--learning_rate_decay_rate", type=float, default=0.96,
-                        required=False, dest="learning_rate_decay_rate",
-                        help=("Learning rate decay rate to be used during "
-                              "training. (Default: 0.96)"))
-
     parser.add_argument("--learning_rate_decay_steps", type=int, default=100,
                         required=False, dest="learning_rate_decay_steps",
                         help=("Number of steps after which to decay learning "
                               "rate. (Default: 100)"))
 
+    parser.add_argument("--learning_rate_decay_rate", type=float, default=0.96,
+                        required=False, dest="learning_rate_decay_rate",
+                        help=("Learning rate decay rate to be used during "
+                              "training. (Default: 0.96)"))
+
+########################### Annealing rate parameters ########################
+
+    parser.add_argument("--annealing", action="store_true",
+                        required=False, dest="annealing",
+                        help=("Flag that when passed will cause the model "
+                              "to perform simulated annealing during "
+                              "training. (Default: False)"))
+
+    parser.add_argument("--annealing_steps", type=float, default=200,
+                        required=False, dest="annealing_steps",
+                        help=("Number of steps after which to anneal beta."))
+
+    parser.add_argument("--annealing_factor", type=float, default=0.97,
+                        required=False, dest="annealing_factor",
+                        help=("Factor by which to anneal beta."))
+
+    parser.add_argument("-b", "--beta", type=float,
+                        required=False, dest="beta",
+                        help=("Beta (inverse coupling constant) used in "
+                              "gauge model. (Default: 8.)"))
+
+    parser.add_argument("--beta_init", type=float, default=1.,
+                        required=False, dest="beta_init",
+                        help=("Initial value of beta (inverse coupling "
+                              "constant) used in gauge model when annealing. "
+                              "(Default: 1.)"))
+
+    parser.add_argument("--beta_final", type=float, default=8.,
+                        required=False, dest="beta_final",
+                        help=("Final value of beta (inverse coupling "
+                              "constant) used in gauge model when annealing. "
+                              "(Default: 8.)"))
+
+########################### Training parameters ##############################
+
     parser.add_argument("--train_steps", type=int, default=1000,
                         required=False, dest="train_steps",
                         help=("Number of training steps to perform. "
                               "(Default: 1000)"))
-
-    parser.add_argument("--run_steps", type=int, default=1000,
-                        required=False, dest="run_steps",
-                        help=("Number of evaluation steps for generating "
-                              "samples from trained sampler. "
-                              "(Default: 1000)"))
-
-    parser.add_argument("--data_steps", type=int, default=10,
-                        required=False, dest="data_steps",
-                        help=("Number of steps after which to compute and "
-                              "record data (including physical observables) "
-                              "(Default: 10)"))
 
     parser.add_argument("--save_steps", type=int, default=50,
                         required=False, dest="save_steps",
@@ -987,26 +1024,20 @@ if __name__ == '__main__':
                         help=("Number of steps after which to write logs for "
                               "tensorboard. (Default: 50)"))
 
-    parser.add_argument("--clip_value", type=int, default=100,
-                        required=False, dest="clip_value",
-                        help=("Clip value, used for clipping value of "
-                              "gradients by global norm. (Default: 100)"))
+    parser.add_argument("--training_samples_steps", type=int, default=500,
+                        required=False, dest="training_samples_steps",
+                        help=("Number of intermittent steps after which "
+                              "the sampler is evaluated at `beta_final`. "
+                              "This allows us to monitor the performance of "
+                              "the sampler during training. (Default: 500)"))
 
-    parser.add_argument("--rand", action="store_true",
-                        required=False, dest="rand",
-                        help=("Start lattice from randomized initial "
-                              "configuration. (Default: False)"))
+    parser.add_argument("--training_samples_length", type=int, default=100,
+                        required=False, dest="training_samples_length",
+                        help=("Number of steps to run sampler for when "
+                              "evaluating the sampler during training. "
+                              "(Default: 100)"))
 
-    parser.add_argument("--aux", action="store_true",
-                        required=False, dest="aux",
-                        help=("Include auxiliary function `q` for calculating "
-                              "expected squared jump distance conditioned on "
-                              "initialization distribution. (Default: False)"))
-
-    parser.add_argument("--metric", type=str, default="l2",
-                        required=False, dest="metric",
-                        help=("Metric to use in loss function. "
-                              "(Default: `l2`, choices: [`l2`, `l1`, `cos`])"))
+########################### Model parameters ################################
 
     parser.add_argument("--conv_net", action="store_true",
                         required=False, dest="conv_net",
@@ -1021,6 +1052,47 @@ if __name__ == '__main__':
                               "integrator described in paper). Used for "
                               "comparing against L2HMC algorithm. "
                               "(Default: False)"))
+
+    parser.add_argument("--eps_trainable", action="store_true",
+                        required=False, dest="eps_trainable",
+                        help=("Flag that when passed will allow the step size "
+                              "`eps` to be a trainable parameter."))
+
+    parser.add_argument("--metric", type=str, default="l2",
+                        required=False, dest="metric",
+                        help=("Metric to use in loss function. "
+                              "(Default: `l2`, choices: [`l2`, `l1`, `cos`])"))
+
+    parser.add_argument("--aux", action="store_true",
+                        required=False, dest="aux",
+                        help=("Include auxiliary function `q` for calculating "
+                              "expected squared jump distance conditioned on "
+                              "initialization distribution. (Default: False)"))
+
+    parser.add_argument("--clip_grads", action="store_true",
+                        required=False, dest="clip_grads",
+                        help=("Flag that when passed will clip gradients by "
+                              "global norm using `--clip_value` command line "
+                              "argument. If `--clip_value` is not passed, "
+                              "it defaults to 100."))
+
+    parser.add_argument("--clip_value", type=int, default=100,
+                        required=False, dest="clip_value",
+                        help=("Clip value, used for clipping value of "
+                              "gradients by global norm. (Default: 100)"))
+
+    parser.add_argument("--log_dir", default=None,
+                        required=False, dest="log_dir",
+                        help=("Log directory to use from previous run. "
+                              "If this argument is not passed, a new "
+                              "directory will be created. (Default: None)"))
+
+    parser.add_argument("--restore", action="store_true",
+                        required=False, dest="restore",
+                        help=("Restore model from previous run. "
+                              "If this argument is passed, a `log_dir` "
+                              "must be specified and passed to `--log_dir` "
+                              "argument. (Default: False)"))
 
     args = parser.parse_args()
 
