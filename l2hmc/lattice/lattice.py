@@ -93,15 +93,6 @@ class GaugeLattice(object):
 
         self._init_lattice(link_type, num_samples, rand)
 
-        self.params = {
-            'time_size': time_size,
-            'space_size': space_size,
-            'dim': dim,
-            'link_type': link_type,
-        }
-
-
-
     # pylint:disable=invalid-name
     def _init_lattice(self, link_type, num_samples, rand):
         """Initialize lattice, create self.links variables."""
