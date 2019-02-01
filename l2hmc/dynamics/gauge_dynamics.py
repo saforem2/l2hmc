@@ -73,7 +73,10 @@ class GaugeDynamics(tf.keras.Model):
             trainable=eps_trainable
         )
 
-        self.beta = tf.placeholder(tf.float32, shape=(), name='dynamics_beta')
+        #  if not tf.executing_eagerly():
+        #      self.beta = tf.placeholder(tf.float32, shape=(), name='beta')
+        #  else:
+        #      self.beta = self.beta_init
 
         self.potential = potential_fn
 
@@ -160,16 +163,16 @@ class GaugeDynamics(tf.keras.Model):
         )
 
     # pylint:disable=too-many-locals
-    def apply_transition(self, position):
+    def apply_transition(self, position, beta):
         """Propose a new state and perform the accept/reject step."""
         # Simulate dynamics both forward and backward
         # Use sample masks to compute the actual solutions
         position_f, momentum_f, accept_prob_f = self.transition_kernel(
-            position, forward=True
+            position, beta, forward=True
         )
 
         position_b, momentum_b, accept_prob_b = self.transition_kernel(
-            position, forward=False
+            position, beta, forward=False
         )
 
         # Decide direction uniformly
@@ -209,7 +212,7 @@ class GaugeDynamics(tf.keras.Model):
         return position_post, momentum_post, accept_prob, position_out
 
     # pylint:disable=missing-docstring,invalid-name,unused-argument
-    def transition_kernel(self, position, forward=True):
+    def transition_kernel(self, position, beta, forward=True):
         """Transition kernel of augmented leapfrog integrator."""
         lf_fn = self._forward_lf if forward else self._backward_lf
 
@@ -224,6 +227,7 @@ class GaugeDynamics(tf.keras.Model):
             position_post, momentum_post, logdet = lf_fn(
                 position_post,
                 momentum_post,
+                beta,
                 i
             )
             sumlogdet += logdet
@@ -233,34 +237,37 @@ class GaugeDynamics(tf.keras.Model):
             momentum,
             position_post,
             momentum_post,
-            sumlogdet
+            sumlogdet,
+            beta
         )
 
         return position_post, momentum_post, accept_prob
 
-    def _forward_lf(self, position, momentum, i):
+    def _forward_lf(self, position, momentum, beta, i):
         """One forward augmented leapfrog step."""
         t = self._get_time(i)
         mask, mask_inv = self._get_mask(i)
         sumlogdet = 0.
 
-        momentum, logdet = self._update_momentum_forward(position, momentum, t)
+        momentum, logdet = self._update_momentum_forward(position, momentum,
+                                                         beta, t)
         sumlogdet += logdet
 
-        position, logdet = self._update_position_forward(position, momentum, t,
-                                                         mask, mask_inv)
+        position, logdet = self._update_position_forward(position, momentum,
+                                                         t, mask, mask_inv)
         sumlogdet += logdet
 
-        position, logdet = self._update_position_forward(position, momentum, t,
-                                                         mask_inv, mask)
+        position, logdet = self._update_position_forward(position, momentum,
+                                                         t, mask_inv, mask)
         sumlogdet += logdet
 
-        momentum, logdet = self._update_momentum_forward(position, momentum, t)
+        momentum, logdet = self._update_momentum_forward(position, momentum,
+                                                         beta, t)
         sumlogdet += logdet
 
         return position, momentum, sumlogdet
 
-    def _backward_lf(self, position, momentum, i):
+    def _backward_lf(self, position, momentum, beta, i):
         """One backward augmented leapfrog step."""
         # pylint: disable=invalid-name
 
@@ -269,26 +276,28 @@ class GaugeDynamics(tf.keras.Model):
         mask, mask_inv = self._get_mask(self.num_steps - i - 1)
         sumlogdet = 0.
 
-        momentum, logdet = self._update_momentum_backward(position, momentum, t)
+        momentum, logdet = self._update_momentum_backward(position, momentum,
+                                                          beta, t)
         sumlogdet += logdet
 
-        position, logdet = self._update_position_backward(position, momentum, t,
-                                                          mask_inv, mask)
+        position, logdet = self._update_position_backward(position, momentum,
+                                                          t, mask_inv, mask)
         sumlogdet += logdet
 
-        position, logdet = self._update_position_backward(position, momentum, t,
-                                                          mask, mask_inv)
+        position, logdet = self._update_position_backward(position, momentum,
+                                                          t, mask, mask_inv)
         sumlogdet += logdet
 
-        momentum, logdet = self._update_momentum_backward(position, momentum, t)
+        momentum, logdet = self._update_momentum_backward(position, momentum,
+                                                          beta, t)
         sumlogdet += logdet
 
         return position, momentum, sumlogdet
 
     # pylint:disable=invalid-name
-    def _update_momentum_forward(self, position, momentum, t):
+    def _update_momentum_forward(self, position, momentum, beta, t):
         """Update v in the forward leapfrog step."""
-        grad = self.grad_potential(position)
+        grad = self.grad_potential(position, beta)
 
         scale, translation, transformed = self.momentum_fn([position, grad, t])
 
@@ -322,9 +331,9 @@ class GaugeDynamics(tf.keras.Model):
         return position, tf.reduce_sum(mask_inv * scale, axis=self.axes)
 
     # pylint:disable=invalid-name
-    def _update_momentum_backward(self, position, momentum, t):
+    def _update_momentum_backward(self, position, momentum, beta, t):
         """Update v in the backward leapforg step. Invert the forward update."""
-        grad = self.grad_potential(position)
+        grad = self.grad_potential(position, beta)
 
 
         scale, translation, transformed = self.momentum_fn([position, grad, t])
@@ -360,11 +369,11 @@ class GaugeDynamics(tf.keras.Model):
         return position, tf.reduce_sum(mask_inv * scale, axis=self.axes)
 
     def _compute_accept_prob(self, position, momentum, position_post,
-                             momentum_post, sumlogdet):
+                             momentum_post, sumlogdet, beta):
         """Compute the prob of accepting the proposed state given old state."""
         #  beta = self.lattice.beta
-        old_hamil = self.hamiltonian(position, momentum)
-        new_hamil = self.hamiltonian(position_post, momentum_post)
+        old_hamil = self.hamiltonian(position, momentum, beta)
+        new_hamil = self.hamiltonian(position_post, momentum_post, beta)
         prob = tf.exp(tf.minimum((old_hamil - new_hamil + sumlogdet), 0.))
 
         # Ensure numerical stability as well as correct gradients
@@ -408,25 +417,30 @@ class GaugeDynamics(tf.keras.Model):
         m = self.masks[i]
         return m, 1. - m
 
-    def potential_energy(self, position):
+    def potential_energy(self, position, beta):
         """Compute potential energy using `self.potential` and `self.beta.`"""
-        return self.beta * self.potential(position)
+        return beta * self.potential(position)
 
     def kinetic_energy(self, v):
         """Compute the kinetic energy."""
         return 0.5 * tf.reduce_sum(v**2, axis=self.axes)
 
-    def hamiltonian(self, position, momentum):
+    def hamiltonian(self, position, momentum, beta):
         """Compute the overall Hamiltonian."""
-        return self.potential_energy(position) + self.kinetic_energy(momentum)
+        return (self.potential_energy(position, beta)
+                + self.kinetic_energy(momentum))
 
-    def grad_potential(self, position, check_numerics=True):
+    def grad_potential(self, position, beta, check_numerics=True):
         """Get gradient of potential function at current location."""
         if tf.executing_eagerly():
-            import tf.contrib.eager as tfe
-            grad = tfe.gradients_function(self.potential_energy)(position)[0]
+            tfe = tf.contrib.eager
+            grad_fn = tfe.gradients_function(self.potential_energy, params=[0])
+            (grad,) = grad_fn(position, beta)
+            #  grad = tfe.gradients_function(self.potential_energy)(position)[0]
         else:
-            grad = tf.gradients(self.potential_energy(position), position)[0]
+            grad = tf.gradients(
+                self.potential_energy(position, beta), position
+            )[0]
 
         return grad
 
