@@ -103,6 +103,103 @@ def save_params_to_pkl_file(params, out_dir):
     with open(params_file, 'wb') as f:
         pickle.dump(params, f)
 
+def tf_accept(x, _x, px):
+    mask = (px - tf.random_uniform(tf.shape(px)) > 0.)
+    return tf.where(mask, _x, x)
+
+def dynamics_step(x, dynamics, v_init=None, mh_step=False, sumlogdet=False):
+    """Propose new state by integrating along an (augmented) lf trajectory."""
+    if dynamics.hmc:
+        _x, _v, px = dynamics.transition_kernel(x, forward=True)
+        return _x, _v, px, [tf_accept(x, _x, px)]
+
+    else:
+        # sample mask for forward/backward
+        mask = tf.cast(
+            tf.random_uniform((tf.shape(x)[0], 1), maxval=2, dtype=tf.int32),
+            tf.float32
+        )
+
+        xf, vf, pxf = dynamics.transition_kernel(x, forward=True)
+        xb, vb, pxb = dynamics.transition_kernel(x, forward=False)
+
+        _x = mask * xf + (1. - mask) * xb
+
+        _v = None
+        if v_init is None:
+            _v = mask * vf + (1. - mask) * vb
+
+        px = (tf.squeeze(mask, axis=1) * px1
+              + tf.squeeze(1 - mask, axis=1) * px2)
+
+        outputs = []
+
+        if do_mh_step:
+            outputs.append(tf_accept(x, _x, px))
+
+        return Lx, Lv, px, outputs
+
+
+def compute_loss(params, dynamics, x1, x2, px):
+    """Define loss function to minimize during training."""
+    scale = kwargs.get('loss_scale', 1.)
+    metric = kwargs.get('metric', 'l2')
+    #  scale = self.params['loss_scale']
+    scale = params['loss_scale']
+    metric = params['metric']
+
+    #  if metric == 'l1':
+    #      distance = lambda x1, x2: tf.abs(x1 - x2)
+    #  if metric == 'l2':
+    #      distance = lambda x1, x2: tf.square(x1 - x2)
+    #  if metric == 'cos':
+    #      distance = lambda x1, x2: tf.abs(tf.cos(x1) - tf.cos(x2))
+    #  if metric == 'cos2':
+    #      distance = lambda x1, x2: tf.square(tf.cos(x1) - tf.cos(x2))
+    #  if metric == 'euc2':
+    #      distance = lambda x1, x2: (tf.square(tf.cos(x1) - tf.cos(x2))
+    #                                 + tf.square(tf.sin(x1) - tf.sin(x2)))
+    #  if metric == 'euc':
+    #      distance = lambda x1, x2: (tf.abs(tf.cos(x1) - tf.cos(x2))
+    #                                 + tf.abs(tf.sin(x1) - tf.sin(x2)))
+    loss = (tf.reduce_sum(distance(x1, x2), axis=dynamics.axes))
+
+    _x, _, px, x_out = (
+        dynamics.apply_transition(x)
+    )
+
+    with tf.name_scope('x_loss'):
+        x_loss = ((tf.reduce_sum(
+            distance(x, _x),
+            #  tf.square(x - _x),
+            axis=dynamics.axes,
+            name='x_loss'
+        ) * px) + 1e-4)
+
+    if aux:
+        z = tf.random_normal(tf.shape(x), name='z')
+        _z, _, pz, z_out = dynamics.apply_transition(z)
+        with tf.name_scope('z_loss'):
+            z_loss = ((tf.reduce_sum(
+                distance(z, _z),
+                #  tf.square(z - _z),
+                axis=dynamics.axes,
+                name='z_loss'
+            ) * pz) + 1e-4)
+
+        # Squared jump distance
+        with tf.name_scope('total_loss'):
+            loss_op = scale * tf.reduce_mean(
+                (1. / x_loss + 1. / z_loss) * scale
+                - (x_loss + z_loss) / scale, axis=0, name='loss_op'
+            )
+
+    else:
+        with tf.name_scope('total_loss'):
+            loss_op = tf.reduce_mean(scale / x_loss
+                                          - x_loss / scale,
+                                          axis=0, name='loss_op')
+
 # pylint: disable=attribute-defined-outside-init
 class GaugeModel(object):
     """Wrapper class implementing L2HMC algorithm on lattice gauge models."""
@@ -113,7 +210,7 @@ class GaugeModel(object):
                  log_dir=None,
                  restore=False):
         """Initialization method."""
-        super(GaugeModel, self).__init__()
+        #  super(GaugeModel, self).__init__()
 
         if config is None:
             config = tf.ConfigProto()
@@ -140,8 +237,6 @@ class GaugeModel(object):
         # create attributes using key, value pairs in params
         self._init_params(params)
 
-
-
         with tf.name_scope('input'):
             with tf.name_scope('lattice'):
                 self.lattice = GaugeLattice(time_size=self.time_size,
@@ -155,9 +250,14 @@ class GaugeModel(object):
             self.samples = tf.convert_to_tensor(
                 self.lattice.samples, dtype=tf.float32
             )
-            self.x = tf.placeholder(dtype=tf.float32,
-                                    shape=self.samples.shape,
-                                    name='x')
+            if not tf.executing_eagerly():
+                self.x = tf.placeholder(dtype=tf.float32,
+                                        shape=self.samples.shape,
+                                        name='x')
+
+                self.beta = tf.placeholder(tf.float32, shape=(), name='beta')
+            else:
+                self.beta = self.beta_init
 
         with tf.name_scope('potential_fn'):
             self.potential_fn = self.lattice.get_energy_function(self.samples)
@@ -199,10 +299,10 @@ class GaugeModel(object):
         for key, val in params.items():
             setattr(self, key, val)
 
-        if self.annealing:
-            self.beta = params.get('beta_init', 1.,)
-        else:
-            self.beta = params.get('beta_final')
+        #  if self.annealing:
+            #  self.beta = params.get('beta_init', 1.,)
+        #  else:
+            #  self.beta = params.get('beta_final')
 
         self.params = params
 
@@ -284,7 +384,7 @@ class GaugeModel(object):
         self.dynamics = GaugeDynamics(
             lattice=self.lattice,
             potential_fn=self.potential_fn,
-            beta_init=self.data['beta'],
+            beta_init=self.data['beta'], # use previous value of beta from data
             num_steps=self.num_steps,
             eps=self.data['eps'],
             conv_net=self.conv_net,
@@ -502,7 +602,7 @@ class GaugeModel(object):
 
         with tf.name_scope('loss'):
             self._x, _, self.px, self.x_out = (
-                self.dynamics.apply_transition(self.x)
+                self.dynamics.apply_transition(self.x, self.beta)
             )
 
             with tf.name_scope('x_loss'):
@@ -515,7 +615,7 @@ class GaugeModel(object):
 
             if self.aux:
                 z = tf.random_normal(tf.shape(self.x), name='z')
-                _z, _, pz, z_out = self.dynamics.apply_transition(z)
+                _z, _, pz, z_out = self.dynamics.apply_transition(z, self.beta)
                 with tf.name_scope('z_loss'):
                     z_loss = ((tf.reduce_sum(
                         distance(z, _z),
@@ -626,6 +726,7 @@ class GaugeModel(object):
         norm_factor = self.num_steps * self.batch_size * self.lattice.num_links
         #  self.sess.graph.finalize()
         self.data['learning_rate'] = self.sess.run(self.learning_rate)
+        beta_np = self.beta_init
         try:
             print(data_header)
             helpers.write_run_data(
@@ -644,34 +745,36 @@ class GaugeModel(object):
                     #  self.learning_rate,
                     self.dynamics.eps
                 ], feed_dict={self.x: samples_np,
-                              self.dynamics.beta: self.beta})
+                              self.beta: beta_np})
 
                 if step % self.learning_rate_decay_steps == 0:
                     lr_np = self.sess.run(self.learning_rate)
 
-                self.data['step'] = step
-                self.data['loss'] = loss_np
-                self.data['accept_prob'] = px_np
-                self.data['eps'] = eps_np
-                self.data['beta'] = self.beta
-                self.data['learning_rate'] = lr_np
-                self.data['step_time'] = (
-                    (time.time() - start_step_time) / norm_factor
-                )
-                self.losses_arr.append(loss_np)
+                if step % 5 == 0:
+                    self.data['step'] = step
+                    self.data['loss'] = loss_np
+                    self.data['accept_prob'] = px_np
+                    self.data['eps'] = eps_np
+                    self.data['beta'] = beta_np
+                    self.data['learning_rate'] = lr_np
+                    self.data['step_time'] = (
+                        (time.time() - start_step_time) / norm_factor
+                    )
+                    self.losses_arr.append(loss_np)
 
-                #  if (step + 1) % 10 == 0:
-                helpers.print_run_data(self.data)
-                helpers.write_run_data(self.files['run_info_file'],
-                                       self.data)
+                    #  if (step + 1) % 10 == 0:
+                    helpers.print_run_data(self.data)
+                    helpers.write_run_data(self.files['run_info_file'],
+                                           self.data)
 
-                if self.annealing:
-                    if (step + 1) % self.annealing_steps == 0:
-                        beta = self.beta / self.annealing_factor
-                        if beta < self.beta_final:
-                            self.beta = beta
-                        else:
-                            self.beta = self.beta_final
+                #  if self.annealing:
+                    #  if (step + 1) % self.annealing_steps == 0:
+                _beta_np = beta_np / self.annealing_factor
+
+                if _beta_np < self.beta_final:
+                    beta_np = _beta_np
+                else:
+                    beta_np = self.beta_final
 
                 # Intermittently run sampler and save samples to pkl file.
                 # We can calculate observables from these samples to
@@ -696,7 +799,7 @@ class GaugeModel(object):
                     summary_str = self.sess.run(
                         self.summary_op, feed_dict={
                             self.x: samples_np,
-                            self.dynamics.beta: self.beta
+                            self.beta: beta_np
                         }
                     )
                     self.writer.add_summary(summary_str, global_step=step)
@@ -754,7 +857,7 @@ class GaugeModel(object):
                 [self.x_out,
                 self.px],
                 feed_dict={self.x: samples,
-                          self.dynamics.beta: self.beta_final}
+                           self.beta: self.beta_final}
             )
 
             samples_history.append(samples)
