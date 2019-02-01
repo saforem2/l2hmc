@@ -506,6 +506,7 @@ def plot_observables(log_dir, observables_dicts, training=False):
     actions_dict, plaqs_dict, charges_dict = observables_dicts
 
     plt.close('all')
+    figs_axes = []
     for key in charges_dict.keys():
         observables = (actions_dict[key], plaqs_dict[key], charges_dict[key])
         title_str = (r"$\beta = $"
@@ -516,16 +517,15 @@ def plot_observables(log_dir, observables_dicts, training=False):
             'title': title_str
         }
 
-        figs_axes = make_multiple_lines_plots(
+        fig_ax = make_multiple_lines_plots(
             params['beta_final'],
             observables,
             **kwargs
         )
 
+        figs_axes.append(fig_ax)
+
     return figs_axes
-
-
-
 
 
 def plot_top_charges_training(log_dir, charges_dict):
