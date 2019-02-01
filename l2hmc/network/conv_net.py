@@ -32,7 +32,7 @@ class ConvNet(tf.keras.Model):
                  filter_size2=(2, 2),
                  model_name='ConvNet',
                  variable_scope='Net',
-                 data_format='channels_first'):
+                 data_format='channels_last'):
         """Initialization method."""
         super(ConvNet, self).__init__(name=model_name)
 
