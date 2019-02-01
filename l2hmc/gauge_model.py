@@ -444,29 +444,17 @@ class GaugeModel(object):
         if samples is None:
             samples = self.samples
 
-        #  def pkl_dump(out_file, data):
-        #      with open(out_file, 'wb') as f:
-        #          pickle.dump(data, out_file)
-        #
-        #  pkl_dump(self.files['data_pkl_file'], self.data)
-        #  pkl_dump(self.files['samples_pkl_file'], samples)
-        #  pkl_dump(self.files['train_samples_pkl_file'], self.train_samples)
-
         with open(self.files['data_pkl_file'], 'wb') as f:
             pickle.dump(self.data, f)
-        #  with open(self.files['parameters_pkl_file'], 'wb') as f:
-        #      pickle.dump(self.params, f)
+
         with open(self.files['samples_pkl_file'], 'wb') as f:
             pickle.dump(samples, f)
-        #  with open(self.files['train_samples_pkl_file'], 'wb') as f:
-        #      pickle.dump(self.train_samples, f)
 
         if not tf.executing_eagerly():
             ckpt_prefix = os.path.join(self.log_dir, 'ckpt')
             ckpt_file = os.path.join(self.log_dir, 'model.ckpt')
             print(f'Saving checkpoint to: {ckpt_file}\n')
             self.saver.save(self.sess, ckpt_file, global_step=step)
-            #  self.checkpoint.save(file_prefix=ckpt_prefix, session=self.sess)
             self.writer.flush()
         else:
             saved_path = self.checkpoint.save(
@@ -544,25 +532,6 @@ class GaugeModel(object):
         with tf.name_scope('train'):
             #  self.grads = tf.gradients(self.loss_op,
             #                            self.dynamics.trainable_variables)
-            #  if self.clip_grads:
-            #      clip_value = self.params['clip_value']
-            #      self.grads, _ = tf.clip_by_global_norm(
-            #          self.grads,
-            #          clip_value,
-            #          name='clipped_grads'
-            #      )
-            #  self.grads_and_vars = list(
-            #      zip(self.grads, self.dynamics.trainable_variables)
-            #  )
-            #  self.optimizer = tf.train.AdamOptimizer(
-            #      learning_rate=self.learning_rate,
-            #      name='AdamOptimizer'
-            #  )
-            #  self.train_op = self.optimizer.apply_gradients(
-            #      zip(self.grads, self.dynamics.trainable_variables),
-            #      global_step=self.global_step,
-            #      name='train_op'
-            #  )
             self.global_step = tf.train.get_or_create_global_step()
             self.global_step.assign(1)
             tf.add_to_collection('global_step', self.global_step)
@@ -575,11 +544,33 @@ class GaugeModel(object):
                 staircase=True
             )
 
-            self.optimizer = tf.train.AdamOptimizer(self.learning_rate)
-            self.train_op = self.optimizer.minimize(
-                self.loss_op,
-                global_step=self.global_step
-            )
+            if self.clip_grads:
+                clip_value = self.params['clip_value']
+                self.grads = tf.gradients(self.loss_op,
+                                          self.dynamics.trainable_variables)
+                self.grads, _ = tf.clip_by_global_norm(
+                    self.grads,
+                    clip_value,
+                    name='clipped_grads'
+                )
+                self.grads_and_vars = list(
+                    zip(self.grads, self.dynamics.trainable_variables)
+                )
+                self.optimizer = tf.train.AdamOptimizer(
+                    learning_rate=self.learning_rate,
+                    name='AdamOptimizer'
+                )
+                self.train_op = self.optimizer.apply_gradients(
+                    zip(self.grads, self.dynamics.trainable_variables),
+                    global_step=self.global_step,
+                    name='train_op'
+                )
+            else:
+                self.optimizer = tf.train.AdamOptimizer(self.learning_rate)
+                self.train_op = self.optimizer.minimize(
+                    self.loss_op,
+                    global_step=self.global_step
+                )
 
     def _create_loss(self):
         """Define loss function to minimize during training."""
@@ -593,12 +584,6 @@ class GaugeModel(object):
             distance = lambda x1, x2: tf.abs(tf.cos(x1) - tf.cos(x2))
         if self.metric == 'cos2':
             distance = lambda x1, x2: tf.square(tf.cos(x1) - tf.cos(x2))
-        #  if self.metric == 'euc2':
-        #      distance = lambda x1, x2: (tf.square(tf.cos(x1) - tf.cos(x2))
-        #                                 + tf.square(tf.sin(x1) - tf.sin(x2)))
-        #  if self.metric == 'euc':
-        #      distance = lambda x1, x2: (tf.abs(tf.cos(x1) - tf.cos(x2))
-        #                                 + tf.abs(tf.sin(x1) - tf.sin(x2)))
 
         with tf.name_scope('loss'):
             self._x, _, self.px, self.x_out = (
@@ -608,18 +593,16 @@ class GaugeModel(object):
             with tf.name_scope('x_loss'):
                 self.x_loss = ((tf.reduce_sum(
                     distance(self.x, self._x),
-                    #  tf.square(self.x - self._x),
                     axis=self.dynamics.axes,
                     name='x_loss'
                 ) * self.px) + 1e-4)
 
             if self.aux:
                 z = tf.random_normal(tf.shape(self.x), name='z')
-                _z, _, pz, z_out = self.dynamics.apply_transition(z, self.beta)
+                _z, _, pz, _ = self.dynamics.apply_transition(z, self.beta)
                 with tf.name_scope('z_loss'):
                     z_loss = ((tf.reduce_sum(
                         distance(z, _z),
-                        #  tf.square(z - _z),
                         axis=self.dynamics.axes,
                         name='z_loss'
                     ) * pz) + 1e-4)
@@ -644,9 +627,11 @@ class GaugeModel(object):
         for dealing with `dynamics.apply_transition` without building
         unnecessary operations for calculating loss.
         """
-        #  scale = self.params['loss_scale']
         with tf.name_scope('sampler'):
-            _, _, self.px, self.x_out = self.dynamics.apply_transition(self.x)
+            _, _, self.px, self.x_out = self.dynamics.apply_transition(
+                self.x,
+                self.beta
+            )
 
     def build_graph(self):
         """Build graph for TensorFlow."""
@@ -703,12 +688,9 @@ class GaugeModel(object):
             print('Model restored.\n')
             self.global_step = tf.train.get_global_step()
             initial_step = self.sess.run(self.global_step)
-            #  previous_time = self.train_times[initial_step-1]
-            #  time_delay = time.time() - previous_time
 
         self.writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
         start_time = time.time()
-        #  self.train_times[initial_step] = start_time - time_delay
 
         # Move attribute look ups outside loop to improve performance
         #  loss_op = self.loss_op
@@ -767,14 +749,22 @@ class GaugeModel(object):
                     helpers.write_run_data(self.files['run_info_file'],
                                            self.data)
 
-                #  if self.annealing:
+                if self.annealing:
                     #  if (step + 1) % self.annealing_steps == 0:
-                _beta_np = beta_np / self.annealing_factor
+                    _beta_np = beta_np / self.annealing_factor
 
-                if _beta_np < self.beta_final:
-                    beta_np = _beta_np
-                else:
-                    beta_np = self.beta_final
+                    if _beta_np < self.beta_final:
+                        beta_np = _beta_np
+                    else:
+                        print("Annealing schedule finished!")
+                        print("Saving model and exiting...")
+                        beta_np = self.beta_final
+                        step = self.sess.run(self.global_step)
+                        self._save_model(samples=samples_np, step=step)
+                        helpers.write_run_data(self.files['run_info_file'],
+                                               self.data)
+                        sys.stdout.flush()
+                        return 0
 
                 # Intermittently run sampler and save samples to pkl file.
                 # We can calculate observables from these samples to
@@ -785,7 +775,8 @@ class GaugeModel(object):
                     print(f"\nEvaluating sampler for {tsl} steps"
                           f" at beta = {self.beta_final}.")
                     self.run(self.training_samples_length,
-                             current_step=step+1)
+                             current_step=step+1,
+                             beta=self.beta_final)
                     print(f"  done. Took: {time.time() - t0}.")
                     print(80 * '-')
                     print(data_header)
@@ -815,6 +806,8 @@ class GaugeModel(object):
                 self.sess.close()
             sys.stdout.flush()
 
+            return 0
+
         except (KeyboardInterrupt, SystemExit):
             print("\nKeyboardInterrupt detected! \n"
                   "Saving current state and exiting.\n")
@@ -824,12 +817,16 @@ class GaugeModel(object):
                 self.writer.close()
                 self.sess.close()
 
-    def run(self, run_steps, ret=False, current_step=None):
+            return -1
+
+    def run(self, run_steps, ret=False, current_step=None, beta=None):
         """Run the simulation to generate samples and calculate observables."""
+        if beta is None:
+            beta = self.beta_final
+
         samples = np.random.randn(*self.samples.shape)
         samples_history = []
         px_history = []
-        #  eps_history = []
 
         if self.hmc:
             print(f"Running generic HMC sampler for {run_steps} steps...")
@@ -847,17 +844,14 @@ class GaugeModel(object):
                 'eval_info_{current_step}_TRAIN_{run_steps}.pkl'
             )
 
-
         eps = self.sess.run(self.dynamics.eps)
 
         start_time = time.time()
         for step in range(run_steps):
             t0 = time.time()
             samples, px = self.sess.run(
-                [self.x_out,
-                self.px],
-                feed_dict={self.x: samples,
-                           self.beta: self.beta_final}
+                [self.x_out, self.px], feed_dict={self.x: samples,
+                                                  self.beta: beta}
             )
 
             samples_history.append(samples)

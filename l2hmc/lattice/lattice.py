@@ -321,9 +321,10 @@ class GaugeLattice(object):
         #      links = tf.reshape(links, self.links.shape)
 
         total_action = 0.0
-        for val in self.plaquettes_dict.values():
-            total_action += (links[val[0]] + links[val[1]]
-                             - links[val[2]] - links[val[3]])
+        for v in self.plaquettes_dict.values():
+            total_action += 1. - tf.math.cos(
+                links[v[0]] + links[v[1]] - links[v[2]] - links[v[3]]
+            )
         #  for plaq in self.plaquette_idxs:
         #      *site, u, v = plaq
         #      plaq_sum = self.plaquette_operator(site, u, v, links)

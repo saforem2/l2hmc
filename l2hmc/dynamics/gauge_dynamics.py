@@ -418,7 +418,7 @@ class GaugeDynamics(tf.keras.Model):
         return m, 1. - m
 
     def potential_energy(self, position, beta):
-        """Compute potential energy using `self.potential` and `self.beta.`"""
+        """Compute potential energy using `self.potential` and beta."""
         return beta * self.potential(position)
 
     def kinetic_energy(self, v):
