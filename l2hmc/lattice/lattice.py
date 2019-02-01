@@ -143,6 +143,23 @@ class GaugeLattice(object):
                 dtype=np.float32
             )
 
+
+        self.num_sites = np.cumprod(self.sites.shape)[-1]
+        self.num_links = self.num_sites * self.dim
+        self.num_plaquettes = self.time_size * self.space_size
+        self.bases = np.eye(self.dim, dtype=np.int)
+
+        self._create_plaq_lookup_table()
+
+        if num_samples:
+            self.num_samples = num_samples
+            self.samples = self.get_links_samples(num_samples,
+                                                  rand=rand,
+                                                  link_type=self.link_type)
+            self.samples[0] = self.links
+
+    def _create_plaq_lookup_table(self):
+        """Create dictionary of (site, plaquette_idxs) to improve efficiency."""
         # Construct list containing the indices of the link variables for each
         # plaquette in the lattice to use as a lookup table instead of having
         # to perform nested loops
@@ -154,18 +171,16 @@ class GaugeLattice(object):
         self.plaquette_idxs = [
             list(s) + [i] + [j] for s in s_tups for i in u for j in v if j > i
         ]
+        shape = self.site_idxs
+        self.plaquettes_dict = {}
+        for p in self.plaquette_idxs:
+            *site, u, v = p
+            idx1 = tuple(site + [u])
+            idx2 = tuple(pbc(site + self.bases[u], shape) + [v])
+            idx3 = tuple(pbc(site + self.bases[v], shape) + [u])
+            idx4 = tuple(site + [v])
+            self.plaquettes_dict[tuple(site)] = [idx1, idx2, idx3, idx4]
 
-        self.num_sites = np.cumprod(self.sites.shape)[-1]
-        self.num_links = self.num_sites * self.dim
-        self.num_plaquettes = self.time_size * self.space_size
-        self.bases = np.eye(self.dim, dtype=np.int)
-
-        if num_samples:
-            self.num_samples = num_samples
-            self.samples = self.get_links_samples(num_samples,
-                                                  rand=rand,
-                                                  link_type=self.link_type)
-            self.samples[0] = self.links
 
     def _generate_links(self, rand=False, link_type=None):
         """Method for obtaning an array of randomly initialized link variables.
@@ -248,20 +263,27 @@ class GaugeLattice(object):
 
     def _calc_plaq_observables(self, links, beta):
         """Computes the average plaquette of a particular lattice of links."""
-        if links.shape != self.links.shape:
-            links = tf.reshape(links, shape=self.links.shape)
+        #  if links.shape != self.links.shape:
+        #      links = tf.reshape(links, shape=self.links.shape)
 
         plaquettes_sum = 0.
         topological_charge = 0.
         total_action = 0.
-        for plaq in self.plaquette_idxs:
-            *site, u, v = plaq
-            plaq_sum = self.plaquette_operator(site, u, v, links)
-            local_action = self.action_operator(plaq_sum)
-
-            total_action += 1 - local_action
+        for val in self.plaquettes_dict.values():
+            plaq_sum = (links[val[0]] + links[val[1]]
+                        - links[val[2]] - links[val[3]])
+            local_action = tf.math.cos(plaq_sum)
+            total_action += 1. - local_action
             plaquettes_sum += local_action
             topological_charge += project_angle(plaq_sum)
+        #  for plaq in self.plaquette_idxs:
+        #      *site, u, v = plaq
+        #      plaq_sum = self.plaquette_operator(site, u, v, links)
+        #      local_action = self.action_operator(plaq_sum)
+        #
+        #      total_action += 1 - local_action
+        #      plaquettes_sum += local_action
+        #      topological_charge += project_angle(plaq_sum)
 
         return [beta * total_action,
                 plaquettes_sum / self.num_plaquettes,
@@ -295,14 +317,17 @@ class GaugeLattice(object):
                 Sp = 1 - cos(Qp), where Qp is the plaquette operator defined as
                 the sum of the angles (phases) around an elementary plaquette.
         """
-        if links.shape != self.links.shape:
-            links = tf.reshape(links, self.links.shape)
+        #  if links.shape != self.links.shape:
+        #      links = tf.reshape(links, self.links.shape)
 
         total_action = 0.0
-        for plaq in self.plaquette_idxs:
-            *site, u, v = plaq
-            plaq_sum = self.plaquette_operator(site, u, v, links)
-            total_action += 1 - self.action_operator(plaq_sum)
+        for val in self.plaquettes_dict.values():
+            total_action += (links[val[0]] + links[val[1]]
+                             - links[val[2]] - links[val[3]])
+        #  for plaq in self.plaquette_idxs:
+        #      *site, u, v = plaq
+        #      plaq_sum = self.plaquette_operator(site, u, v, links)
+        #      total_action += 1 - self.action_operator(plaq_sum)
 
         return total_action
 
@@ -324,7 +349,8 @@ class GaugeLattice(object):
                 of each sample in samples.
         """
         if tf.executing_eagerly():
-            return [self._total_action(sample) for sample in samples]
+            return np.array([self._total_action(sample) for sample in samples],
+                            dtype=np.float32)
 
         total_actions = []
         for idx in range(samples.shape[0]):
@@ -349,9 +375,9 @@ class GaugeLattice(object):
     def _plaquette_operator_U1(self, site, u, v, links):
         """Local (counter-clockwise) plaquette operator calculated at `site`
 
-
-        Example: Let [u] denote self.bases[u]. We compute the link sum l1 + l2
-        - l3 - l4 for the Wilson action.
+        Example: 
+            Let [u] denote self.bases[u]. We compute the link sum 
+            l1 + l2 - l3 - l4 for the Wilson action.
 
                      site - [v]          site + [u] + [v]
                                    l3
