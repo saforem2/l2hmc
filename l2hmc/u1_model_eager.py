@@ -12,7 +12,7 @@ import argparse
 import numpy as np
 import tensorflow as tf
 
-from keras.models import load_model
+#  from keras.models import load_model
 
 #  from memory_profiler import profile
 
@@ -315,6 +315,7 @@ class GaugeModelEager(object):
         self.step_times_arr = []
         self.data = {
             'step': 0,
+            'beta': params.get('beta', 1.),
             'loss': 0.,
             'step_time': 0.,
             'accept_prob': 0.,
@@ -377,7 +378,7 @@ class GaugeModelEager(object):
         observables = np.array(self.lattice.calc_plaq_observables(samples)).T
 
         if tf.executing_eagerly():
-            total_actions, avg_plaquettes, top_charges = observables
+            total_actions, avg_plaquettes, top_charges = observables.T
         else:
             observables = observables.reshape((-1, 3))
             total_actions = observables[:, 0]
@@ -527,7 +528,7 @@ class GaugeModelEager(object):
 
         #  start_step_time = time.time()
         #  train_start_time = time.time()
-        print(helpers.data_header(test_flag=True))
+        print(helpers.data_header())
         for step in range(start_step, num_train_steps):
             start_step_time = time.time()
 

@@ -87,7 +87,7 @@ def print_run_data(data, header=False):
     """Print information about current run to std out."""
     data_str = format_run_data(data)
     if header:
-        header = data_header(test_flag=True)
+        header = data_header()
         print(header)
     print(data_str)
 
@@ -143,7 +143,7 @@ def format_run_data(data):
         f"{data['step_time']:^13.4g} "
         f"{np.mean(data['accept_prob']):^13.4g} "
         f"{data['eps']:^13.4g} "
-        f"{data['beta']:^13.4g} "
+        f"{data.get('beta', -1.):^13.4g} "
         f"{data['learning_rate']:^13.4g}"
     )
 

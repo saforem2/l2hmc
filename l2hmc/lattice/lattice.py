@@ -69,7 +69,8 @@ class GaugeLattice(object):
                  dim, 
                  link_type,
                  num_samples=None, 
-                 rand=False):
+                 rand=False,
+                 data_format='channels_first'):
         """Initialization for GaugeLattice object.
 
         Args:
@@ -88,6 +89,7 @@ class GaugeLattice(object):
         self.space_size = space_size
         self.dim = dim
         self.link_type = link_type
+        self.data_format = data_format
 
         self.link_shape = None
 
@@ -213,6 +215,10 @@ class GaugeLattice(object):
                 links = 2 * np.pi * np.random.rand(*self.links.shape)
             else:
                 links = np.zeros(self.links.shape)
+
+        if self.data_format == 'channels_last':
+            links = links.transpose((-1, *np.arange(len(links.shape) - 1)))
+
         return links
 
     def get_links_samples(self, num_samples, rand=False, link_type=None):
@@ -320,11 +326,16 @@ class GaugeLattice(object):
         #  if links.shape != self.links.shape:
         #      links = tf.reshape(links, self.links.shape)
 
-        total_action = 0.0
-        for v in self.plaquettes_dict.values():
-            total_action += 1. - tf.math.cos(
+        total_action = np.sum([
+            1. - tf.cos(
                 links[v[0]] + links[v[1]] - links[v[2]] - links[v[3]]
-            )
+            ) for v in list(self.plaquettes_dict.values())
+        ])
+        #  total_action = 0.0
+        #  for v in self.plaquettes_dict.values():
+        #      total_action += 1. - tf.math.cos(
+        #          links[v[0]] + links[v[1]] - links[v[2]] - links[v[3]]
+        #      )
         #  for plaq in self.plaquette_idxs:
         #      *site, u, v = plaq
         #      plaq_sum = self.plaquette_operator(site, u, v, links)

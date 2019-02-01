@@ -954,14 +954,20 @@ def main(flags):
     params['clip_grads'] = flags.clip_grads
     params['clip_value'] = flags.clip_value
 
-
-
-    config = tf.ConfigProto()
-
     eps_trainable = True
 
     if flags.hmc:
         eps_trainable = False
+
+    config = tf.ConfigProto()
+
+    if flags.gpu:
+        os.environ["KMP_BLOCKTIME"] = 0
+        os.environ["KMP_AFFINITY"] = "granularity=fine,verbose,compact,1,0"
+        config.allow_soft_placement = True
+        config.intra_op_parallelism_threads = flags.num_intra_threads
+        config.inter_op_parallelism_threads = flags.num_inter_threads
+
 
     model = GaugeModel(params=params,
                        config=config,
@@ -1190,6 +1196,21 @@ if __name__ == '__main__':
                               "If this argument is passed, a `log_dir` "
                               "must be specified and passed to `--log_dir` "
                               "argument. (Default: False)"))
+
+    parser.add_argument("--gpu", action="store_true",
+                        required=False, dest="gpu",
+                        help=("Flag that when passed indicates we're training "
+                              "using an NVIDIA GPU."))
+
+    parser.add_argument("--num_intra_threads", default=0,
+                        required=False, dest="num_intra_threads",
+                        help=("Number of intra op threads to use for "
+                              "tf.ConfigProto.intra_op_parallelism_threads"))
+
+    parser.add_argument("--num_inter_threads", default=0,
+                        required=False, dest="num_intra_threads",
+                        help=("Number of intra op threads to use for "
+                              "tf.ConfigProto.intra_op_parallelism_threads"))
 
     args = parser.parse_args()
 

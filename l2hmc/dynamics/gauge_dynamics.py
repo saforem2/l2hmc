@@ -297,6 +297,7 @@ class GaugeDynamics(tf.keras.Model):
     # pylint:disable=invalid-name
     def _update_momentum_forward(self, position, momentum, beta, t):
         """Update v in the forward leapfrog step."""
+        #  grad = self.grad_potential(position, beta)
         grad = self.grad_potential(position, beta)
 
         scale, translation, transformed = self.momentum_fn([position, grad, t])
@@ -333,6 +334,7 @@ class GaugeDynamics(tf.keras.Model):
     # pylint:disable=invalid-name
     def _update_momentum_backward(self, position, momentum, beta, t):
         """Update v in the backward leapforg step. Invert the forward update."""
+        #  grad = self.grad_potential(position, beta)
         grad = self.grad_potential(position, beta)
 
 
@@ -419,7 +421,9 @@ class GaugeDynamics(tf.keras.Model):
 
     def potential_energy(self, position, beta):
         """Compute potential energy using `self.potential` and beta."""
-        return beta * self.potential(position)
+        #  return beta * self.potential(position)
+        return tf.multiply(beta, self.potential(position))
+
 
     def kinetic_energy(self, v):
         """Compute the kinetic energy."""
@@ -434,14 +438,16 @@ class GaugeDynamics(tf.keras.Model):
         """Get gradient of potential function at current location."""
         if tf.executing_eagerly():
             tfe = tf.contrib.eager
-            grad_fn = tfe.gradients_function(self.potential_energy, params=[0])
-            (grad,) = grad_fn(position, beta)
+            grad_fn = tfe.gradients_function(self.potential_energy,
+                                             params=["position"])
+            grad = grad_fn(position, beta)[0]
+            #  grad_fn = tfe.gradients_function(self.potential_energy, params=[0])
+            #  (grad,) = grad_fn(position, beta)
             #  grad = tfe.gradients_function(self.potential_energy)(position)[0]
         else:
             grad = tf.gradients(
                 self.potential_energy(position, beta), position
             )[0]
-
         return grad
 
     def flatten_tensor(self, tensor):
