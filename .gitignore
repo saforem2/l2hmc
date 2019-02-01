@@ -48,3 +48,5 @@ gauge_logs_by_size/
 l2hmc/gauge_model_graph/*
 l2hmc/notebooks/using_tf_datasets.ipynb
 gauge_logs_graph_separated/
+l2hmc/notebooks/eager_execution.ipynb
+l2hmc/notebooks/graph_execution.ipynb
