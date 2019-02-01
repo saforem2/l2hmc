@@ -49,7 +49,8 @@ class ConvNet(tf.keras.Model):
                     kernel_size=filter_size1,
                     activation=tf.nn.relu,
                     input_shape=self._input_shape,
-                    name='conv_x1'
+                    name='conv_x1',
+                    dtype=tf.float32
                 )
 
                 self.max_pool_x1 = tf.keras.layers.MaxPooling2D(
@@ -64,7 +65,8 @@ class ConvNet(tf.keras.Model):
                     kernel_size=filter_size1,
                     activation=tf.nn.relu,
                     input_shape=self._input_shape,
-                    name='conv_v1'
+                    name='conv_v1',
+                    dtype=tf.float32
                 )
 
 
@@ -79,7 +81,8 @@ class ConvNet(tf.keras.Model):
                     filters=2*num_filters,
                     kernel_size=filter_size2,
                     activation=tf.nn.relu,
-                    name='conv_x2'
+                    name='conv_x2',
+                    dtype=tf.float32
                 )
 
                 self.max_pool_x2 = tf.keras.layers.MaxPooling2D(
@@ -93,7 +96,8 @@ class ConvNet(tf.keras.Model):
                     filters=2 * num_filters,
                     kernel_size=filter_size2,
                     activation=tf.nn.relu,
-                    name='conv_v2'
+                    name='conv_v2',
+                    dtype=tf.float32
                 )
 
                 self.max_pool_v2 = tf.keras.layers.MaxPooling2D(
