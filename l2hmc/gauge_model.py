@@ -962,7 +962,7 @@ def main(flags):
     config = tf.ConfigProto()
 
     if flags.gpu:
-        os.environ["KMP_BLOCKTIME"] = 0
+        os.environ["KMP_BLOCKTIME"] = str(0)
         os.environ["KMP_AFFINITY"] = "granularity=fine,verbose,compact,1,0"
         config.allow_soft_placement = True
         config.intra_op_parallelism_threads = flags.num_intra_threads
