@@ -323,6 +323,9 @@ class GaugeModel(object):
 
         self._write_run_parameters(_print=True)
 
+        if not self.clip_grads:
+            self.clip_value = None
+
     def _create_dir_structure(self):
         """Create self.files and directory structure."""
         self.files = {
@@ -706,7 +709,7 @@ class GaugeModel(object):
         tsl = self.training_samples_length
         data_header = helpers.data_header()
         norm_factor = self.num_steps * self.batch_size * self.lattice.num_links
-        #  self.sess.graph.finalize()
+        self.sess.graph.finalize()
         self.data['learning_rate'] = self.sess.run(self.learning_rate)
         beta_np = self.beta_init
         try:
@@ -739,8 +742,11 @@ class GaugeModel(object):
                     self.data['eps'] = eps_np
                     self.data['beta'] = beta_np
                     self.data['learning_rate'] = lr_np
-                    self.data['step_time'] = (
+                    self.data['step_time_norm'] = (
                         (time.time() - start_step_time) / norm_factor
+                    )
+                    self.data['step_time'] = (
+                        time.time() - start_step_time
                     )
                     self.losses_arr.append(loss_np)
 
