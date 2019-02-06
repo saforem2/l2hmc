@@ -781,25 +781,25 @@ class GaugeModel(object):
                     lr_np = self.sess.run(self.learning_rate)
 
 
-                #  if step % 5 == 0:
-                self.data['step'] = step
-                self.data['loss'] = loss_np
-                self.data['accept_prob'] = px_np
-                self.data['eps'] = eps_np
-                self.data['beta'] = beta_np
-                self.data['learning_rate'] = lr_np
-                self.data['step_time_norm'] = (
-                    (time.time() - start_step_time) / norm_factor
-                )
-                self.data['step_time'] = (
-                    time.time() - start_step_time
-                )
-                self.losses_arr.append(loss_np)
+                if step % self.print_steps == 0:
+                    self.data['step'] = step
+                    self.data['loss'] = loss_np
+                    self.data['accept_prob'] = px_np
+                    self.data['eps'] = eps_np
+                    self.data['beta'] = beta_np
+                    self.data['learning_rate'] = lr_np
+                    self.data['step_time_norm'] = (
+                        (time.time() - start_step_time) / norm_factor
+                    )
+                    self.data['step_time'] = (
+                        time.time() - start_step_time
+                    )
+                    self.losses_arr.append(loss_np)
 
-                #  if (step + 1) % 10 == 0:
-                helpers.print_run_data(self.data)
-                helpers.write_run_data(self.files['run_info_file'],
-                                       self.data)
+                    #  if (step + 1) % 10 == 0:
+                    helpers.print_run_data(self.data)
+                    helpers.write_run_data(self.files['run_info_file'],
+                                           self.data)
 
                 if self.annealing:
                     _beta_np = beta_np / self.annealing_factor
@@ -1007,6 +1007,7 @@ def main(flags):
     params['train_steps'] = flags.train_steps
     params['save_steps'] = flags.save_steps
     params['logging_steps'] = flags.logging_steps
+    params['print_steps'] = flags.print_steps
     params['training_samples_steps'] = flags.training_samples_steps
     params['training_samples_length'] = flags.training_samples_length
 ########################### Model parameters ################################
@@ -1187,6 +1188,12 @@ if __name__ == '__main__':
                         help=("Number of steps after which to save the model "
                               "and current values of all parameters. "
                               "(Default: 50)"))
+
+    parser.add_argument("--print_steps", type=int, default=1,
+                        required=False, dest="print_steps",
+                        help=("Number of steps after which to display "
+                              "information about the loss and various "
+                              "other quantities (Default: 1)"))
 
     parser.add_argument("--logging_steps", type=int, default=50,
                         required=False, dest="logging_steps",
