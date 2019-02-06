@@ -271,17 +271,32 @@ class GaugeLattice(object):
         """Computes the average plaquette of a particular lattice of links."""
         #  if links.shape != self.links.shape:
         #      links = tf.reshape(links, shape=self.links.shape)
+        p = [tuple(i) for i in list(self.plaquettes_dict.values())]
+        plaq_sums = np.array(
+            [links[i[0]] + links[i[1]] - links[i[2]] - links[i[3]] for i in p]
+        )
+        local_actions = np.cos(plaq_sums)
 
-        plaquettes_sum = 0.
-        topological_charge = 0.
-        total_action = 0.
-        for val in self.plaquettes_dict.values():
-            plaq_sum = (links[val[0]] + links[val[1]]
-                        - links[val[2]] - links[val[3]])
-            local_action = tf.math.cos(plaq_sum)
-            total_action += 1. - local_action
-            plaquettes_sum += local_action
-            topological_charge += project_angle(plaq_sum)
+        total_action = np.sum(1. - local_actions)
+        avg_plaq = np.sum(local_actions) / self.num_plaquettes
+        topological_charge = np.sum(project_angle(plaq_sums)) / (2 * np.pi)
+
+        #  plaquettes_sum = 0.
+        #  topological_charge = 0.
+        #  total_action = 0.
+
+        #  p = [tuple(i) for i in list(self.lattice.plaquettes_dict.values())]
+        #  plaq_sum = [
+        #      links[i[0]] + links[i[1]] - links[i[2]] - links[i[3]] for i in p
+        #  ]
+
+        #  for val in self.plaquettes_dict.values():
+        #      plaq_sum = (links[val[0]] + links[val[1]]
+        #                  - links[val[2]] - links[val[3]])
+        #      local_action = np.cos(plaq_sum)
+        #      total_action += 1. - local_action
+        #      plaquettes_sum += local_action
+        #      topological_charge += project_angle(plaq_sum)
         #  for plaq in self.plaquette_idxs:
         #      *site, u, v = plaq
         #      plaq_sum = self.plaquette_operator(site, u, v, links)
@@ -291,9 +306,10 @@ class GaugeLattice(object):
         #      plaquettes_sum += local_action
         #      topological_charge += project_angle(plaq_sum)
 
-        return [beta * total_action,
-                plaquettes_sum / self.num_plaquettes,
-                int(topological_charge / (2 * np.pi))]
+        #  return [beta * total_action,
+        #          plaquettes_sum / self.num_plaquettes,
+        #          int(topological_charge / (2 * np.pi))]
+        return [total_action, avg_plaq, int(topological_charge)]
 
     def calc_plaq_observables(self, samples, beta):
         """Calculate the average plaquette for each sample in samples."""
