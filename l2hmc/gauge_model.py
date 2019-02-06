@@ -42,7 +42,6 @@ GLOBAL_SEED = 42
 np.random.seed(GLOBAL_SEED)
 tf.set_random_seed(GLOBAL_SEED)
 
-tf.enable_resource_variables()
 
 #  MODULE_PATH = os.path.abspath(os.path.join('..'))
 #  if MODULE_PATH not in sys.path:
@@ -107,98 +106,72 @@ def tf_accept(x, _x, px):
     mask = (px - tf.random_uniform(tf.shape(px)) > 0.)
     return tf.where(mask, _x, x)
 
-def dynamics_step(x, dynamics, v_init=None, mh_step=False, sumlogdet=False):
-    """Propose new state by integrating along an (augmented) lf trajectory."""
-    if dynamics.hmc:
-        _x, _v, px = dynamics.transition_kernel(x, forward=True)
-        return _x, _v, px, [tf_accept(x, _x, px)]
+# To be defunnable, the function cannot return an Operation, so the above
+# function is used for defun or eager, and this function is used in graph to be
+# able to run the gradient updates.
+def graph_step(dynamics, optimizer, samples, beta, step, out_file=None):
+    with tf.name_scope('train'):
+        loss, grads, samples, accept_prob = loss_and_grads(
+            dynamics, samples, beta, loss_fn=compute_loss, out_file=out_file
+        )
+        train_op = optimizer.apply_gradients(zip(grads, dynamics.variables),
+                                             global_step=step,
+                                             name='train_op')
 
-    else:
-        # sample mask for forward/backward
-        mask = tf.cast(
-            tf.random_uniform((tf.shape(x)[0], 1), maxval=2, dtype=tf.int32),
-            tf.float32
+
+    return train_op, loss, grads, samples, accept_prob
+
+# Loss function
+def compute_loss(dynamics, x, beta, scale=.1, eps=1e-4, out_file=None):
+    """Compute loss defined in equation (8)."""
+    print("    Creating loss...")
+    t0 = time.time()
+
+    z = tf.random_normal(tf.shape(x))  # Auxiliary variable
+    x_, _, px, x_out = dynamics.apply_transition(x, beta)
+    z_, _, pz, _ = dynamics.apply_transition(z, beta)
+
+    # Add eps for numerical stability; following released impl
+    with tf.name_scope('loss'):
+        with tf.name_scope('x_loss'):
+            x_loss = tf.reduce_sum((x - x_)**2, axis=dynamics.axes) * px + eps
+        with tf.name_scope('z_loss'):
+            z_loss = tf.reduce_sum((z - z_)**2, axis=dynamics.axes) * pz + eps
+
+        loss = tf.reduce_mean(
+            (1. / x_loss + 1. / z_loss) * scale - (x_loss + z_loss) / scale,
+            axis=0
         )
 
-        xf, vf, pxf = dynamics.transition_kernel(x, forward=True)
-        xb, vb, pxb = dynamics.transition_kernel(x, forward=False)
+    t_diff = time.time() - t0
+    print(f"    done. took: {t_diff:4.3g} s.")
 
-        _x = mask * xf + (1. - mask) * xb
-
-        _v = None
-        if v_init is None:
-            _v = mask * vf + (1. - mask) * vb
-
-        px = (tf.squeeze(mask, axis=1) * px1
-              + tf.squeeze(1 - mask, axis=1) * px2)
-
-        outputs = []
-
-        if do_mh_step:
-            outputs.append(tf_accept(x, _x, px))
-
-        return Lx, Lv, px, outputs
+    if out_file is not None:
+        with open(out_file, 'a') as f:
+            f.write(f'Loss took: {t_diff:4.3g} s to create.\n')
 
 
-def compute_loss(params, dynamics, x1, x2, px):
-    """Define loss function to minimize during training."""
-    scale = kwargs.get('loss_scale', 1.)
-    metric = kwargs.get('metric', 'l2')
-    #  scale = self.params['loss_scale']
-    scale = params['loss_scale']
-    metric = params['metric']
+    return loss, x_out, px
 
-    #  if metric == 'l1':
-    #      distance = lambda x1, x2: tf.abs(x1 - x2)
-    #  if metric == 'l2':
-    #      distance = lambda x1, x2: tf.square(x1 - x2)
-    #  if metric == 'cos':
-    #      distance = lambda x1, x2: tf.abs(tf.cos(x1) - tf.cos(x2))
-    #  if metric == 'cos2':
-    #      distance = lambda x1, x2: tf.square(tf.cos(x1) - tf.cos(x2))
-    #  if metric == 'euc2':
-    #      distance = lambda x1, x2: (tf.square(tf.cos(x1) - tf.cos(x2))
-    #                                 + tf.square(tf.sin(x1) - tf.sin(x2)))
-    #  if metric == 'euc':
-    #      distance = lambda x1, x2: (tf.abs(tf.cos(x1) - tf.cos(x2))
-    #                                 + tf.abs(tf.sin(x1) - tf.sin(x2)))
-    loss = (tf.reduce_sum(distance(x1, x2), axis=dynamics.axes))
+def loss_and_grads(dynamics, x, beta, loss_fn=compute_loss, out_file=None):
+    """Obtain loss value and gradients."""
+    print(f"  Creating gradient operations...")
+    t0 = time.time()
 
-    _x, _, px, x_out = (
-        dynamics.apply_transition(x)
-    )
+    with tf.name_scope('grads'):
+        with tf.GradientTape() as tape:
+            loss_val, out, accept_prob = loss_fn(dynamics, x, beta)
+        grads = tape.gradient(loss_val, dynamics.trainable_variables)
 
-    with tf.name_scope('x_loss'):
-        x_loss = ((tf.reduce_sum(
-            distance(x, _x),
-            #  tf.square(x - _x),
-            axis=dynamics.axes,
-            name='x_loss'
-        ) * px) + 1e-4)
+    t_diff = time.time() - t0
+    print(f"  done. took: {t_diff:4.3g} s")
 
-    if aux:
-        z = tf.random_normal(tf.shape(x), name='z')
-        _z, _, pz, z_out = dynamics.apply_transition(z)
-        with tf.name_scope('z_loss'):
-            z_loss = ((tf.reduce_sum(
-                distance(z, _z),
-                #  tf.square(z - _z),
-                axis=dynamics.axes,
-                name='z_loss'
-            ) * pz) + 1e-4)
+    if out_file is not None:
+        with open(out_file, 'a') as f:
+            f.write(f'Gradient operations took: {t_diff:4.3g} s to create.\n')
 
-        # Squared jump distance
-        with tf.name_scope('total_loss'):
-            loss_op = scale * tf.reduce_mean(
-                (1. / x_loss + 1. / z_loss) * scale
-                - (x_loss + z_loss) / scale, axis=0, name='loss_op'
-            )
+    return loss_val, grads, out, accept_prob
 
-    else:
-        with tf.name_scope('total_loss'):
-            loss_op = tf.reduce_mean(scale / x_loss
-                                          - x_loss / scale,
-                                          axis=0, name='loss_op')
 
 # pylint: disable=attribute-defined-outside-init
 class GaugeModel(object):
@@ -211,6 +184,9 @@ class GaugeModel(object):
                  restore=False):
         """Initialization method."""
         #  super(GaugeModel, self).__init__()
+        np.random.seed(GLOBAL_SEED)
+        tf.set_random_seed(GLOBAL_SEED)
+        tf.enable_resource_variables()
 
         if config is None:
             config = tf.ConfigProto()
@@ -266,15 +242,24 @@ class GaugeModel(object):
             self._restore_model(self.log_dir)
 
         else:
+            kwargs = {
+                'beta_init': self.beta_init,
+                'num_steps': self.num_steps,
+                'eps': self.eps,
+                'conv_net': self.conv_net,
+                'hmc': self.hmc,
+                'eps_trainable': self.eps_trainable
+            }
             with tf.name_scope('dynamics'):
                 self.dynamics = GaugeDynamics(lattice=self.lattice,
                                               potential_fn=self.potential_fn,
-                                              beta_init=self.beta_init,
-                                              num_steps=self.num_steps,
-                                              eps=self.eps,
-                                              conv_net=self.conv_net,
-                                              hmc=self.hmc,
-                                              eps_trainable=self.eps_trainable)
+                                              **kwargs)
+                                              #  beta_init=self.beta_init,
+                                              #  num_steps=self.num_steps,
+                                              #  eps=self.eps,
+                                              #  conv_net=self.conv_net,
+                                              #  hmc=self.hmc,
+                                              #  eps_trainable=self.eps_trainable)
 
 
             # if running generic HMC, all we need is self.x_out to sample
@@ -333,12 +318,8 @@ class GaugeModel(object):
             'run_info_file': os.path.join(self.info_dir, 'run_info.txt'),
             'data_pkl_file': os.path.join(self.info_dir, 'data.pkl'),
             'samples_pkl_file': os.path.join(self.info_dir, 'samples.pkl'),
-            #  'train_samples_pkl_file': (
-            #      os.path.join(self.info_dir, 'train_samples.pkl')
-            #  ),
-            'parameters_pkl_file': (
-                os.path.join(self.info_dir, 'parameters.pkl')
-            ),
+            'parameters_pkl_file': os.path.join(self.info_dir,
+                                                'parameters.pkl'),
         }
 
         self.samples_history_dir = os.path.join(self.log_dir, 'samples_history')
@@ -495,18 +476,6 @@ class GaugeModel(object):
         with tf.name_scope('summaries'):
             tf.summary.scalar('loss', self.loss_op)
             tf.summary.scalar('step_size', self.dynamics.eps)
-            #  tf.summary.scalar('accept_prob', self.px)
-
-            #  if self.clip_grads:
-            #  with tf.name_scope('grads'):
-            #      for grad, var in self.grads_and_vars:
-            #          try:
-            #              layer, type = var.name.split('/')[-2:]
-            #              name = layer + '_' + type[:-2]
-            #          except:
-            #              name = var.name[:-2]
-            #
-            #          variable_summaries(grad, name + '_gradient')
 
             with tf.name_scope('position_fn'):
                 for var in self.dynamics.position_fn.trainable_variables:
@@ -520,6 +489,7 @@ class GaugeModel(object):
 
             with tf.name_scope('momentum_fn'):
                 for var in self.dynamics.momentum_fn.trainable_variables:
+
                     try:
                         layer, type = var.name.split('/')[-2:]
                         name = layer + '_' + type[:-2]
@@ -528,7 +498,19 @@ class GaugeModel(object):
 
                     variable_summaries(var, name)
 
+            with tf.name_scope('grads'):
+                for grad, var in zip(self.grads,
+                                     self.dynamics.trainable_variables):
+                    try:
+                        layer, type = var.name.split('/')[-2:]
+                        name = layer + '_' + type[:-2]
+                    except:
+                        name = var.name[:-2]
+
+                    variable_summaries(grad, name + '_gradient')
+
             self.summary_op = tf.summary.merge_all(name='summary_op')
+
 
     def _create_optimizer(self):
         """Create optimizer to use during training."""
@@ -547,46 +529,56 @@ class GaugeModel(object):
                 staircase=True
             )
 
+            #  clip_value = self.params['clip_value']
+            self.grads = tf.gradients(self.loss_op,
+                                      self.dynamics.trainable_variables)
             if self.clip_grads:
-                clip_value = self.params['clip_value']
-                self.grads = tf.gradients(self.loss_op,
-                                          self.dynamics.trainable_variables)
                 self.grads, _ = tf.clip_by_global_norm(
                     self.grads,
-                    clip_value,
+                    self.clip_value,
                     name='clipped_grads'
                 )
-                self.grads_and_vars = list(
-                    zip(self.grads, self.dynamics.trainable_variables)
-                )
-                self.optimizer = tf.train.AdamOptimizer(
-                    learning_rate=self.learning_rate,
-                    name='AdamOptimizer'
-                )
-                self.train_op = self.optimizer.apply_gradients(
-                    zip(self.grads, self.dynamics.trainable_variables),
-                    global_step=self.global_step,
-                    name='train_op'
-                )
-            else:
-                self.optimizer = tf.train.AdamOptimizer(self.learning_rate)
-                self.train_op = self.optimizer.minimize(
-                    self.loss_op,
-                    global_step=self.global_step
-                )
+
+            #  self.grads_and_vars = list(
+            #      zip(self.grads, self.dynamics.trainable_variables)
+            #  )
+
+            self.optimizer = tf.train.AdamOptimizer(
+                learning_rate=self.learning_rate,
+                name='AdamOptimizer'
+            )
+            self.train_op = self.optimizer.apply_gradients(
+                zip(self.grads, self.dynamics.trainable_variables),
+                global_step=self.global_step,
+                name='train_op'
+            )
+            #  else:
+            #      self.optimizer = tf.train.AdamOptimizer(self.learning_rate)
+            #      self.train_op = self.optimizer.minimize(
+            #          self.loss_op,
+            #          global_step=self.global_step
+            #      )
+
+    def _create_metric_fn(self):
+        """Create metric fn for measuring the distance between two samples."""
+        if self.metric == 'l1':
+            self.metric_fn = lambda x1, x2: tf.abs(x1 - x2)
+
+        if self.metric == 'l2':
+            self.metric_fn = lambda x1, x2: tf.square(x1 - x2)
+
+        if self.metric == 'cos':
+            self.metric_fn = lambda x1, x2: tf.abs(tf.cos(x1) - tf.cos(x2))
+
+        if self.metric == 'cos2':
+            self.metric_fn = lambda x1, x2: tf.square(tf.cos(x1) - tf.cos(x2))
 
     def _create_loss(self):
         """Define loss function to minimize during training."""
         scale = self.params['loss_scale']
 
-        if self.metric == 'l1':
-            distance = lambda x1, x2: tf.abs(x1 - x2)
-        if self.metric == 'l2':
-            distance = lambda x1, x2: tf.square(x1 - x2)
-        if self.metric == 'cos':
-            distance = lambda x1, x2: tf.abs(tf.cos(x1) - tf.cos(x2))
-        if self.metric == 'cos2':
-            distance = lambda x1, x2: tf.square(tf.cos(x1) - tf.cos(x2))
+        self._create_metric_fn()
+
 
         with tf.name_scope('loss'):
             self._x, _, self.px, self.x_out = (
@@ -595,7 +587,7 @@ class GaugeModel(object):
 
             with tf.name_scope('x_loss'):
                 self.x_loss = ((tf.reduce_sum(
-                    distance(self.x, self._x),
+                    self.metric_fn(self.x, self._x),
                     axis=self.dynamics.axes,
                     name='x_loss'
                 ) * self.px) + 1e-4)
@@ -605,7 +597,7 @@ class GaugeModel(object):
                 _z, _, pz, _ = self.dynamics.apply_transition(z, self.beta)
                 with tf.name_scope('z_loss'):
                     z_loss = ((tf.reduce_sum(
-                        distance(z, _z),
+                        self.metric_fn(z, _z),
                         axis=self.dynamics.axes,
                         name='z_loss'
                     ) * pz) + 1e-4)
@@ -626,6 +618,7 @@ class GaugeModel(object):
     def _create_sampler(self):
         """Create operation for generating new samples using dynamics engine.
 
+
         This method is to be used when running generic HMC to create operations
         for dealing with `dynamics.apply_transition` without building
         unnecessary operations for calculating loss.
@@ -636,51 +629,87 @@ class GaugeModel(object):
                 self.beta
             )
 
+
     def build_graph(self):
         """Build graph for TensorFlow."""
-        def _write_strs_to_file(strings, last=False):
-            with open(self.files['run_info_file'], 'a') as f:
-                for s in strings:
-                    f.write(s + '\n')
-                if last:
-                    f.write(80 * '-' + '\n')
+        #  def _write_strs_to_file(strings, last=False):
+        #      with open(self.files['run_info_file'], 'a') as f:
+        #          for s in strings:
+        #              f.write(s + '\n')
+        #          if last:
+        #              f.write(80 * '-' + '\n')
 
-        str0 = f"Building graph... (started at: {time.ctime()})\n"
-        str1 = "  Creating loss...\n"
-        str3 = "  Creating optimizer...\n"
-        str5 = "  Creating summaries...\n"
-        t_diff_str = lambda ti, tf : f"    took: {tf - ti} seconds."
-        t_diff_str1 = lambda t : f"Time to build graph: {time.time() - t}."
+        #  str0 = f"Building graph... (started at: {time.ctime()})\n"
+        #  str1 = "  Creating loss...\n"
+        #  str3 = "  Creating optimizer...\n"
+        #  str5 = "  Creating summaries...\n"
+        #  t_diff_str = lambda ti, tf : f"    took: {tf - ti} seconds."
+        #  t_diff_str1 = lambda t : f"Time to build graph: {time.time() - t}."
 
-        print(80*'-' + '\n')
-        print(str0 + str1)
-        _write_strs_to_file([str0, str1])
-        t0 = time.time()
+        #  print(80*'-' + '\n')
+        #  print(str0 + str1)
+        #  _write_strs_to_file([str0, str1])
+        #  t0 = time.time()
 
-        self._create_loss()
-
-        t1 = time.time()
-        print(t_diff_str(t0, t1) + '\n' + str3 + '\n')
-        _write_strs_to_file([t_diff_str(t0, t1), str3])
-
-        self._create_optimizer()
-
-        t2 = time.time()
-        print(t_diff_str(t1, t2) + '\n' + str5 + '\n')
-        _write_strs_to_file([t_diff_str(t1, t2), str5])
-
-        self._create_summaries()
-
-        print(t_diff_str(t2, time.time()) + '\n' + t_diff_str1(t0) + '\n')
-        _write_strs_to_file(
-            [t_diff_str(t2, time.time()), t_diff_str1(t0)], last=True
+        self.global_step = tf.train.get_or_create_global_step()
+        self.learning_rate = tf.train.exponential_decay(
+            self.learning_rate_init,
+            self.global_step,
+            self.learning_rate_decay_steps,
+            self.learning_rate_decay_rate,
+            staircase=True
+        )
+        self.optimizer = tf.train.AdamOptimizer(
+            learning_rate=self.learning_rate,
+            name='AdamOptimizer'
         )
 
-    #pylint: disable=too-many-statements
-    def train(self, num_train_steps, kill_sess=True):
-        """Train the model."""
+        print(80 * '-' + '\n')
+        print(f"Building graph... (started at: {time.ctime()})")
+        start_time = time.time()
+        #  str0 = f"Building graph... (started at: {time.ctime()})\n"
+        outputs = graph_step(self.dynamics, self.optimizer, self.x, self.beta,
+                             self.global_step,
+                             out_file=self.files['run_info_file'])
+        self.train_op, self.loss_op, self.grads, self.x_out, self.px = outputs
+
+        with open(self.files['run_info_file'], 'a') as f:
+            f.write(f"Building graph... (started at: {time.ctime()})\n")
+
+        #  self._create_loss()
+
+        #  t1 = time.time()
+        #  print(t_diff_str(t0, t1) + '\n' + str3 + '\n')
+        #  _write_strs_to_file([t_diff_str(t0, t1), str3])
+
+        #  self._create_optimizer()
+
+        #  t2 = time.time()
+        #  print(t_diff_str(t1, t2) + '\n' + str5 + '\n')
+        #  _write_strs_to_file([t_diff_str(t1, t2), str5])
+
+        print("  Creating summaries...")
+        t0 = time.time()
+        self._create_summaries()
+        t_diff = time.time() - t0
+        print(f'  done. took: {t_diff:4.3g} s to create.')
+        print(f'done. took: {time.time() - start_time:4.3g} s to create.\n')
+        print(80 * '-' + '\n')
+
+        dt = time.time() - start_time
+        with open(self.files['run_info_file'], 'a') as f:
+            f.write(f'Summaries took: {t_diff:4.3g} s to create.\n')
+            f.write(f'Graph took: {dt:4.3g} s to build.\n')
+            f.write(80 * '-' + '\n')
+
+        #  print(t_diff_str(t2, time.time()) + '\n' + t_diff_str1(t0) + '\n')
+        #  _write_strs_to_file(
+        #      [t_diff_str(t2, time.time()), t_diff_str1(t0)], last=True
+        #  )
+
+    def pre_train(self):
+        """Set up training for the model."""
         self.saver = tf.train.Saver(max_to_keep=3)
-        initial_step = 0
         self.sess.run(tf.global_variables_initializer())
         ckpt = tf.train.get_checkpoint_state(self.log_dir)
         time_delay = 0.
@@ -693,8 +722,13 @@ class GaugeModel(object):
             initial_step = self.sess.run(self.global_step)
 
         self.writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
-        start_time = time.time()
+        self.sess.graph.finalize()
 
+
+    #pylint: disable=too-many-statements
+    def train(self, num_train_steps, pre_train=True, kill_sess=True,
+              trace=False):
+        start_time = time.time()
         # Move attribute look ups outside loop to improve performance
         #  loss_op = self.loss_op
         #  train_op = self.train_op
@@ -705,13 +739,21 @@ class GaugeModel(object):
         #  dynamics = self.dynamics
         #  x = self.x
         #  dynamics_beta = self.dynamics.beta
-        samples_np = np.array(self.lattice.samples, dtype=np.float32)
+        if pre_train:
+            self.pre_train()
+
+        initial_step = self.data['step']
+
         tsl = self.training_samples_length
-        data_header = helpers.data_header()
         norm_factor = self.num_steps * self.batch_size * self.lattice.num_links
-        self.sess.graph.finalize()
+
+        data_header = helpers.data_header()
+
         self.data['learning_rate'] = self.sess.run(self.learning_rate)
+        lr_np = self.data['learning_rate']
+
         beta_np = self.beta_init
+        samples_np = np.array(self.lattice.samples, dtype=np.float32)
         try:
             print(data_header)
             helpers.write_run_data(
@@ -722,41 +764,42 @@ class GaugeModel(object):
             for step in range(initial_step, initial_step + num_train_steps):
                 start_step_time = time.time()
 
+                fd = {self.x: samples_np,
+                      self.beta: beta_np}
+
                 _, loss_np, samples_np, px_np, eps_np = self.sess.run([
                     self.train_op,
                     self.loss_op,
                     self.x_out,
                     self.px,
-                    #  self.learning_rate,
                     self.dynamics.eps
-                ], feed_dict={self.x: samples_np,
-                              self.beta: beta_np})
+                ], feed_dict=fd)
 
                 if step % self.learning_rate_decay_steps == 0:
                     lr_np = self.sess.run(self.learning_rate)
 
-                if step % 5 == 0:
-                    self.data['step'] = step
-                    self.data['loss'] = loss_np
-                    self.data['accept_prob'] = px_np
-                    self.data['eps'] = eps_np
-                    self.data['beta'] = beta_np
-                    self.data['learning_rate'] = lr_np
-                    self.data['step_time_norm'] = (
-                        (time.time() - start_step_time) / norm_factor
-                    )
-                    self.data['step_time'] = (
-                        time.time() - start_step_time
-                    )
-                    self.losses_arr.append(loss_np)
 
-                    #  if (step + 1) % 10 == 0:
-                    helpers.print_run_data(self.data)
-                    helpers.write_run_data(self.files['run_info_file'],
-                                           self.data)
+                #  if step % 5 == 0:
+                self.data['step'] = step
+                self.data['loss'] = loss_np
+                self.data['accept_prob'] = px_np
+                self.data['eps'] = eps_np
+                self.data['beta'] = beta_np
+                self.data['learning_rate'] = lr_np
+                self.data['step_time_norm'] = (
+                    (time.time() - start_step_time) / norm_factor
+                )
+                self.data['step_time'] = (
+                    time.time() - start_step_time
+                )
+                self.losses_arr.append(loss_np)
+
+                #  if (step + 1) % 10 == 0:
+                helpers.print_run_data(self.data)
+                helpers.write_run_data(self.files['run_info_file'],
+                                       self.data)
 
                 if self.annealing:
-                    #  if (step + 1) % self.annealing_steps == 0:
                     _beta_np = beta_np / self.annealing_factor
 
                     if _beta_np < self.beta_final:
@@ -783,7 +826,7 @@ class GaugeModel(object):
                     self.run(self.training_samples_length,
                              current_step=step+1,
                              beta=self.beta_final)
-                    print(f"  done. Took: {time.time() - t0}.")
+                    print(f"  done. took: {time.time() - t0}.")
                     print(80 * '-')
                     print(data_header)
 
@@ -793,14 +836,27 @@ class GaugeModel(object):
                                            self.data)
 
                 if step % self.logging_steps == 0:
+                    if trace:
+                        options = tf.RunOptions(
+                            trace_level=tf.RunOptions.FULL_TRACE
+                        )
+                        run_metadata = tf.RunMetadata()
+                    else:
+                        options = None
+                        run_metadata = None
+
                     summary_str = self.sess.run(
                         self.summary_op, feed_dict={
                             self.x: samples_np,
                             self.beta: beta_np
-                        }
+                        }, options=options, run_metadata=run_metadata
                     )
                     self.writer.add_summary(summary_str, global_step=step)
+                    if trace:
+                        self.writer.add_run_metadata(run_metadata,
+                                                     global_step=step)
                     self.writer.flush()
+
 
             print("Training complete!")
             step = self.sess.run(self.global_step)
@@ -842,12 +898,12 @@ class GaugeModel(object):
         if current_step is None:
             eval_file = os.path.join(
                 self.info_dir,
-                'eval_info_{run_steps}.txt'
+                f'eval_info_{run_steps}.txt'
             )
         else:
             eval_file = os.path.join(
                 self.info_dir,
-                'eval_info_{current_step}_TRAIN_{run_steps}.pkl'
+                f'eval_info_{current_step}_TRAIN_{run_steps}.pkl'
             )
 
         eps = self.sess.run(self.dynamics.eps)
