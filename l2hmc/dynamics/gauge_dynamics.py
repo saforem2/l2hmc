@@ -22,63 +22,70 @@ from lattice.lattice import GaugeLattice
 
 class GaugeDynamics(tf.keras.Model):
     """Dynamics engine of naive L2HMC sampler."""
-    def __init__(self,
-                 lattice,
-                 potential_fn,
-                 beta_init=1.,
-                 num_steps=10,
-                 eps=0.1,
-                 conv_net=True,
-                 hmc=False,
-                 eps_trainable=True):
+    def __init__(self, lattice, potential_fn, **kwargs):
+                 #  beta_init=1.,
+                 #  num_steps=10,
+                 #  eps=0.1,
+                 #  conv_net=True,
+                 #  hmc=False,
+                 #  eps_trainable=True):
         """Initialization.
 
         Args:
             lattice: Lattice object containing multiple sample lattices.
             potential_fn: Function specifying minus log-likelihood objective to
                 minimize.
-            beta_init: Initial value of inverse coupling strength, beta. Used
-                as starting point for simulated annealing schedule.
-            beta_final: Final value of inverse coupling strength, beta. Used
-                as ending point for simulated annealing schedule.
-            num_steps: Number of leapfrog steps to use in integrator.
-            eps: Initial step size to use in leapfrog integrator.
-            conv_net: Flag specifying whether to use ConvNet architecture or
-                GenericNet architecture. Defaults to True. (Defined in
-                `network/conv_net.py`)
-            hmc: Flag indicating whether generic HMC (no augmented leapfrog)
-                should be used instead of L2HMC. Defaults to False.
-            eps_trainable: Flag indiciating whether the step size (eps) should
-                be trainable. Defaults to True.
-            np_seed: Seed to use for numpy.random.
+            Kwargs (expected):
+                beta_init: Initial value of inverse coupling strength, beta.
+                    Used as starting point for simulated annealing schedule.
+                beta_final: Final value of inverse coupling strength, beta.
+                    Used as ending point for simulated annealing schedule.
+                num_steps: Number of leapfrog steps to use in integrator.
+                eps: Initial step size to use in leapfrog integrator.
+                conv_net: Flag specifying whether to use ConvNet architecture
+                    or GenericNet architecture. Defaults to True. (Defined in
+                    `network/conv_net.py`)
+                hmc: Flag indicating whether generic HMC (no augmented
+                    leapfrog) should be used instead of L2HMC. Defaults to
+                    False.
+                eps_trainable: Flag indiciating whether the step size (eps)
+                    should be trainable. Defaults to True.
+                np_seed: Seed to use for numpy.random.
         """
         super(GaugeDynamics, self).__init__(name='GaugeDynamics')
         #  npr.seed(np_seed)
 
         self.lattice = lattice
+        self.potential = potential_fn
         self.batch_size = self.lattice.samples.shape[0]
         self.x_dim = self.lattice.num_links
 
-        self.num_steps = num_steps
-        self.conv_net = conv_net
-        self.hmc = hmc
+        for key, val in kwargs.items():
+            if key != 'eps':  # want to use self.eps as tf.Variable
+                setattr(self, key, val)
 
-        self.beta_init = beta_init
-        self.eps_trainable = eps_trainable
+        #  if not self.hmc:
+        #      alpha = tf.get_variable(
+        #          'alpha',
+        #          initializer=tf.log(tf.constant(self.eps)),
+        #          trainable=self.eps_trainable,
+        #      )
+        #  else:
+        #      alpha = tf.log(tf.constant(self.eps, dtype=tf.float32))
 
+        #  self.eps = tf.exp(alpha, name='eps')
         self.eps = tf.Variable(
-            initial_value=eps,
+            initial_value=kwargs.get('eps', 0.1),
             name='eps',
             dtype=tf.float32,
-            trainable=eps_trainable
+            trainable=self.eps_trainable
         )
-
+        #
         #  if not tf.executing_eagerly():
         #      self.beta = tf.placeholder(tf.float32, shape=(), name='beta')
         #  else:
         #      self.beta = self.beta_init
 
-        self.potential = potential_fn
 
         # In the case of two-dimensions, samples_tensor has shape:
         #     [batch_size, time_size, space_size, dim]
@@ -96,7 +103,7 @@ class GaugeDynamics(tf.keras.Model):
         #  self.axes = np.arange(1, len(self.samples.shape))
         self.axes = np.arange(1, len(self.lattice.samples.shape))
 
-        if hmc:
+        if self.hmc:
             self.position_fn = lambda inp: [
                 tf.zeros_like(inp[0]) for t in range(3)
             ]
@@ -105,66 +112,75 @@ class GaugeDynamics(tf.keras.Model):
             ]
 
         else:
-            if conv_net:
+            if self.conv_net:
                 self._build_conv_nets()
             else:
                 self._build_generic_nets()
 
     def _build_conv_nets(self):
         """Build ConvNet architecture for position and momentum functions."""
-        input_shape = (self.batch_size, *self.lattice.links.shape)
-        num_hidden = int(2 * self.x_dim)             # num hidden nodes in MLP
-        num_filters = 2 * self.lattice.space_size    # num filters in Conv2D
-        filter_size1 = (3, 3)  # filter size in 1st Conv2D layer
-        filter_size2 = (2, 2)  # filter size in 2nd Conv2D layer
+        #  num_hidden = int(2 * self.x_dim)             # num hidden nodes in MLP
+        #  num_filters = 2 * self.lattice.space_size    # num filters in Conv2D
+        #  filter_size1 = (3, 3)  # filter size in 1st Conv2D layer
+        #  filter_size2 = (2, 2)  # filter size in 2nd Conv2D layer
+        #  input_shape = (self.batch_size, *self.lattice.links.shape)
 
-        self.position_fn = ConvNet(
-            input_shape,
-            self.lattice.links.shape,
-            self.lattice.num_links,
-            factor=2.,
-            spatial_size=self.lattice.space_size,
-            num_filters=num_filters,
-            filter_size1=filter_size1,
-            filter_size2=filter_size2,
-            num_hidden=num_hidden,
-            model_name='XNet',
-            variable_scope='position'
-        )
+        kwargs = {
+            '_input_shape': (self.batch_size, *self.lattice.links.shape),
+            'links_shape': self.lattice.links.shape,
+            'x_dim': self.lattice.num_links, # dimensionality of target space
+            'factor': 2.,
+            'spatial_size': self.lattice.space_size,
+            'num_hidden': 256,
+            'num_filters': int(2 * self.lattice.space_size),
+            'filter_sizes': [(2, 2), (2, 2)], # for 1st and 2nd conv. layer
+            'name_scope': 'x_net',
+            'data_format': 'channels_last',
+        }
 
-        self.momentum_fn = ConvNet(
-            input_shape,
-            self.lattice.links.shape,
-            self.lattice.num_links,
-            factor=1.,
-            spatial_size=self.lattice.space_size,
-            num_filters=num_filters,
-            filter_size1=filter_size1,
-            filter_size2=filter_size2,
-            num_hidden=num_hidden,
-            model_name='VNet',
-            variable_scope='momentum'
-        )
+
+        with tf.name_scope("DynamicsNetwork"):
+            with tf.name_scope("XNet"):
+                self.position_fn = ConvNet(model_name='XNet', **kwargs)
+
+            kwargs['name_scope'] = 'momentum'
+            kwargs['factor'] = 1.
+            with tf.name_scope("VNet"):
+                self.momentum_fn = ConvNet(model_name='VNet', **kwargs)
 
     def _build_generic_nets(self):
         """Build GenericNet FC-architectures for position and momentum fns. """
-        self.position_fn = GenericNet(
-            self.x_dim,
-            self.lattice.links.shape,
-            factor=2.,
-            num_hidden=int(2*self.x_dim)
-        )
+        with tf.name_scope("DynamicsNetwork"):
+            with tf.name_scope("XNet"):
+                self.position_fn = GenericNet(
+                    self.x_dim,
+                    self.lattice.links.shape,
+                    factor=2.,
+                    num_hidden=int(2*self.x_dim)
+                )
 
-        self.momentum_fn = GenericNet(
-            self.x_dim,
-            self.lattice.links.shape,
-            factor=1.,
-            num_hidden=int(2*self.x_dim)
-        )
+            with tf.name_scope("VNet"):
+                self.momentum_fn = GenericNet(
+                    self.x_dim,
+                    self.lattice.links.shape,
+                    factor=1.,
+                    num_hidden=int(2*self.x_dim)
+                )
 
     # pylint:disable=too-many-locals
     def apply_transition(self, position, beta):
-        """Propose a new state and perform the accept/reject step."""
+        """Propose a new state and perform the accept/reject step.
+
+        Args:
+            position: Batch of (position) samples (batch of links).
+            beta (float): Inverse coupling constant.
+
+        Returns:
+            position_post: Proposed position before accept/reject step.
+            momentum_post: Proposed momentum before accept/reject step.
+            accept_prob: Probability of accepting the proposed states.
+            position_out: Samples after accept/reject step.
+        """
         # Simulate dynamics both forward and backward
         # Use sample masks to compute the actual solutions
         position_f, momentum_f, accept_prob_f = self.transition_kernel(
@@ -312,7 +328,7 @@ class GaugeDynamics(tf.keras.Model):
 
         return momentum, tf.reduce_sum(scale, axis=self.axes)
 
-    # pylint:disable=invalid-name
+    # pylint:disable=invalid-name,too-many-arguments
     def _update_position_forward(self, position, momentum, t, mask, mask_inv):
         """Update x in the forward leapfrog step."""
 
