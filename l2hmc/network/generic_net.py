@@ -87,17 +87,21 @@ class GenericNet(tf.keras.Model):
 
         - H_OUT is then fed to three separate layers:
 
-            (1.) H_OUT --> (SCALE_LAYER, TANH) * exp(COEFF_SCALE)
+            (1.) H_OUT --> TANH(SCALE_LAYER) * exp(COEFF_SCALE) --> SCALE_OUT
 
+                 input: H_OUT
                  output: scale
             
             (2.) H_OUT --> TRANSLATION_LAYER --> TRANSLATION_OUT
 
+                 input: H_OUT
                  output: translation
 
-            (3.) H_OUT --> (TRANSFORMATION_LAYER, TANH) 
-                             * exp(COEFF_TRANSFORMATION)
+            (3.) H_OUT
+                    --> TANH(SCALE_LAYER)*exp(COEFF_TRANSFORMATION) 
+                                                        --> TRANFORMATION_OUT
 
+                 input: H_OUT
                  output: transformation
 
        Returns:
