@@ -70,7 +70,7 @@ class GaugeLattice(object):
                  link_type,
                  num_samples=None, 
                  rand=False,
-                 data_format='channels_first'):
+                 data_format='channels_last'):
         """Initialization for GaugeLattice object.
 
         Args:
@@ -132,18 +132,18 @@ class GaugeLattice(object):
         self.sites = np.zeros(sites_shape, dtype=link_dtype)
         self.links = np.zeros(links_shape, dtype=link_dtype)
 
+        if rand:
+            self.links = np.array(
+                np.random.uniform(0, 2*np.pi, links_shape),
+                dtype=np.float32
+            )
+
         if self.link_type != 'U1':
             self.site_idxs = self.sites.shape[:-2] # idxs for individ. sites
             self.link_idxs = self.links.shape[:-2] # idx for individ. links
         else:
             self.site_idxs = self.sites.shape  # idxs for individ. sites
             self.link_idxs = self.links.shape  # idxs for individ. links
-
-        if rand:
-            self.links = np.array(
-                np.random.uniform(0, 2*np.pi, links_shape),
-                dtype=np.float32
-            )
 
 
         self.num_sites = np.cumprod(self.sites.shape)[-1]
@@ -159,6 +159,11 @@ class GaugeLattice(object):
                                                   rand=rand,
                                                   link_type=self.link_type)
             self.samples[0] = self.links
+
+        if self.data_format == 'channels_first':
+            self.samples = self.samples.transpose(0, 3, 1, 2)
+            self.links = self.links.transpose(2, 0, 1)
+            self.link_idxs = self.links.shape
 
     def _create_plaq_lookup_table(self):
         """Create dictionary of (site, plaquette_idxs) to improve efficiency."""
@@ -177,10 +182,21 @@ class GaugeLattice(object):
         self.plaquettes_dict = {}
         for p in self.plaquette_idxs:
             *site, u, v = p
-            idx1 = tuple(site + [u])
-            idx2 = tuple(pbc(site + self.bases[u], shape) + [v])
-            idx3 = tuple(pbc(site + self.bases[v], shape) + [u])
-            idx4 = tuple(site + [v])
+            if self.data_format == 'channels_first':
+                idx1 = tuple([u] + site)
+                idx2 = tuple([v] + pbc(site + self.bases[u], shape))
+                idx3 = tuple([u] + pbc(site + self.bases[v], shape))
+                idx4 = tuple([v] + site)
+            elif self.data_format == 'channels_last':
+                idx1 = tuple(site + [u])
+                idx2 = tuple(pbc(site + self.bases[u], shape) + [v])
+                idx3 = tuple(pbc(site + self.bases[v], shape) + [u])
+                idx4 = tuple(site + [v])
+            else:
+                raise AttributeError(f"self.data_format expected to be "
+                                     f"one of 'channels_first' or "
+                                     f"channels_last.")
+
             self.plaquettes_dict[tuple(site)] = [idx1, idx2, idx3, idx4]
 
 
@@ -216,8 +232,8 @@ class GaugeLattice(object):
             else:
                 links = np.zeros(self.links.shape)
 
-        if self.data_format == 'channels_last':
-            links = links.transpose((-1, *np.arange(len(links.shape) - 1)))
+        #  if self.data_format == 'channels_last':
+        #      links = links.transpose((-1, *np.arange(len(links.shape) - 1)))
 
         return links
 
@@ -241,7 +257,10 @@ class GaugeLattice(object):
         """Iterator for looping over links."""
         for site in self.iter_sites():
             for u in range(self.dim):
-                yield tuple(list(site) + [u])
+                if self.data_format == 'channels_first':
+                    yield tuple([u] + list(site))
+                else:
+                    yield tuple(list(site) + [u])
 
     def get_random_site(self):
         """Return indices of randomly chosen site."""
@@ -281,34 +300,6 @@ class GaugeLattice(object):
         avg_plaq = np.sum(local_actions) / self.num_plaquettes
         topological_charge = np.sum(project_angle(plaq_sums)) / (2 * np.pi)
 
-        #  plaquettes_sum = 0.
-        #  topological_charge = 0.
-        #  total_action = 0.
-
-        #  p = [tuple(i) for i in list(self.lattice.plaquettes_dict.values())]
-        #  plaq_sum = [
-        #      links[i[0]] + links[i[1]] - links[i[2]] - links[i[3]] for i in p
-        #  ]
-
-        #  for val in self.plaquettes_dict.values():
-        #      plaq_sum = (links[val[0]] + links[val[1]]
-        #                  - links[val[2]] - links[val[3]])
-        #      local_action = np.cos(plaq_sum)
-        #      total_action += 1. - local_action
-        #      plaquettes_sum += local_action
-        #      topological_charge += project_angle(plaq_sum)
-        #  for plaq in self.plaquette_idxs:
-        #      *site, u, v = plaq
-        #      plaq_sum = self.plaquette_operator(site, u, v, links)
-        #      local_action = self.action_operator(plaq_sum)
-        #
-        #      total_action += 1 - local_action
-        #      plaquettes_sum += local_action
-        #      topological_charge += project_angle(plaq_sum)
-
-        #  return [beta * total_action,
-        #          plaquettes_sum / self.num_plaquettes,
-        #          int(topological_charge / (2 * np.pi))]
         return [total_action, avg_plaq, int(topological_charge)]
 
     def calc_plaq_observables(self, samples, beta):

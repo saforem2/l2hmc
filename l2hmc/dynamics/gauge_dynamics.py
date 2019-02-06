@@ -135,7 +135,7 @@ class GaugeDynamics(tf.keras.Model):
             'num_filters': int(2 * self.lattice.space_size),
             'filter_sizes': [(2, 2), (2, 2)], # for 1st and 2nd conv. layer
             'name_scope': 'x_net',
-            'data_format': 'channels_last',
+            'data_format': self.lattice.data_format,
         }
 
 

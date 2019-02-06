@@ -220,7 +220,9 @@ class GaugeModel(object):
                                             dim=self.dim,
                                             link_type=self.link_type,
                                             num_samples=self.num_samples,
-                                            rand=self.rand)
+                                            rand=self.rand,
+                                            data_format=self.data_format)
+
 
             self.batch_size = self.lattice.samples.shape[0]
             self.samples = tf.convert_to_tensor(
@@ -1024,6 +1026,8 @@ def main(flags):
     config = tf.ConfigProto()
 
     if flags.gpu:
+        print("Using gpu for training.")
+        params['data_format'] = 'channels_first'
         os.environ["KMP_BLOCKTIME"] = str(0)
         os.environ["KMP_AFFINITY"] = "granularity=fine,verbose,compact,1,0"
         config.allow_soft_placement = True
