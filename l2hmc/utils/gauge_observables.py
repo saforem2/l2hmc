@@ -33,6 +33,7 @@ COLORS = ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9']
 MARKERS = ['o', 's', 'x', 'v', 'h', '^', 'p', '<', 'd', '>', 'o']
 LINESTYLES = ['-', '--', ':', '-.', '-', '--', ':', '-.', '-', '--']
 
+
 ##############################################################################
 # File I/O helpers.
 ##############################################################################
@@ -41,12 +42,6 @@ def check_else_make_dir(d):
     if not os.path.isdir(d):
         print(f"Making directory: {d}.")
         os.makedirs(d)
-
-def _read_from_file(_file):
-    """Helper function to load from `.pkl` file."""
-    with open(_file, 'rb') as f:
-        data = pickle.load(f)
-    return data
 
 def _load_params(log_dir):
     """Load in model parameters from `log_dir`.
@@ -67,101 +62,25 @@ def _load_params(log_dir):
         print(f"Unable to find {params_file} in {info_dir}. Returning 0.")
         return 0
 
-def _load_samples_from_file(samples_file):
-    """Load samples from file `f`."""
-    with open(samples_file, 'rb') as f:
-        print(f"Reading samples from {samples_file}.")
-        samples = pickle.load(f)
-    return samples
 
-def _load_multiple_samples(samples_history_dir):
-    """Load all of the `samples_history` data from `samples_history_dir`"""
-    _files = os.listdir(samples_history_dir)
+##############################################################################
+# File I/O helpers.
+##############################################################################
+def jackknife(x, fn):
+    """Jackknife estimate of the estimator fn."""
+    n = len(x)
+    idx = np.arange(n)
+    return np.sum(fn(x[idx!=i]) for i in range(n)) / float(n)
 
-    samples_files = [
-        samples_history_dir + '/' + i for i in _files if i.endswith('.pkl')
-    ]
-
-    samples_dict = {}
-    for _file in samples_files:
-        print(f'Loading samples history from: {_file}.')
-        num_steps = int(_file.split('/')[-1].split('_')[-1].rstrip('.pkl'))
-        samples_dict[num_steps] = np.array(_load_samples_from_file(_file))
-        #  with open(_file, 'rb') as f:
-        #      samples_dict[num_steps] = np.array(pickle.load(f))
-
-    return samples_dict
-
-def _load_samples(log_dir):
-    """Load sample link configurations in from `log_dir`.
-
-    Returns:
-        samples: numpy.ndarray containing samples loaded from `log_dir`.
-    """
-    info_dir = os.path.join(log_dir, 'run_info')
-
-    samples_history_dir = os.path.join(log_dir, 'samples_history')
-    if os.path.isdir(samples_history_dir):
-        if os.listdir(samples_history_dir) is not None:
-            return _load_multiple_samples(samples_history_dir)
-
-    #  assert os.path.isdir(info_dir)
-    samples_file = os.path.join(info_dir, 'samples_history.pkl')
-    if os.path.isfile(samples_file):
-        print(f"Loading samples from: {samples_file}.")
-        with open(samples_file, 'rb') as f: # pylint: disable=invalid-name
-            samples_arr = pickle.load(f)
-        return samples_arr
-    else:
-        print(f"Unable to find {samples_file} in {info_dir}. Exiting.")
-        sys.exit(0)
-
-def _load_multiple_observables(observables_dir):
-    """Load multiple observables from `observables_dir`."""
-    _files = os.listdir(observables_dir)
-    observables_files = [
-        observables_dir + '/' + i for i in _files if i.endswith('.pkl')
-    ]
-    observables_dict = {}
-    for _file in observables_files:
-        print(f"Loading observables from {_file}.")
-        num_steps = int(_file.split('/')[-1].split('_')[-1].rstrip('.pkl'))
-        with open(_file, 'rb') as f:
-            observables_dict[num_steps] = np.array(pickle.load(f))
-
-    return observables_dict
-
-def _load_observables(log_dir):
-    """Load observables from: `log_dir/run_info/observables.pkl`."""
-    info_dir = os.path.join(log_dir, 'run_info')
-
-    observables_dir = os.path.join(log_dir, 'observables')
-    if os.path.isdir(observables_dir):
-        if os.listdir(observables_dir) is not None:
-            return _load_multiple_observables(observables_dir)
-
-    observables_file = os.path.join(info_dir, 'observables.pkl')
-    if os.path.isfile(observables_file):
-        print(f"Loading observables from: {observables_file}.")
-        with open(observables_file, 'rb') as f: # pylint: disable=invalid-name
-            observables = pickle.load(f)
-        return observables
-    else:
-        print(f"Unable to find {observables_file} in {info_dir}. Exiting.")
-        return False
-
-def _save_observables_to_file(observables, log_dir, out_file=None):
-    """Save calculated observables to pickle file."""
-    observables_dir = os.path.join(log_dir, 'observables')
-    check_else_make_dir(observables_dir)
-    if out_file is None:
-        observables_file = os.path.join(observables_dir, 'observables.pkl')
-    else:
-        observables_file = os.path.join(observables_dir, out_file)
-    print(f'Saving calculated observables to: {observables_file}.')
-    with open(observables_file, 'wb') as f: # pylint:disable=invalid-name
-        pickle.dump(observables, f)
-    print('done.')
+def jackknife_var(x, fn):
+    """Jackknife estimate of the variance of the estimator fn."""
+    n = len(x)
+    idx = np.arange(n)
+    j_est = jackknife(x, fn)
+    j_var = (n - 1) / (n + 0.) * np.sum(
+        (fn(x[idx!=i]) - j_est)**2 for i in range(n)
+    )
+    return j_var
 
 
 ##############################################################################
@@ -197,31 +116,8 @@ def _calc_observables(samples, params):
 
     observables_fn = None
     lattice = _make_lattice(params)
-    # if len(samples[0].shape) == 4, then each item in `samples` represents a
-    # single batch of link configurations, so we use the
-    # `lattice.calc_plaq_observables` method for calculating observables.
-    # similarly, if len(samples.shape) >= 3, then `samples` either has shape
-    #     (num_steps, num_samples, time_size, space_size, dim) == 4
-    # or
-    #     (num_steps, num_samples, time_size * space_size * dim) == 3
-    cond1 = len(samples[0].shape) == 4
-    cond2 = len(samples.shape) >= 3
-    if cond1 or cond2:
-        observables_fn = lattice.calc_plaq_observables
-    # if len(samples[0].shape) == 3, then each item in `samples` contains only
-    # a single link configuration.
-    # similarly, if samples.shape[-1] == lattice.num_links, samples has shape:
-    #     (num_steps, lattice.num_links) (i.e. a single MCMC chain)
-    # in either of these cases we then use the 
-    # `lattice._calc_plaq_observables` method for calculating observables.
-    cond3 = len(samples[0].shape) == 3
-    cond4 = samples[0].shape[0] == lattice.num_links
-    # pylint:disable=protected-access
-    if cond3 or cond4:
-        observables_fn = lattice._calc_plaq_observables
+    #  observables_fn = lattice.calc_plaq_observables
 
-    if observables_fn is None:
-        raise ValueError(f"Incorrect shape for `samples` {samples.shape}")
 
     total_actions = []
     avg_plaquettes = []
@@ -229,7 +125,11 @@ def _calc_observables(samples, params):
     beta = params['beta_final']
     for idx, sample in enumerate(samples):
         t0 = time.time()
-        observables = np.array(observables_fn(sample, beta))
+        try:
+            observables = np.array(lattice.calc_plaq_observables(sample, beta))
+        except:
+            observables = np.array(lattice._calc_plaq_observables(sample, beta))
+
         actions, plaqs, charges = observables
 
         total_actions.append(actions)
@@ -239,10 +139,10 @@ def _calc_observables(samples, params):
         print(f"step: {idx} "
               f"time/step: {time.time() - t0:^6.4g} "
               f"avg action: {np.mean(actions):^6.4g} "
-              f"avg plaquette: {np.mean(plaqs):^6.4g} "
-              "top charges: ")
+              f"avg plaquette: {np.mean(plaqs):^6.4g} ")
+              #  "top charges: ")
         print('\n')
-        print([int(i) for i in charges])
+        print('top_charges: ', [int(i) for i in charges])
         print('\n')
 
 
@@ -370,6 +270,7 @@ def plot_top_charges(log_dir, charges_dict):
                 print(f"Saving figure to {out_file}.")
                 _ = fig.savefig(out_file, dpi=400, bbox_inches='tight')
 
+
 ##############################################################################
 # Calculate thermalization time by fitting observable to exponential
 ##############################################################################
@@ -388,6 +289,7 @@ def _calc_thermalization_time(samples):
     popt, pcov = curve_fit(f, xdata=xdata, ydata=samples)
 
     return popt, pcov
+
 
 ##############################################################################
 # Load samples and calculate observables generated during training
@@ -527,7 +429,6 @@ def plot_observables(log_dir, observables_dicts, training=False):
 
     return figs_axes
 
-
 def plot_top_charges_training(log_dir, charges_dict):
     """Plot top. charge history using samples generated during training."""
     params, _, _, training_figs_dir_dict = find_training_samples(log_dir)
@@ -666,80 +567,6 @@ def calc_integrated_autocorr_time(data):
 ##############################################################################
 # Plot observables calculated above.
 ##############################################################################
-def make_broken_xaxis_plots(figs_dir, beta, observables,
-                            top_charges_autocorr, legend=False):
-    """Make plots with broken xaxis."""
-    actions, avg_plaquettes, top_charges = observables
-    #  top_charges_autocorr_arr, top_charges_autocorr_avg = top_charges_autocorr
-    #  samples_autocorr_arr, samples_autocorr_avg = samples_autocorr
-
-    steps = np.arange(len(actions))
-
-    broken_xaxis_figs_axes = []
-    ###########################################################################
-    # Topological charge autocorrelation function
-    ###########################################################################
-    out_file = os.path.join(figs_dir,
-                            'topological_charge_autocorr_fn_broken_xaxis.pdf')
-
-    fig, ax, ax2 = plot_broken_xaxis(steps, top_charges_autocorr.T,
-                                     x_label='step',
-                                     y_label='Autocorrelation (top. charge)',
-                                     legend=legend,
-                                     out_file=out_file)
-
-    broken_xaxis_figs_axes.append((fig, ax, ax2))
-
-    ###########################################################################
-    # Topological charge
-    ###########################################################################
-    out_file = os.path.join(figs_dir,
-                            'topological_charge_vs_step_broken_xaxis.pdf')
-    fig, ax, ax2 = plot_broken_xaxis(x_data=steps,
-                                     y_data=top_charges,
-                                     x_label='step',
-                                     y_label='Topological charge',
-                                     legend=legend,
-                                     out_file=None)
-    if legend:
-        ax2.legend(loc='lower right')
-
-    broken_xaxis_figs_axes.append((fig, ax, ax2))
-    plt.savefig(out_file, dpi=400, bbox_inches='tight')
-
-    ###########################################################################
-    # Average plaquette 
-    ###########################################################################
-    out_file = os.path.join(figs_dir,
-                            'average_plaquette_vs_step_broken_xaxis.pdf')
-    fig, ax, ax2 = plot_broken_xaxis(steps, avg_plaquettes,
-                                     x_label='step',
-                                     y_label='Average plaquette',
-                                     legend=legend)
-    _ = ax.axhline(y=u1_plaq_exact(beta), color='r', ls='--', lw=2.5,
-                   label='exact')
-    _ = ax2.axhline(y=u1_plaq_exact(beta), color='r', ls='--', lw=2.5,
-                    label='exact')
-    if legend:
-        _ = ax2.legend(loc='lower right', fontsize=10)
-
-    broken_xaxis_figs_axes.append((fig, ax, ax2))
-    plt.savefig(out_file, dpi=400, bbox_inches='tight')
-
-    ###########################################################################
-    # Average action
-    ###########################################################################
-    out_file = os.path.join(figs_dir,
-                            'average_action_vs_step_broken_xaxis.pdf')
-    fig, ax, ax2 = plot_broken_xaxis(steps, actions,
-                                     x_label='step',
-                                     y_label='Total action',
-                                     legend=legend,
-                                     out_file=out_file)
-
-    broken_xaxis_figs_axes.append((fig, ax, ax2))
-
-    return broken_xaxis_figs_axes
 
 def make_multiple_lines_plots(beta, observables, **kwargs):
     """Create all relevant plots."""
@@ -811,6 +638,11 @@ def make_multiple_lines_plots(beta, observables, **kwargs):
     multiple_lines_figs_axes.append((fig, ax))
 
     return multiple_lines_figs_axes
+
+
+##############################################################################
+# Plot autocorrelations for observables calculated above.
+##############################################################################
 
 def make_pandas_autocorrelation_plot(data, x_label, y_label, out_file=None):
     """Make autocorrelation plot using `pandas.plotting.autocorrelation_plot`.
@@ -946,138 +778,3 @@ def make_samples_acl_spectrum_plot(samples, out_file=None):
         plt.savefig(out_file, dpi=400, bbox_inches='tight')
 
     return fig, ax
-
-def make_plots_from_log_dir(log_dir):
-    """All-in-one function for calculating observables and creating plots."""
-    params, samples, observables = calc_observables_from_log_dir(log_dir)
-
-    _, _, top_charges = observables
-
-    beta = params['beta']
-    figs_dir = os.path.join(log_dir, 'figures')
-
-
-    top_charges_autocorr, _ = calc_top_charges_autocorr(top_charges)
-
-    #  samples_autocorr, _ = calc_samples_autocorr(samples)
-
-    #  broken_xaxis_figs_axes = make_broken_xaxis_plots(
-    #      figs_dir,
-    #      beta,
-    #      observables,
-    #      top_charges_autocorr
-    #  )
-
-    multiple_lines_figs_axes = make_multiple_lines_plots(
-        figs_dir,
-        beta,
-        observables,
-        top_charges_autocorr
-    )
-
-    return multiple_lines_figs_axes #, broken_xaxis_figs_axes
-
-def calc_observables_generate_plots(log_dir):
-    """Wrapper function for calculating all relevant observables and plots."""
-    figs_dir = os.path.join(log_dir, 'figures')
-    autocorr_dir = os.path.join(figs_dir, 'autocorrelation_plots')
-    pandas_autocorr_dir = os.path.join(autocorr_dir, 'pandas_autocorr_plots')
-    mpl_autocorr_dir = os.path.join(autocorr_dir, 'mpl_autocorr_dir')
-    check_else_make_dir(autocorr_dir)
-    check_else_make_dir(mpl_autocorr_dir)
-    check_else_make_dir(pandas_autocorr_dir)
-
-    #########################################################################
-    # Calculate observables
-    #########################################################################
-    params, samples, observables = calc_observables_from_log_dir(log_dir)
-    if isinstance(observables, dict):
-        actions = {}
-        avg_plaquettes = {}
-        top_charges = {}
-        for key, val in observables.items():
-            _actions, _avg_plaquettes, _top_charges = val
-            actions[key] = _actions
-            avg_plaquettes[key] = _avg_plaquettes
-            top_charges[key] = _top_charges
-
-    else:
-        actions, avg_plaquettes, top_charges = observables
-
-    #########################################################################
-    # Calculate autocorr fns, integrated autocorr times and ESS
-    #########################################################################
-    output = calc_top_charges_autocorr(top_charges)
-    top_charges_autocorr, top_charges_autocorr_avg = output
-
-    acf_arr, iat_arr = calc_integrated_autocorr_time(top_charges)
-
-    ESS_arr = []
-    for acf in acf_arr:
-        ESS_arr.append(calc_ESS(acf))
-
-    samples_autocorr, samples_autocorr_avg = calc_samples_autocorr(samples)
-
-    #########################################################################
-    # Create plots
-    #########################################################################
-    multiple_lines_figs_axes = make_multiple_lines_plots(
-        params['beta'],
-        observables,
-        figs_dir=figs_dir,
-        legend=False
-    )
-
-    #  broken_xaxis_figs_axes = make_broken_xaxis_plots(
-    #      params['beta'],
-    #      observables,
-    #      figs_dir,
-    #      legend=False,
-    #  )
-
-    for idx in range(top_charges.shape[1]):
-        out_file = os.path.join(
-            pandas_autocorr_dir,
-            f'top_charges_autocorr_pandas_{idx}.pdf'
-        )
-        fig, ax = make_pandas_autocorrelation_plot(
-            top_charges[:, idx],
-            x_label='Lag',
-            y_label='Autocorrelation (top. charge)',
-            out_file=out_file
-        )
-
-    for idx in range(top_charges.shape[1]):
-        out_file = os.path.join(
-            mpl_autocorr_dir,
-            f'top_charges_autocorr_mpl_{idx}.pdf'
-        )
-        kwargs = {
-            'x_label': 'Lag',
-            'y_label': 'Autocorrelation (top. charge)',
-            'label': f'sample {idx}',
-            'out_file': out_file,
-            'color': COLORS[idx]
-        }
-        output = make_matplotlib_autocorrelation_plot(
-            top_charges[:, idx],
-            **kwargs
-        )
-
-    out_file = os.path.join(figs_dir, 'links_autocorrelation_vs_step.pdf')
-    fig, ax = make_samples_acl_spectrum_plot(samples, out_file)
-
-    out_file = os.path.join(
-        figs_dir,
-        'integrated_autocorrelation_time_plot.pdf'
-    )
-    kwargs = {
-        'x_label': 'Lag',
-        'y_label': 'Autocorrelation (top. charge)',
-        'legend': True,
-        'out_file': out_file
-    }
-    fig, ax = plot_autocorr_with_iat(acf_arr, iat_arr, ESS_arr, **kwargs)
-
-
-

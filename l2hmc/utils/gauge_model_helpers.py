@@ -127,7 +127,7 @@ def write_run_parameters(file_path, parameters):
 def data_header():
     """Create formatted (header) string containing labels for printing data."""
     h_str = ("{:^15s}{:^14s}{:^14s}{:^14s}{:^14s}{:^14s}{:^14s}")
-    h_strf = h_str.format("STEP", "LOSS", "NORM. TIME", "ACCEPT %",
+    h_strf = h_str.format("STEP", "LOSS", "TIME/STEP", "ACCEPT %",
                           "EPS", "BETA", "LR")#, "ACTION", "TOP Q", "PLAQ")
     dash0 = (len(h_strf) + 1) * '-'
     dash1 = (len(h_strf) + 1) * '-'
