@@ -1043,7 +1043,7 @@ def main(flags):
         os.environ["KMP_BLOCKTIME"] = str(0)
         os.environ["KMP_AFFINITY"] = "granularity=fine,verbose,compact,1,0"
         config.allow_soft_placement = True
-        config.intra_op_parallelism_threads = str(62)
+        config.intra_op_parallelism_threads = 62
 
 
 
@@ -1143,12 +1143,12 @@ if __name__ == '__main__':
 
 ########################### Learning rate parameters ##########################
 
-    parser.add_argument("--learning_rate_init", type=float, default=1e-4,
+    parser.add_argument("--learning_rate_init", type=float, default=1e-3,
                         required=False, dest="learning_rate_init",
                         help=("Initial value of learning rate. "
                               "(Deafult: 1e-4)"))
 
-    parser.add_argument("--learning_rate_decay_steps", type=int, default=100,
+    parser.add_argument("--learning_rate_decay_steps", type=int, default=500,
                         required=False, dest="learning_rate_decay_steps",
                         help=("Number of steps after which to decay learning "
                               "rate. (Default: 100)"))
