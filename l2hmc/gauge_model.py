@@ -1,4 +1,5 @@
 """
+
 Augmented Hamiltonian Monte Carlo Sampler using the L2HMC algorithm, applied
 to a U(1) lattice gauge theory model.
 
@@ -31,7 +32,6 @@ except ImportError:
 
 from lattice.lattice import GaugeLattice, u1_plaq_exact
 from dynamics.gauge_dynamics import GaugeDynamics
-from utils.plot_helper import plot_broken_xaxis
 import utils.gauge_model_helpers as helpers
 from utils.tf_logging import variable_summaries
 
