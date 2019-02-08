@@ -15,7 +15,7 @@ to a U(1) lattice gauge theory model.
 ==============================================================================
 """
 
-# pylint: disable=wildcard-import, no-member, too-many-arguments, invalid-name
+# pylint: disable=no-member, too-many-arguments, invalid-name
 import os
 import sys
 import time
@@ -31,12 +31,6 @@ try:
 
 except ImportError:
     HAS_HOROVOD = False
-
-try:
-    import matplotlib.pyplot as plt
-    HAS_MATPLOTLIB = True
-except ImportError:
-    HAS_MATPLOTLIB = False
 
 from lattice.lattice import GaugeLattice, u1_plaq_exact
 from dynamics.gauge_dynamics import GaugeDynamics
@@ -99,17 +93,26 @@ PARAMS = {
 }
 
 def write(s, f, mode='a', nl=True):
-    if HAS_HOROVOD and hvd.rank() != 0:
-        return
-    with open(f, mode) as f:
-        f.write(s)
-        if nl:
-            f.write('\n')
+    try:
+        if HAS_HOROVOD and hvd.rank() != 0:
+            return
+        with open(f, mode) as ff:
+            ff.write(s + '\n' if nl else '')
+            #  if nl:
+            #      f.write('\n')
+    except NameError:
+        with open(f, mode) as ff:
+            ff.write(s + '\n' if nl else '')
+            #  if nl:
+            #      f.write('\n')
 
 def log(s, nl=True):
-    if HAS_HOROVOD and hvd.rank() != 0:
-        return
-    print(s, end='\n' if nl else '')
+    try:
+        if HAS_HOROVOD and hvd.rank() != 0:
+            return
+        print(s, end='\n' if nl else '')
+    except NameError:
+        print(s, end='\n' if nl else '')
 
 def check_else_make_dir(d):
     """If directory `d` doesn't exist, it is created."""
@@ -800,7 +803,7 @@ class GaugeModel(object):
 
 
     #pylint: disable=too-many-statements
-    def train(self, num_train_steps, pre_train=True, kill_sess=True,
+    def train(self, num_train_steps, pre_train=True, kill_sess=False,
               trace=False):
         start_time = time.time()
         # Move attribute look ups outside loop to improve performance
@@ -813,6 +816,12 @@ class GaugeModel(object):
         #  dynamics = self.dynamics
         #  x = self.x
         #  dynamics_beta = self.dynamics.beta
+        cond1 = False
+        if self.using_hvd:
+            if hvd.rank() == 0:
+                cond1 = True
+        cond2 = not self.using_hvd
+
         if pre_train:
             self.pre_train()
 
@@ -893,7 +902,7 @@ class GaugeModel(object):
                 # We can calculate observables from these samples to
                 # evaluate the samplers performance while we continue training.
                 if (step + 1) % self.training_samples_steps == 0:
-                    if hvd.rank() == 0:
+                    if cond1 or cond2:
                         t0 = time.time()
                         log(80 * '-')
                         log(f"\nEvaluating sampler for {tsl} steps"
@@ -906,9 +915,10 @@ class GaugeModel(object):
                         log(data_header)
 
                 if (step + 2) % self.save_steps == 0:
-                    self._save_model(samples=samples_np, step=step-2)
-                    helpers.write_run_data(self.files['run_info_file'],
-                                           self.data)
+                    if cond1 or cond2:
+                        self._save_model(samples=samples_np, step=step-2)
+                        helpers.write_run_data(self.files['run_info_file'],
+                                               self.data)
 
                 if step % self.logging_steps == 0:
                     if trace:
@@ -926,8 +936,6 @@ class GaugeModel(object):
                             self.beta: beta_np
                         }, options=options, run_metadata=run_metadata
                     )
-                    cond1 = self.using_hvd and hvd.rank() == 0
-                    cond2 = not self.using_hvd
                     if cond1 or cond2:
                         self.writer.add_summary(summary_str,
                                                 global_step=step)
@@ -1008,12 +1016,12 @@ class GaugeModel(object):
 
                 log(eval_str)
                 log('accept prob: ', nl=False)
-                log(px)
+                log(str(px))
                 log('\n')
 
                 write(eval_str, eval_file, 'a')
                 write('accept_prob:', eval_file, 'a', nl=False)
-                write(px, eval_file, 'a', nl=True)
+                write(str(px), eval_file, 'a', nl=True)
                 write('', eval_file, 'a')
 
 

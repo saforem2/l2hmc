@@ -29,39 +29,60 @@ from lattice.gauge_lattice import u1_plaq_exact
 
 
 def write(s, f, mode='a', nl=True):
-    if HAS_HOROVOD and hvd.rank() != 0:
-        return
-    with open(f, mode) as f:
-        f.write(s)
-        if nl:
-            f.write('\n')
+    try:
+        if HAS_HOROVOD and hvd.rank() != 0:
+            return
+        with open(f, mode) as f:
+            f.write(s)
+            if nl:
+                f.write('\n')
+    except NameError:
+        with open(f, mode) as ff:
+            ff.write(s + '\n' if nl else '')
+            if nl:
+                ff.write('\n')
 
 def log(s, nl=True):
-    if HAS_HOROVOD and hvd.rank() != 0:
-        return
-    print(s, end='\n' if nl else '')
+    try:
+        if HAS_HOROVOD and hvd.rank() != 0:
+            return
+        print(s, end='\n' if nl else '')
+    except NameError:
+        print(s, end='\n' if nl else '')
+
+def _get_run_num(log_dir):
+    if not os.path.isdir(log_dir):
+        os.makedirs(log_dir)
+
+    contents = os.listdir(log_dir)
+    if contents == [] or contents == ['.DS_Store']:
+        return 1
+
+    run_nums = []
+    for item in contents:
+        try:
+            run_nums.append(int(item.split('_')[-1]))
+        except ValueError:
+            continue
+    if run_nums == []:
+        return 1
+
+    return sorted(run_nums)[-1] + 1
 
 
 def get_run_num(log_dir):
     """Determine the next sequential number to use for new run directory."""
-    if not os.path.isdir(log_dir):
-        os.makedirs(log_dir)
-    contents = os.listdir(log_dir)
-    if contents == [] or contents == ['.DS_Store']:
-        return 1
-    else:
-        run_nums = []
-        for item in contents:
-            try:
-                run_nums.append(int(item.split('_')[-1]))
-            except ValueError:
-                continue
-        if run_nums == []:
-            return 1
-        else:
-            return sorted(run_nums)[-1] + 1
+    try:
+        if HAS_HOROVOD and hvd.rank() != 0:
+            return
+        run_num = _get_run_num(log_dir)
+    except NameError:
+        run_num = _get_run_num(log_dir)
 
-def make_run_dir(log_dir):
+    return run_num
+
+
+def _make_run_dir(log_dir):
     """Create directory for new run called `run_num` where `num` is unique."""
     if log_dir.endswith('/'):
         _dir = log_dir
@@ -76,7 +97,19 @@ def make_run_dir(log_dir):
         os.makedirs(run_dir)
     return run_dir
 
-def check_log_dir(log_dir):
+
+def make_run_dir(log_dir):
+    """Create directory for new run called `run_num` where `num` is unique."""
+    try:
+        if HAS_HOROVOD and hvd.rank() != 0:
+            return
+        run_dir = _make_run_dir(log_dir)
+    except NameError:
+        run_dir = _make_run_dir(log_dir)
+    return run_dir
+
+
+def _check_log_dir(log_dir):
     """Check that log_dir and subdirectories `run_info`, `figures` exist."""
     if not os.path.isdir(log_dir):
         raise ValueError(f'Unable to locate {log_dir}, exiting.')
@@ -91,7 +124,18 @@ def check_log_dir(log_dir):
             os.makedirs(figs_dir)
     return log_dir, info_dir, figs_dir
 
-def create_log_dir(base_name):
+def check_log_dir(log_dir):
+    """Check that log_dir and subdirectories `run_info`, `figures` exist."""
+    try:
+        if HAS_HOROVOD and hvd.rank() != 0:
+            return
+        dirs = _check_log_dir(log_dir)
+    except NameError:
+        dirs = _check_log_dir(log_dir)
+    return dirs
+
+
+def _create_log_dir(base_name):
     """Create directory for storing information about experiment."""
     root_log_dir = os.path.join(os.path.split(ROOT_DIR)[0], base_name)
     log_dir = make_run_dir(root_log_dir)
@@ -102,6 +146,17 @@ def create_log_dir(base_name):
     if not os.path.isdir(figs_dir):
         os.makedirs(figs_dir)
     return log_dir, info_dir, figs_dir
+
+def _create_log_dir(base_name):
+    """Create directory for storing information about experiment."""
+    try:
+        if HAS_HOROVOD and hvd.rank() != 0:
+            return
+        dirs = _create_log_dir(base_name)
+    except NameError:
+        dirs = _create_log_dir(base_name)
+
+    return dirs
 
 def print_run_data(data, header=False):
     """Print information about current run to std out."""
@@ -118,15 +173,9 @@ def write_run_data(file_path, data, header=False):
     if header:
         header_str = data_header()
         write(header_str, file_path, 'a')
-        #  with open(file_path, 'a') as f:
-        #      f.write(header_str)
-        #      f.write('\n')
 
-    step = data['step']
+    #  step = data['step']
     write(data_str, file_path, 'a')
-    #  with open(file_path, 'a') as f:
-    #      f.write(data_str)
-    #      f.write('\n')
 
 def write_run_parameters(file_path, parameters):
     """Write `parameters` to human-readable file at `file_path`.
@@ -135,17 +184,6 @@ def write_run_parameters(file_path, parameters):
         file_path: Path to file to save `parameters` to.
         parameters (dict)
     """
-    #  with open(file_path, 'w') as f:
-    #      f.write('Parameters:\n')
-    #      f.write(80 * '-' + '\n')
-    #      for key, val in parameters.items():
-    #          if isinstance(val, (int, float, str)):
-    #              log(f'{key}: {val}\n')
-    #      #  for key, val in parameters.items():
-    #      #      f.write(f'{key}: {val}\n')
-    #      f.write(80*'=')
-    #      f.write('\n')
-
     strings = []
     for key, val in parameters.items():
         if isinstance(val, (int, float, str)):
@@ -159,8 +197,6 @@ def write_run_parameters(file_path, parameters):
     log('Parameters')
     log(80 * '-')
     _ = [log(s) for s in strings]
-
-
 
 
 def data_header():
@@ -261,5 +297,5 @@ def save_run_data(checkpointer, log_dir, files, data, samples, params):
         pickle.dump(data, f)
     with open(files['parameters_pkl_file'], 'wb') as f:
         pickle.dump(params, f)
-    with open(file['samples_pkl_file'], 'wb') as f:
+    with open(files['samples_pkl_file'], 'wb') as f:
         pickle.dump(samples, f)
