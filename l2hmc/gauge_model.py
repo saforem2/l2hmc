@@ -146,9 +146,8 @@ def graph_step(dynamics, optimizer, samples, beta, step,
 
     return train_op, loss, grads, samples, accept_prob
 
-# Loss function
-def compute_loss(dynamics, x, beta, 
-                 aux=True, scale=.1, eps=1e-4):
+# pylint: disable=too-many-locals
+def compute_loss(dynamics, x, beta, aux=True, scale=.1, eps=1e-4):
     """Compute loss defined in equation (8)."""
     log("    Creating loss...")
     t0 = time.time()
@@ -177,10 +176,6 @@ def compute_loss(dynamics, x, beta,
 
     t_diff = time.time() - t0
     log(f"    done. took: {t_diff:4.3g} s.")
-    #  if out_file is not None:
-    #      s = f'Loss took: {t_diff:4.3g} s to create.'
-    #      write(s, out_file, 'a')
-
 
     return loss, x_out, px
 
@@ -1004,7 +999,6 @@ def main(flags):
 
     if flags.horovod:
         params['using_hvd'] = True
-        params['train_steps'] = params['train_steps'] // hvd.size()
 
     config = tf.ConfigProto()
 
@@ -1026,9 +1020,7 @@ def main(flags):
         os.environ["KMP_BLOCKTIME"] = str(0)
         os.environ["KMP_AFFINITY"] = "granularity=fine,verbose,compact,1,0"
         config.allow_soft_placement = True
-        #  config.intra_op_parallelism_threads = 62
-
-
+        config.intra_op_parallelism_threads = 62
 
 
     model = GaugeModel(params=params,
@@ -1041,6 +1033,8 @@ def main(flags):
     if flags.horovod:
         if hvd.rank() == 0:
             save_params_to_pkl_file(params, model.info_dir)
+
+        log('Number of CPUs: %d' % hvd.size())
 
     #  start_time_str = time.strftime("%a, %d %b %Y %H:%M:%S",
     #                                 time.ctime(time.time()))
