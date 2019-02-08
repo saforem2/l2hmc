@@ -65,21 +65,6 @@ class ConvNet(tf.keras.Model):
             setattr(self, key, val)
 
 
-        #  if num_filters is None:
-        #      num_filters = int(2 * spatial_size)
-
-        #  self.x_dim = num_links
-        #  self._input_shape = input_shape
-        #  self.links_shape = links_shape
-        #  if self.data_format == 'channels_first':
-        #      self.channel_dim = 1
-        #
-        #  elif self.data_format == 'channels_last':
-        #      self.channel_dim = -1
-        #  else:
-        #      raise AttributeError("`data_format` must be one of "
-        #                           "'channels_first', or 'channels_last'.")
-
         #  with tf.variable_scope(self.variable_scope):
         with tf.name_scope(self.name_scope):
 
