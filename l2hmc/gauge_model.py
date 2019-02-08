@@ -129,10 +129,12 @@ def tf_accept(x, _x, px):
     mask = (px - tf.random_uniform(tf.shape(px)) > 0.)
     return tf.where(mask, _x, x)
 
-def graph_step(dynamics, optimizer, samples, beta, step, out_file=None):
+def graph_step(dynamics, optimizer, samples, beta, step, 
+               aux=True, out_file=None):
     with tf.name_scope('train'):
         loss, grads, samples, accept_prob = loss_and_grads(
-            dynamics, samples, beta, loss_fn=compute_loss, out_file=out_file
+            dynamics, samples, beta, loss_fn=compute_loss,
+            aux=aux, out_file=out_file
         )
         train_op = optimizer.apply_gradients(zip(grads, dynamics.variables),
                                              global_step=step,
@@ -141,26 +143,33 @@ def graph_step(dynamics, optimizer, samples, beta, step, out_file=None):
     return train_op, loss, grads, samples, accept_prob
 
 # Loss function
-def compute_loss(dynamics, x, beta, scale=.1, eps=1e-4, out_file=None):
+def compute_loss(dynamics, x, beta, 
+                 aux=True, scale=.1, eps=1e-4, out_file=None):
     """Compute loss defined in equation (8)."""
     log("    Creating loss...")
     t0 = time.time()
 
     z = tf.random_normal(tf.shape(x))  # Auxiliary variable
     x_, _, px, x_out = dynamics.apply_transition(x, beta)
-    z_, _, pz, _ = dynamics.apply_transition(z, beta)
+    if aux:
+        z_, _, pz, _ = dynamics.apply_transition(z, beta)
 
     # Add eps for numerical stability; following released impl
     with tf.name_scope('loss'):
         with tf.name_scope('x_loss'):
             x_loss = tf.reduce_sum((x - x_)**2, axis=dynamics.axes) * px + eps
-        with tf.name_scope('z_loss'):
-            z_loss = tf.reduce_sum((z - z_)**2, axis=dynamics.axes) * pz + eps
+        if aux:
+            with tf.name_scope('z_loss'):
+                z_loss = (
+                    tf.reduce_sum((z - z_)**2, axis=dynamics.axes) * pz + eps
+                )
 
-        loss = tf.reduce_mean(
-            (1. / x_loss + 1. / z_loss) * scale - (x_loss + z_loss) / scale,
-            axis=0
-        )
+            loss = tf.reduce_mean(
+                (1. / x_loss + 1. / z_loss) * scale - (x_loss + z_loss) / scale,
+                axis=0
+            )
+        else:
+            loss = tf.reduce_mean(scale  / x_loss - x_loss / scale, axis=0)
 
     t_diff = time.time() - t0
     log(f"    done. took: {t_diff:4.3g} s.")
@@ -174,14 +183,15 @@ def compute_loss(dynamics, x, beta, scale=.1, eps=1e-4, out_file=None):
 
     return loss, x_out, px
 
-def loss_and_grads(dynamics, x, beta, loss_fn=compute_loss, out_file=None):
+def loss_and_grads(dynamics, x, beta, 
+                   loss_fn=compute_loss, aux=True, out_file=None):
     """Obtain loss value and gradients."""
     log(f"  Creating gradient operations...")
     t0 = time.time()
 
     with tf.name_scope('grads'):
         with tf.GradientTape() as tape:
-            loss_val, out, accept_prob = loss_fn(dynamics, x, beta)
+            loss_val, out, accept_prob = loss_fn(dynamics, x, beta, aux)
         grads = tape.gradient(loss_val, dynamics.trainable_variables)
 
     t_diff = time.time() - t0
@@ -713,8 +723,12 @@ class GaugeModel(object):
         log(f"Building graph... (started at: {time.ctime()})")
         start_time = time.time()
         #  str0 = f"Building graph... (started at: {time.ctime()})\n"
-        outputs = graph_step(self.dynamics, self.optimizer, self.x, self.beta,
+        outputs = graph_step(self.dynamics,
+                             self.optimizer,
+                             self.x,
+                             self.beta,
                              self.global_step,
+                             aux=self.params['aux'],
                              out_file=self.files['run_info_file'])
         self.train_op, self.loss_op, self.grads, self.x_out, self.px = outputs
 
@@ -1215,12 +1229,12 @@ if __name__ == '__main__':
     parser.add_argument("--learning_rate_init", type=float, default=1e-3,
                         required=False, dest="learning_rate_init",
                         help=("Initial value of learning rate. "
-                              "(Deafult: 1e-4)"))
+                              "(Deafult: 1e-3)"))
 
     parser.add_argument("--learning_rate_decay_steps", type=int, default=500,
                         required=False, dest="learning_rate_decay_steps",
                         help=("Number of steps after which to decay learning "
-                              "rate. (Default: 100)"))
+                              "rate. (Default: 500)"))
 
     parser.add_argument("--learning_rate_decay_rate", type=float, default=0.96,
                         required=False, dest="learning_rate_decay_rate",
