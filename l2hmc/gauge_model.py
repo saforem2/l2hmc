@@ -248,9 +248,10 @@ class GaugeModel(object):
 
         self._write_run_parameters(_print=True)
 
-        self.summary_writer = (
-            tf.contrib.summary.create_file_writer(self.log_dir)
-        )
+        if self.condition1 or self.condition2:
+            self.summary_writer = (
+                tf.contrib.summary.create_file_writer(self.log_dir)
+            )
 
         with tf.name_scope('lattice'):
             self.lattice = GaugeLattice(time_size=self.time_size,
@@ -280,7 +281,8 @@ class GaugeModel(object):
             self.potential_fn = self.lattice.get_energy_function(self.samples)
 
         if restore:
-            self._restore_model(self.log_dir)
+            if self.condition1 or self.condition2:
+                self._restore_model(self.log_dir)
         else:
             kwargs = {
                 'beta_init': self.beta_init,
@@ -345,6 +347,10 @@ class GaugeModel(object):
 
     def _create_dir_structure(self):
         """Create self.files and directory structure."""
+        if self.using_hvd:
+            if hvd.rank() != 0:
+                return
+
         self.files = {
             'parameters_file': os.path.join(self.info_dir, 'parameters.txt'),
             'run_info_file': os.path.join(self.info_dir, 'run_info.txt'),
@@ -360,13 +366,16 @@ class GaugeModel(object):
             self.samples_history_dir, 'training'
         )
 
-        if self.condition1 or self.condition2:
-            check_else_make_dir(self.samples_history_dir)
-            check_else_make_dir(self.train_samples_history_dir)
-            check_else_make_dir(self.train_samples_dir)
+        check_else_make_dir(self.samples_history_dir)
+        check_else_make_dir(self.train_samples_history_dir)
+        check_else_make_dir(self.train_samples_dir)
 
     def _restore_checkpoint(self, log_dir):
         """Restore from `tf.train.Checkpoint`."""
+        if self.using_hvd:
+            if hvd.rank() != 0:
+                return
+
         latest_path = tf.train.latest_checkpoint(log_dir)
         self.checkpoint = tf.train.Checkpoint(
             optimizer=self.optimizer,
@@ -376,6 +385,10 @@ class GaugeModel(object):
 
     def _restore_model(self, log_dir):
         """Restore model from previous run contained in `log_dir`."""
+        if self.using_hvd:
+            if hvd.rank() != 0:
+                return
+
         if self.hmc:
             log(f"ERROR: self.hmc: {self.hmc}. No model to restore. Exiting.")
             sys.exit(1)
@@ -501,6 +514,10 @@ class GaugeModel(object):
 
     def _write_run_parameters(self, _print=False):
         """Write model parameters out to human readable .txt file."""
+        if self.using_hvd:
+            if hvd.rank() != 0:
+                return
+
         if _print:
             for key, val in self.params.items():
                 log(f'{key}: {val}')
@@ -517,16 +534,12 @@ class GaugeModel(object):
         _ = [write(s, self.files['parameters_file'], 'a') for s in strings]
         write(sep_str, self.files['parameters_file'], 'a')
 
-        #  with open(self.files['parameters_file'], 'w') as f:
-        #      f.write('Parameters:\n')
-        #      f.write(80 * '-' + '\n')
-        #      for key, val in self.params.items():
-        #          f.write(f'{key}: {val}\n')
-        #      f.write(80*'=')
-        #      f.write('\n')
-
     def _create_summaries(self):
         """Create summary objects for logging in TensorBoard."""
+        if self.using_hvd:
+            if hvd.rank() != 0:
+                return
+
         with tf.name_scope('summaries'):
             tf.summary.scalar('loss', self.loss_op)
             tf.summary.scalar('step_size', self.dynamics.eps)
@@ -564,7 +577,6 @@ class GaugeModel(object):
                     variable_summaries(grad, name + '_gradient')
 
             self.summary_op = tf.summary.merge_all(name='summary_op')
-
 
     def _create_metric_fn(self):
         """Create metric fn for measuring the distance between two samples."""
@@ -647,21 +659,27 @@ class GaugeModel(object):
 
     def pre_train(self):
         """Set up training for the model."""
-        self.saver = tf.train.Saver(max_to_keep=3)
+        if self.condition1 or self.condition2:
+            self.saver = tf.train.Saver(max_to_keep=3)
+
         self.sess.run(tf.global_variables_initializer())
+
         if self.using_hvd:
             self.sess.run(hvd.broadcast_global_variables(0))
-        ckpt = tf.train.get_checkpoint_state(self.log_dir)
-        time_delay = 0.
-        if ckpt and ckpt.model_checkpoint_path:
-            log('Restoring previous model from: '
-                  f'{ckpt.model_checkpoint_path}')
-            self.saver.restore(self.sess, ckpt.model_checkpoint_path)
-            log('Model restored.\n', nl=False)
-            self.global_step = tf.train.get_global_step()
-            initial_step = self.sess.run(self.global_step)
 
-        self.writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
+        if self.condition1 or self.condition2:
+            ckpt = tf.train.get_checkpoint_state(self.log_dir)
+            time_delay = 0.
+            if ckpt and ckpt.model_checkpoint_path:
+                log('Restoring previous model from: '
+                      f'{ckpt.model_checkpoint_path}')
+                self.saver.restore(self.sess, ckpt.model_checkpoint_path)
+                log('Model restored.\n', nl=False)
+                self.global_step = tf.train.get_global_step()
+                initial_step = self.sess.run(self.global_step)
+
+            self.writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
+
         self.sess.graph.finalize()
 
 
@@ -839,6 +857,10 @@ class GaugeModel(object):
 
     def run(self, run_steps, ret=False, current_step=None, beta=None):
         """Run the simulation to generate samples and calculate observables."""
+        if self.using_hvd:
+            if hvd.rank() != 0:
+                return
+
         if beta is None:
             beta = self.beta_final
 
@@ -913,11 +935,10 @@ class GaugeModel(object):
                 f'accept_prob_history_{current_step}_TRAIN_{run_steps}.pkl'
             )
 
-        if self.condition1 or self.condition2:
-            with open(out_file, 'wb') as f:
-                pickle.dump(samples_history, f)
-            with open(px_file, 'wb') as f:
-                pickle.dump(px_history, f)
+        with open(out_file, 'wb') as f:
+            pickle.dump(samples_history, f)
+        with open(px_file, 'wb') as f:
+            pickle.dump(px_history, f)
 
         log(f'\nSamples saved to: {out_file}.')
         log(f'Accept probabilities saved to: {px_file}.')
