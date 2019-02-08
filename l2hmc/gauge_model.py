@@ -1061,11 +1061,11 @@ class GaugeModel(object):
 
 def main(flags):
     """Main method for creating/training U(1) gauge model from command line."""
-    if flags.horovod:
-        log("Using horovod for distributed training...")
-        log("Calling `hvd.init()`...")
-        hvd.init()
-        log("done.")
+    #  if flags.horovod:
+    #      log("Using horovod for distributed training...")
+    #      log("Calling `hvd.init()`...")
+    #      hvd.init()
+    #      log("done.")
 
     params = PARAMS  # use default parameters if no command line args passed
 
