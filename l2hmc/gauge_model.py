@@ -149,9 +149,9 @@ def compute_loss(dynamics, x, beta,
     log("    Creating loss...")
     t0 = time.time()
 
-    z = tf.random_normal(tf.shape(x))  # Auxiliary variable
     x_, _, px, x_out = dynamics.apply_transition(x, beta)
     if aux:
+        z = tf.random_normal(tf.shape(x))  # Auxiliary variable
         z_, _, pz, _ = dynamics.apply_transition(z, beta)
 
     # Add eps for numerical stability; following released impl
@@ -728,8 +728,9 @@ class GaugeModel(object):
                              self.x,
                              self.beta,
                              self.global_step,
-                             aux=self.params['aux'],
+                             aux=self.aux,
                              out_file=self.files['run_info_file'])
+
         self.train_op, self.loss_op, self.grads, self.x_out, self.px = outputs
 
         s = f"Building graph... (started at: {time.ctime()})\n"
