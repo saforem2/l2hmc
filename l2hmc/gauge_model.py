@@ -242,7 +242,7 @@ class GaugeModel(object):
             else:
                 dirs = helpers.check_log_dir(log_dir)
 
-        self.log_dir, self.info_dir, self.figs_dir = dirs
+            self.log_dir, self.info_dir, self.figs_dir = dirs
 
         self._create_dir_structure()
 
@@ -318,13 +318,7 @@ class GaugeModel(object):
         for key, val in params.items():
             setattr(self, key, val)
 
-        #  self.train_samples = {}
         self.losses_arr = []
-        #  self.steps_arr = []
-        #  self.samples_arr = []
-        #  self.accept_prob_arr = []
-        #  self.step_times_arr = []
-
         self.params = params
 
         self.data = {
@@ -572,53 +566,6 @@ class GaugeModel(object):
             self.summary_op = tf.summary.merge_all(name='summary_op')
 
 
-    def _create_optimizer(self):
-        """Create optimizer to use during training."""
-        with tf.name_scope('train'):
-            #  self.grads = tf.gradients(self.loss_op,
-            #                            self.dynamics.trainable_variables)
-            self.global_step = tf.train.get_or_create_global_step()
-            self.global_step.assign(1)
-            tf.add_to_collection('global_step', self.global_step)
-
-            self.learning_rate = tf.train.exponential_decay(
-                self.learning_rate_init,
-                self.global_step,
-                self.learning_rate_decay_steps,
-                self.learning_rate_decay_rate,
-                staircase=True
-            )
-
-            #  clip_value = self.params['clip_value']
-            self.grads = tf.gradients(self.loss_op,
-                                      self.dynamics.trainable_variables)
-            if self.clip_grads:
-                self.grads, _ = tf.clip_by_global_norm(
-                    self.grads,
-                    self.clip_value,
-                    name='clipped_grads'
-                )
-
-            #  self.grads_and_vars = list(
-            #      zip(self.grads, self.dynamics.trainable_variables)
-            #  )
-
-            self.optimizer = tf.train.AdamOptimizer(
-                learning_rate=self.learning_rate,
-                name='AdamOptimizer'
-            )
-            self.train_op = self.optimizer.apply_gradients(
-                zip(self.grads, self.dynamics.trainable_variables),
-                global_step=self.global_step,
-                name='train_op'
-            )
-            #  else:
-            #      self.optimizer = tf.train.AdamOptimizer(self.learning_rate)
-            #      self.train_op = self.optimizer.minimize(
-            #          self.loss_op,
-            #          global_step=self.global_step
-            #      )
-
     def _create_metric_fn(self):
         """Create metric fn for measuring the distance between two samples."""
         if self.metric == 'l1':
@@ -632,48 +579,6 @@ class GaugeModel(object):
 
         if self.metric == 'cos2':
             self.metric_fn = lambda x1, x2: tf.square(tf.cos(x1) - tf.cos(x2))
-
-    def _create_loss(self):
-        """Define loss function to minimize during training."""
-        scale = self.params['loss_scale']
-
-        self._create_metric_fn()
-
-
-        with tf.name_scope('loss'):
-            self._x, _, self.px, self.x_out = (
-                self.dynamics.apply_transition(self.x, self.beta)
-            )
-
-            with tf.name_scope('x_loss'):
-                self.x_loss = ((tf.reduce_sum(
-                    self.metric_fn(self.x, self._x),
-                    axis=self.dynamics.axes,
-                    name='x_loss'
-                ) * self.px) + 1e-4)
-
-            if self.aux:
-                z = tf.random_normal(tf.shape(self.x), name='z')
-                _z, _, pz, _ = self.dynamics.apply_transition(z, self.beta)
-                with tf.name_scope('z_loss'):
-                    z_loss = ((tf.reduce_sum(
-                        self.metric_fn(z, _z),
-                        axis=self.dynamics.axes,
-                        name='z_loss'
-                    ) * pz) + 1e-4)
-
-                # Squared jump distance
-                with tf.name_scope('total_loss'):
-                    self.loss_op = scale * tf.reduce_mean(
-                        (1. / self.x_loss + 1. / z_loss) * scale
-                        - (self.x_loss + z_loss) / scale, axis=0, name='loss_op'
-                    )
-
-            else:
-                with tf.name_scope('total_loss'):
-                    self.loss_op = tf.reduce_mean(scale / self.x_loss
-                                                  - self.x_loss / scale,
-                                                  axis=0, name='loss_op')
 
     def _create_sampler(self):
         """Create operation for generating new samples using dynamics engine.
@@ -689,28 +594,8 @@ class GaugeModel(object):
                 self.beta
             )
 
-
     def build_graph(self):
         """Build graph for TensorFlow."""
-        #  def _write_strs_to_file(strings, last=False):
-        #      with open(self.files['run_info_file'], 'a') as f:
-        #          for s in strings:
-        #              f.write(s + '\n')
-        #          if last:
-        #              f.write(80 * '-' + '\n')
-
-        #  str0 = f"Building graph... (started at: {time.ctime()})\n"
-        #  str1 = "  Creating loss...\n"
-        #  str3 = "  Creating optimizer...\n"
-        #  str5 = "  Creating summaries...\n"
-        #  t_diff_str = lambda ti, tf : f"    took: {tf - ti} seconds."
-        #  t_diff_str1 = lambda t : f"Time to build graph: {time.time() - t}."
-
-        #  print(80*'-' + '\n')
-        #  print(str0 + str1)
-        #  _write_strs_to_file([str0, str1])
-        #  t0 = time.time()
-
         self.global_step = tf.train.get_or_create_global_step()
         self.learning_rate = tf.train.exponential_decay(
             self.learning_rate_init,
@@ -743,21 +628,6 @@ class GaugeModel(object):
         s = f"Building graph... (started at: {time.ctime()})\n"
         write(s, self.files['run_info_file'], 'a')
 
-        #  with open(self.files['run_info_file'], 'a') as f:
-        #      f.write(f"Building graph... (started at: {time.ctime()})\n")
-
-        #  self._create_loss()
-
-        #  t1 = time.time()
-        #  print(t_diff_str(t0, t1) + '\n' + str3 + '\n')
-        #  _write_strs_to_file([t_diff_str(t0, t1), str3])
-
-        #  self._create_optimizer()
-
-        #  t2 = time.time()
-        #  print(t_diff_str(t1, t2) + '\n' + str5 + '\n')
-        #  _write_strs_to_file([t_diff_str(t1, t2), str5])
-
         log("  Creating summaries...")
         t0 = time.time()
         self._create_summaries()
@@ -774,15 +644,6 @@ class GaugeModel(object):
         write(s1, self.files['run_info_file'], 'a')
         write(sep_str, self.files['run_info_file'], 'a')
 
-        #  with open(self.files['run_info_file'], 'a') as f:
-        #      f.write(f'Summaries took: {t_diff:4.3g} s to create.\n')
-        #      f.write(f'Graph took: {dt:4.3g} s to build.\n')
-        #      f.write(80 * '-' + '\n')
-
-        #  print(t_diff_str(t2, time.time()) + '\n' + t_diff_str1(t0) + '\n')
-        #  _write_strs_to_file(
-        #      [t_diff_str(t2, time.time()), t_diff_str1(t0)], last=True
-        #  )
 
     def pre_train(self):
         """Set up training for the model."""
@@ -808,6 +669,7 @@ class GaugeModel(object):
     def train(self, num_train_steps, pre_train=True, kill_sess=False,
               trace=False):
         start_time = time.time()
+
         # Move attribute look ups outside loop to improve performance
         #  loss_op = self.loss_op
         #  train_op = self.train_op
@@ -927,6 +789,7 @@ class GaugeModel(object):
                             trace_level=tf.RunOptions.FULL_TRACE
                         )
                         run_metadata = tf.RunMetadata()
+
                     else:
                         options = None
                         run_metadata = None
@@ -937,14 +800,16 @@ class GaugeModel(object):
                             self.beta: beta_np
                         }, options=options, run_metadata=run_metadata
                     )
+
                     if self.condition1 or self.condition2:
                         self.writer.add_summary(summary_str,
                                                 global_step=step)
-                    if trace:
-                        if self.condition1 or self.condition2:
+                        #  if self.condition1 or self.condition2:
+                        if trace:
                             self.writer.add_run_metadata(run_metadata,
                                                          global_step=step)
-                    self.writer.flush()
+
+                        self.writer.flush()
 
 
             log("Training complete!")
@@ -955,7 +820,9 @@ class GaugeModel(object):
             if kill_sess:
                 self.writer.close()
                 self.sess.close()
-            sys.stdout.flush()
+
+            if self.condition1 or self.condition2:
+                sys.stdout.flush()
 
             return 0
 
@@ -1046,10 +913,11 @@ class GaugeModel(object):
                 f'accept_prob_history_{current_step}_TRAIN_{run_steps}.pkl'
             )
 
-        with open(out_file, 'wb') as f:
-            pickle.dump(samples_history, f)
-        with open(px_file, 'wb') as f:
-            pickle.dump(px_history, f)
+        if self.condition1 or self.condition2:
+            with open(out_file, 'wb') as f:
+                pickle.dump(samples_history, f)
+            with open(px_file, 'wb') as f:
+                pickle.dump(px_history, f)
 
         log(f'\nSamples saved to: {out_file}.')
         log(f'Accept probabilities saved to: {px_file}.')
