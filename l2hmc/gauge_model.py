@@ -135,11 +135,10 @@ def tf_accept(x, _x, px):
     return tf.where(mask, _x, x)
 
 def graph_step(dynamics, optimizer, samples, beta, step, 
-               aux=True, out_file=None):
+               aux=True):
     with tf.name_scope('train'):
         loss, grads, samples, accept_prob = loss_and_grads(
-            dynamics, samples, beta, loss_fn=compute_loss,
-            aux=aux, out_file=out_file
+            dynamics, samples, beta, loss_fn=compute_loss, aux=aux
         )
         train_op = optimizer.apply_gradients(zip(grads, dynamics.variables),
                                              global_step=step,
@@ -149,7 +148,7 @@ def graph_step(dynamics, optimizer, samples, beta, step,
 
 # Loss function
 def compute_loss(dynamics, x, beta, 
-                 aux=True, scale=.1, eps=1e-4, out_file=None):
+                 aux=True, scale=.1, eps=1e-4):
     """Compute loss defined in equation (8)."""
     log("    Creating loss...")
     t0 = time.time()
@@ -178,18 +177,14 @@ def compute_loss(dynamics, x, beta,
 
     t_diff = time.time() - t0
     log(f"    done. took: {t_diff:4.3g} s.")
-
-    if out_file is not None:
-        s = f'Loss took: {t_diff:4.3g} s to create.'
-        write(s, out_file, 'a')
-        #  with open(out_file, 'a') as f:
-        #      f.write(f'Loss took: {t_diff:4.3g} s to create.\n')
+    #  if out_file is not None:
+    #      s = f'Loss took: {t_diff:4.3g} s to create.'
+    #      write(s, out_file, 'a')
 
 
     return loss, x_out, px
 
-def loss_and_grads(dynamics, x, beta, 
-                   loss_fn=compute_loss, aux=True, out_file=None):
+def loss_and_grads(dynamics, x, beta, loss_fn=compute_loss, aux=True):
     """Obtain loss value and gradients."""
     log(f"  Creating gradient operations...")
     t0 = time.time()
@@ -202,9 +197,9 @@ def loss_and_grads(dynamics, x, beta,
     t_diff = time.time() - t0
     log(f"  done. took: {t_diff:4.3g} s")
 
-    if out_file is not None:
-        s = f'Gradient operations took: {t_diff:4.3g} s to create.\n'
-        write(s, out_file, 'a')
+    #  if out_file is not None:
+    #      s = f'Gradient operations took: {t_diff:4.3g} s to create.\n'
+    #      write(s, out_file, 'a')
         #  with open(out_file, 'a') as f:
         #      f.write(f'Gradient operations took: {t_diff:4.3g} s to create.\n')
 
@@ -474,7 +469,6 @@ class GaugeModel(object):
 
     def _save_model(self, samples=None, step=None):
         """Save run `data` to `files` in `log_dir` using `checkpointer`"""
-
         if HAS_HOROVOD and self.using_hvd:
             if hvd.rank() != 0:
                 return
@@ -624,21 +618,19 @@ class GaugeModel(object):
             opt = hvd.DistributedOptimizer(self.optimizer)
 
         log(80 * '-' + '\n', nl=False)
-        log(f"Building graph... (started at: {time.ctime()})")
+        s = f"Building graph... (started at: {time.ctime()})"
+        log(s)
+
         start_time = time.time()
-        #  str0 = f"Building graph... (started at: {time.ctime()})\n"
         outputs = graph_step(self.dynamics,
                              self.optimizer,
                              self.x,
                              self.beta,
                              self.global_step,
-                             aux=self.aux,
-                             out_file=self.files['run_info_file'])
+                             aux=self.aux)
+                             #  out_file=self.files['run_info_file'])
 
         self.train_op, self.loss_op, self.grads, self.x_out, self.px = outputs
-
-        s = f"Building graph... (started at: {time.ctime()})\n"
-        write(s, self.files['run_info_file'], 'a')
 
         log("  Creating summaries...")
         t0 = time.time()
@@ -648,13 +640,15 @@ class GaugeModel(object):
         log(f'done. took: {time.time() - start_time:4.3g} s to create.\n',False)
         log(80 * '-' + '\n', nl=False)
 
-        dt = time.time() - start_time
-        s0 = f'Summaries took: {t_diff:4.3g} s to create.\n'
-        s1 = f'Graph took: {dt:4.3g} s to build.\n'
-        sep_str = 80 * '-'
-        write(s0, self.files['run_info_file'], 'a')
-        write(s1, self.files['run_info_file'], 'a')
-        write(sep_str, self.files['run_info_file'], 'a')
+        if self.condition1 or self.condition2:
+            write(s, self.files['run_info_file'], 'a')
+            dt = time.time() - start_time
+            s0 = f'Summaries took: {t_diff:4.3g} s to create.\n'
+            s1 = f'Graph took: {dt:4.3g} s to build.\n'
+            sep_str = 80 * '-'
+            write(s0, self.files['run_info_file'], 'a')
+            write(s1, self.files['run_info_file'], 'a')
+            write(sep_str, self.files['run_info_file'], 'a')
 
 
     def pre_train(self):
@@ -834,7 +828,8 @@ class GaugeModel(object):
             step = self.sess.run(self.global_step)
             self._save_model(samples=samples_np, step=step)
 
-            helpers.write_run_data(self.files['run_info_file'], self.data)
+            if self.condition1 or self.condition2:
+                helpers.write_run_data(self.files['run_info_file'], self.data)
             if kill_sess:
                 self.writer.close()
                 self.sess.close()
