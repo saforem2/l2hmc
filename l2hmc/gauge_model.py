@@ -27,6 +27,8 @@ import tensorflow as tf
 try:
     import horovod.tensorflow as hvd
     HAS_HOROVOD = True
+    hvd.init()
+
 except ImportError:
     HAS_HOROVOD = False
 
