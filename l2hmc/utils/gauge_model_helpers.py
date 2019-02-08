@@ -147,7 +147,7 @@ def _create_log_dir(base_name):
         os.makedirs(figs_dir)
     return log_dir, info_dir, figs_dir
 
-def _create_log_dir(base_name):
+def create_log_dir(base_name):
     """Create directory for storing information about experiment."""
     try:
         if HAS_HOROVOD and hvd.rank() != 0:
