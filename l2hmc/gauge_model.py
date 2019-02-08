@@ -1007,20 +1007,14 @@ class GaugeModel(object):
                             f'\t time/step: {tt:^6.4g}\n')
 
                 log(eval_str)
-                log('accept prob: ', px)
+                log('accept prob: ', nl=False)
+                log(px)
                 log('\n')
 
-                try:
-                    write(eval_str, eval_file, 'a')
-                    write('accept_prob:', eval_file, 'a', nl=False)
-                    write(px, eval_file, 'a', nl=True)
-                    write('', eval_file, 'a')
-                    #  with open(eval_file, 'a') as f:
-                    #      f.write(eval_str)
-                    #      f.write('accept_prob: ', px)
-                    #      f.write('\n')
-                except:
-                    continue
+                write(eval_str, eval_file, 'a')
+                write('accept_prob:', eval_file, 'a', nl=False)
+                write(px, eval_file, 'a', nl=True)
+                write('', eval_file, 'a')
 
 
         if current_step is None:

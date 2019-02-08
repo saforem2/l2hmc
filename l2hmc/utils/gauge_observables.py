@@ -213,7 +213,8 @@ def _calc_observables(samples, params):
               f"avg plaquette: {np.mean(plaqs):^6.4g} ")
               #  "top charges: ")
         log('\n')
-        log('top_charges: ', [int(i) for i in charges])
+        log('top_charges: ', nl=False)
+        log(charges)
         log('\n')
 
     return (np.array(total_actions),
