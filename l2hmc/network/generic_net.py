@@ -19,30 +19,35 @@ import tensorflow as tf
 
 class GenericNet(tf.keras.Model):
     """Conv. neural net with different initialization scale based on input."""
-    def __init__(self, 
-                 x_dim, 
-                 links_shape, 
-                 factor, 
-                 num_hidden=200,
-                 model_name='GenericNet',
-                 variable_scope='Net'):
+    def __init__(self, model_name='GenericNet', **kwargs):
         """Initialization method."""
 
         super(GenericNet, self).__init__(name=model_name)
 
-        self.links_shape = links_shape
-        self.x_dim = x_dim
+        for key, val in kwargs.items():
+            setattr(self, key, val)
 
-        with tf.variable_scope(variable_scope):
+
+        #  with tf.variable_scope(variable_scope):
+        with tf.name_scope(self.name_scope):
             self.flatten_x = tf.keras.layers.Flatten(name='flat_x')
             self.flatten_v = tf.keras.layers.Flatten(name='flat_v')
 
-            self.x_layer = _custom_dense(num_hidden, factor/3., name='x_layer')
-            self.v_layer = _custom_dense(num_hidden, 1./3., name='v_layer')
-            self.t_layer = _custom_dense(num_hidden, 1./3., name='t_layar')
-            self.h_layer = _custom_dense(num_hidden, name='h_layer')
+            self.x_layer = _custom_dense(self.num_hidden,
+                                         self.factor/3.,
+                                         name='x_layer')
+            self.v_layer = _custom_dense(self.num_hidden,
+                                         1./3.,
+                                         name='v_layer')
+            self.t_layer = _custom_dense(self.num_hidden,
+                                         1./3.,
+                                         name='t_layer')
+            self.h_layer = _custom_dense(self.num_hidden,
+                                         name='h_layer')
 
-            self.scale_layer = _custom_dense(self.x_dim, 0.001, name='h_layer')
+            self.scale_layer = _custom_dense(self.x_dim,
+                                             0.001,
+                                             name='h_layer')
 
             self.coeff_scale = tf.Variable(
                 initial_value=tf.zeros([1, self.x_dim]),
@@ -74,35 +79,33 @@ class GenericNet(tf.keras.Model):
     def call(self, inputs):
         """call method.
 
-        NOTE: Architecture looks like 
-        
-        - inputs: x, v, t
+        NOTE: 
+            * Architecture looks like 
+                * inputs: x, v, t
+                    x --> FLATTEN_X --> X_LAYER --> X_OUT
+                    v --> FLATTEN_V --> V_LAYER --> V_OUT
+                    t --> T_LAYER --> T_OUT
 
-            x --> FLATTEN_X --> X_LAYER --> X_OUT
-            v --> FLATTEN_V --> V_LAYER --> V_OUT
-            t --> T_LAYER --> T_OUT
+                    X_OUT + V_OUT + T_OUT --> H_LAYER --> H_OUT
 
-           X_OUT + V_OUT + T_OUT --> H_LAYER --> H_OUT
+                * H_OUT is then fed to three separate layers:
+                    (1.) H_OUT -->
+                           TANH(SCALE_LAYER) * exp(COEFF_SCALE) --> SCALE_OUT
 
+                         input: H_OUT
+                         output: scale
+                
+                    (2.) H_OUT --> TRANSLATION_LAYER --> TRANSLATION_OUT
 
-        - H_OUT is then fed to three separate layers:
+                         input: H_OUT
+                         output: translation
 
-            (1.) H_OUT --> TANH(SCALE_LAYER) * exp(COEFF_SCALE) --> SCALE_OUT
+                    (3.) H_OUT -->
+                           TANH(SCALE_LAYER)*exp(COEFF_TRANSFORMATION) -->
+                             TRANFORMATION_OUT
 
-                 input: H_OUT
-                 output: scale
-            
-            (2.) H_OUT --> TRANSLATION_LAYER --> TRANSLATION_OUT
-
-                 input: H_OUT
-                 output: translation
-
-            (3.) H_OUT
-                    --> TANH(SCALE_LAYER)*exp(COEFF_TRANSFORMATION) 
-                                                        --> TRANFORMATION_OUT
-
-                 input: H_OUT
-                 output: transformation
+                         input: H_OUT
+                         output: transformation
 
        Returns:
            scale, translation, transformation

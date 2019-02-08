@@ -150,22 +150,31 @@ class GaugeDynamics(tf.keras.Model):
 
     def _build_generic_nets(self):
         """Build GenericNet FC-architectures for position and momentum fns. """
+
+        kwargs = {
+            'x_dim': self.x_dim,
+            'links_shape': self.lattice.links.shape,
+            'num_hidden': int(2 * self.x_dim),
+            'factor': 2.
+        }
+
         with tf.name_scope("DynamicsNetwork"):
             with tf.name_scope("XNet"):
-                self.position_fn = GenericNet(
-                    self.x_dim,
-                    self.lattice.links.shape,
-                    factor=2.,
-                    num_hidden=int(2*self.x_dim)
-                )
+                self.position_fn = GenericNet(model_name='XNet', **kwargs)
+                    #  self.x_dim,
+                    #  self.lattice.links.shape,
+                    #  factor=2.,
+                    #  num_hidden=int(2*self.x_dim)
+                #  )
 
+            kwargs['factor'] = 1.
             with tf.name_scope("VNet"):
-                self.momentum_fn = GenericNet(
-                    self.x_dim,
-                    self.lattice.links.shape,
-                    factor=1.,
-                    num_hidden=int(2*self.x_dim)
-                )
+                self.momentum_fn = GenericNet(model_name='VNet', **kwargs)
+                #      self.x_dim,
+                #      self.lattice.links.shape,
+                #      factor=1.,
+                #      num_hidden=int(2*self.x_dim)
+                #  )
 
     # pylint:disable=too-many-locals
     def apply_transition(self, position, beta):
