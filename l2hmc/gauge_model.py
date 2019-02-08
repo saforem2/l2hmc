@@ -1110,6 +1110,7 @@ def main(flags):
     if flags.horovod:
         params['using_hvd'] = True
         params['train_steps'] = params['train_steps'] // hvd.size()
+        hvd.init()
 
     config = tf.ConfigProto()
 
