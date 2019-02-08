@@ -16,8 +16,10 @@ import tensorflow as tf
 import matplotlib.pyplot as plt
 
 from scipy.optimize import curve_fit
-
 from pandas.plotting import autocorrelation_plot
+from collections import Counter
+
+from astropy.stats import jackknife_resampling, jackknife_stats
 
 from lattice.lattice import GaugeLattice, u1_plaq_exact
 #  from lattice.gauge_lattice import GaugeLattice, u1_plaq_exact
@@ -86,6 +88,7 @@ def jackknife_var(x, fn):
 ##############################################################################
 # Create lattice and calculate relevant observables.
 ##############################################################################
+
 def _make_lattice(params):
     """Return GaugeLattice object with attributes defined by `params` dict."""
     return GaugeLattice(time_size=params['time_size'],
@@ -94,6 +97,62 @@ def _make_lattice(params):
                         link_type=params['link_type'],
                         num_samples=params['num_samples'],
                         rand=params['rand'])
+
+def _calc_susceptibility_stats(charges):
+    """Calculate statistics for the topological susceptibility from charges.
+
+    Args:
+        charges: Array (shape: (num_steps, num_samples) containing topological
+            charge history of L2HMC chain, comprised of multiple samples. 
+
+    Returns:
+        estimate_arr: List containing the estimated sample statistic for each
+            sample in charges.
+        bias_arr: List containing the estimated bias statistic for each sample
+            in charges.
+        stderr_arr: List containing the stderr of the sample statistic for each
+            sample in charges.
+        conf_interval: List containing the confidence interval for the sample
+            statistic for each sample in charges. 
+            NOTE: intervals aligned column-wise.
+    """
+    mean_squared = lambda x: np.mean(x) ** 2
+    squared_mean = lambda x: np.mean(x ** 2)
+    test_statistic = lambda x: mean_squared(x) - squared_mean(x)
+    estimate_arr = []
+    bias_arr = []
+    stderr_arr = []
+    conf_interval_arr = []
+    #  stats_strings_arr = []
+    for idx, q in enumerate(charges.T):  # q is the top. charge of sample idx
+        #  q_squared = q ** 2
+        q_rs = jackknife_resampling(q)
+        # want to calculate the susceptibility as 
+        # susceptibility = mean(q ** 2) - mean(q) ** 2
+        estimate, bias, stderr, conf_interval = jackknife_stats(q,
+                                                                test_statistic,
+                                                                0.95)
+
+        str0 = (f"Topological susceptibility statistics for sample {idx}, "
+                f"consisting of {q_rs.shape[0]} L2HMC steps.")
+        sep_str = len(str0) * '-' + '\n'
+
+        print(sep_str)
+        print(str0)
+        print(f'estimate: {estimate}')
+        print(f'bias: {bias}')
+        print(f'stderr: {stderr}')
+        print(f'conf_interval: {conf_interval}\n')
+        print(sep_str)
+
+        estimate_arr.append(estimate)
+        bias_arr.append(bias)
+        stderr_arr.append(stderr)
+        conf_interval_arr.extend(conf_interval)
+
+    stats = (estimate_arr, bias_arr, stderr_arr, conf_interval_arr)
+
+    return stats
 
 # pylint: disable=invalid-name, too-many-locals
 def _calc_observables(samples, params):
@@ -116,8 +175,6 @@ def _calc_observables(samples, params):
 
     observables_fn = None
     lattice = _make_lattice(params)
-    #  observables_fn = lattice.calc_plaq_observables
-
 
     total_actions = []
     avg_plaquettes = []
@@ -145,12 +202,14 @@ def _calc_observables(samples, params):
         print('top_charges: ', [int(i) for i in charges])
         print('\n')
 
-
-              #  f"top charges: {np.mean(charges):^6.4g}")
-
     return (np.array(total_actions),
             np.array(avg_plaquettes),
             np.array(top_charges))
+
+
+##############################################################################
+# Load samples and create necessary directory structure
+##############################################################################
 
 def find_samples(log_dir):
     """Calculate observables from collection of samples stored in log_dir.
@@ -191,109 +250,6 @@ def find_samples(log_dir):
 
     return params, step_keys, samples_files, figs_dir_dict
 
-def calc_observables(log_dir, observables_dicts=None):
-    """Calculate observables from samples generated from trained sampler."""
-    params, step_keys, samples_files, figs_dir_dict = find_samples(log_dir)
-
-    if observables_dicts is None:
-        actions_dict, plaqs_dict, charges_dict = {}, {}, {}
-    else:
-        actions_dict, plaqs_dict, charges_dict = observables_dicts
-
-    for idx, sample_file in enumerate(samples_files):
-        step = step_keys[idx]
-        if step not in charges_dict.keys():
-            print(f"Calculating observables for {step}...")
-            with open(sample_file, 'rb') as f:
-                samples = pickle.load(f)
-
-            actions, plaqs, charges = _calc_observables(samples, params)
-            actions_dict[step] = actions
-            plaqs_dict[step] = plaqs
-            charges_dict[step] = charges
-
-            del samples
-        else:
-            print(f"Observables alredy calculated for {step} eval steps.")
-
-    observables_dir = os.path.join(log_dir, 'observables/')
-    #  observables_dir_dict = {}
-    for key in step_keys:
-        obs_dir = os.path.join(observables_dir, f'{key}_steps')
-        check_else_make_dir(obs_dir)
-        actions_file = os.path.join(obs_dir, f'actions_{key}.pkl')
-        plaqs_file = os.path.join(obs_dir, f'plaqs_{key}.pkl')
-        charges_file = os.path.join(obs_dir, f'charges_{key}.pkl')
-        if not os.path.isfile(actions_file):
-            with open(actions_file, 'wb') as f:
-                pickle.dump(actions_dict[key], f)
-        if not os.path.isfile(plaqs_file):
-            with open(plaqs_file, 'wb') as f:
-                pickle.dump(plaqs_dict[key], f)
-        if not os.path.isfile(charges_file):
-            with open(charges_file, 'wb') as f:
-                pickle.dump(charges_dict[key], f)
-
-    observables_dicts = (actions_dict, plaqs_dict, charges_dict)
-
-    return observables_dicts
-
-def plot_top_charges(log_dir, charges_dict):
-    """Plot top. charge history using samples generated during training."""
-    params, _, _, figs_dir_dict = find_samples(log_dir)
-    plt.close('all')
-
-    for key, val in charges_dict.items():
-        for idx in range(val.shape[1]):
-            fig, ax = plt.subplots()
-            _ = ax.plot(val[:, idx],
-                        marker=MARKERS[idx],
-                        color=COLORS[idx],
-                        ls='',
-                        fillstyle='none',
-                        label=f'sample {idx}')
-            _ = ax.legend(loc='best')
-            _ = ax.set_xlabel('Step', fontsize=14)
-            _ = ax.set_ylabel('Topological charge', fontsize=14)
-            title_str = (r"$\beta = $"
-                         + f"{params['beta_final']}, {key} steps")
-            _ = ax.set_title(title_str, fontsize=16)
-            out_dir = os.path.join(
-                figs_dir_dict[key], 'topological_charges_history'
-            )
-            check_else_make_dir(out_dir)
-            out_file = os.path.join(
-                out_dir,
-                f'topological_charge_history_sample_{idx}.pdf'
-            )
-            if not os.path.isfile(out_file):
-                print(f"Saving figure to {out_file}.")
-                _ = fig.savefig(out_file, dpi=400, bbox_inches='tight')
-
-
-##############################################################################
-# Calculate thermalization time by fitting observable to exponential
-##############################################################################
-def _calc_thermalization_time(samples):
-    """Calculate the time required for `samples` to sufficiently thermalize.
-
-    Note:
-        There doesn't seem to be a general consesus on how best to approach
-        this problem. Further thought required.
-    """
-    def exp_fn(x, A, B, C, D):
-        return A * np.exp(B * (x - C)) + D
-
-    xdata = np.arange(samples.shape[0])
-
-    popt, pcov = curve_fit(f, xdata=xdata, ydata=samples)
-
-    return popt, pcov
-
-
-##############################################################################
-# Load samples and calculate observables generated during training
-##############################################################################
 def find_training_samples(log_dir):
     """Find files containing samples generated during training."""
     info_dir = os.path.join(log_dir, 'run_info/')
@@ -323,78 +279,152 @@ def find_training_samples(log_dir):
 
     return params, step_keys, train_samples_files, training_figs_dir_dict
 
-def calc_training_observables(log_dir, observables_dicts=None):
-    """Calculate observables from samples generated during training."""
-    output = find_training_samples(log_dir)
-    params, step_keys, train_samples_files, training_figs_dir_dict = output
 
+##############################################################################
+# Calculate observables directly from `log_dir` using the methods above to help
+# load samples.
+##############################################################################
+
+def calc_observables(log_dir, observables_dicts=None, training=False):
+    """Calculate and save observables from samples contained in `log_dir`.
+
+    Args:
+        log_dir: String representing the path containing the relevant samples.
+            The samples files themselves should be in a subdirectory of
+            `log_dir` called `samples_history`.
+        observables_dicts: Tuple of dictionaries (actions_dict, 
+                                                  avg_plaquettes_dict, 
+                                                  charges_dict, 
+                                                  susceptibility_stats_dict).
+        training: Boolean value specifying if samples should be loaded from
+        separate subdirectory containing samples generated during the training
+            process.
+
+    Returns:
+        observables_dicts: Tuple of dictionaries (actions_dict, 
+                                                  avg_plaquettes_dict, 
+                                                  charges_dict, 
+                                                  susceptibility_stats_dict).
+
+     NOTE: 
+         * If observables_dicts is None, the observables will all be
+         recalculated. If observables_dicts is not None, observables will only
+         be calculated if they're not already contained in observables_dicts,
+         so each of the above dictionaries only gets updated (instead of
+         entirely recalculated).  
+    """
+    if training:
+        output = find_training_samples(log_dir)
+    else:
+        output = find_samples(log_dir)
+
+    params, step_keys, samples_files, figs_dir_dict = output
 
     if observables_dicts is None:
         actions_dict, plaqs_dict, charges_dict = {}, {}, {}
+        susceptibility_stats_dict = {}
     else:
-        actions_dict, plaqs_dict, charges_dict = observables_dicts
+        actions_dict = observables_dicts[0]
+        plaqs_dict = observables_dicts[1]
+        charges_dict = observables_dicts[2]
+        susceptibility_stats_dict = observables_dicts[3]
 
-    for idx, sample_file in enumerate(train_samples_files):
+    for idx, sample_file in enumerate(samples_files):
         step = step_keys[idx]
-
         if step not in charges_dict.keys():
-            print(f"Calculating observables for {step} training steps...")
+            print(f"Calculating observables for {step}...")
             with open(sample_file, 'rb') as f:
                 samples = pickle.load(f)
 
             actions, plaqs, charges = _calc_observables(samples, params)
-
             actions_dict[step] = actions
             plaqs_dict[step] = plaqs
             charges_dict[step] = charges
 
-            del samples  # free up memory
+            susceptibility_stats = _calc_susceptibility_stats(charges)
+            susceptibility_stats_dict[step] = {
+                'estimate': susceptibility_stats[0],
+                'bias': susceptibility_stats[1],
+                'stderr': susceptibility_stats[2],
+                'conf_interval': susceptibility_stats[3]
+            }
+
+            del samples
         else:
-            print(f"Observables alredy calculated for {step} training steps.")
+            print(f"Observables alredy calculated for {step} eval steps.")
 
     observables_dir = os.path.join(log_dir, 'observables/')
-    train_observables_dir = os.path.join(observables_dir, 'training')
-    #  train_observables_dir_dict = {}
+    if training:
+        observables_dir = os.path.join(observables_dir, 'training')
+    #  observables_dir_dict = {}
     for key in step_keys:
-        obs_dir = os.path.join(train_observables_dir, f'{key}_steps')
+        obs_dir = os.path.join(observables_dir, f'{key}_steps')
         check_else_make_dir(obs_dir)
-        #  train_observables_dir_dict[key] = obs_dir
+
         actions_file = os.path.join(obs_dir, f'actions_{key}.pkl')
         plaqs_file = os.path.join(obs_dir, f'plaqs_{key}.pkl')
         charges_file = os.path.join(obs_dir, f'charges_{key}.pkl')
-        if not os.path.isfile(actions_file):
-            print(f"Saving actions to: {actions_file}.")
-            with open(actions_file, 'wb') as f:
-                pickle.dump(actions_dict[key], f)
-        if not os.path.isfile(plaqs_file):
-            print(f"Saving plaquettes to: {plaqs_file}.")
-            with open(plaqs_file, 'wb') as f:
-                pickle.dump(plaqs_dict[key], f)
-        if not os.path.isfile(charges_file):
-            print(f"Saving topological charges to: {charges_file}.")
-            with open(charges_file, 'wb') as f:
-                pickle.dump(charges_dict[key], f)
 
-    #  for key, val in train_observables_dir_dict.items():
-    #      actions_file = os.path.join(val, f'actions_{key}.pkl')
-    #      plaqs_file = os.path.join(val, f'plaqs_{key}.pkl')
-    #      charges_file = os.path.join(val, f'charges_{key}.pkl')
-    #      if not os.path.isfile(actions_file):
-    #          print(f"Saving actions to: {actions_file}.")
-    #          with open(actions_file, 'wb') as f:
-    #              pickle.dump(actions_dict[key], f)
-    #      if not os.path.isfile(plaqs_file):
-    #          print(f"Saving plaquettes to: {plaqs_file}.")
-    #          with open(plaqs_file, 'wb') as f:
-    #              pickle.dump(plaqs_dict[key], f)
-    #      if not os.path.isfile(charges_file):
-    #          print(f"Saving topological charges to: {charges_file}.")
-    #          with open(charges_file, 'wb') as f:
-    #              pickle.dump(charges_dict[key], f)
+        susceptibility_stats_pkl_file = os.path.join(
+            obs_dir, f'susceptibility_stats_{key}.pkl'
+        )
+        susceptibility_stats_txt_file = os.path.join(
+            obs_dir, f'susceptibility_stats_{key}.txt'
+        )
 
-    observables_dicts = (actions_dict, plaqs_dict, charges_dict)
+        print(80 * '-' + '\n')
+        print(f"Saving actions to: {actions_file}.")
+        with open(actions_file, 'wb') as f:
+            pickle.dump(actions_dict[key], f)
+
+        print(f"Saving plaquettes to: {plaqs_file}.")
+        with open(plaqs_file, 'wb') as f:
+            pickle.dump(plaqs_dict[key], f)
+
+        print(f"Saving topological charges to: {charges_file}.")
+        with open(charges_file, 'wb') as f:
+            pickle.dump(charges_dict[key], f)
+
+        print(f"Saving suscept. stats to: {susceptibility_stats_pkl_file}")
+        with open(susceptibility_stats_pkl_file, 'wb') as f:
+            pickle.dump(susceptibility_stats_dict[key], f)
+
+        print(f"Writing suscept. stats to: {susceptibility_stats_txt_file}")
+        with open(susceptibility_stats_txt_file, 'w') as f:
+            str0 = f'Topological suscept. stats for {key} steps.\n'
+            f.write(str0)
+            f.write(len(str0) * '-' + '\n')
+            for k, v in susceptibility_stats_dict[key].items():
+                f.write(f'{k}:\n   {v}\n')
+                f.write('\n')
+            f.write(str0 + '\n')
+        print('\n' + 80 * '-' + '\n')
+
+    observables_dicts = (actions_dict, plaqs_dict,
+                         charges_dict, susceptibility_stats_dict)
 
     return observables_dicts
+
+def _calc_thermalization_time(samples):
+    """Calculate the time required for `samples` to sufficiently thermalize.
+
+    Note:
+        There doesn't seem to be a general consesus on how best to approach
+        this problem. Further thought required.
+    """
+    def exp_fn(x, A, B, C, D):
+        return A * np.exp(B * (x - C)) + D
+
+    xdata = np.arange(samples.shape[0])
+
+    popt, pcov = curve_fit(f, xdata=xdata, ydata=samples)
+
+    return popt, pcov
+
+
+##############################################################################
+# High-level plotting functions.
+##############################################################################
 
 def plot_observables(log_dir, observables_dicts, training=False):
     """Plot observables stored in `observables_dicts`."""
@@ -405,7 +435,7 @@ def plot_observables(log_dir, observables_dicts, training=False):
         params, _, _, figs_dir_dict = find_samples(log_dir)
         title_str_key = 'evaluation'
 
-    actions_dict, plaqs_dict, charges_dict = observables_dicts
+    actions_dict, plaqs_dict, charges_dict, _ = observables_dicts
 
     plt.close('all')
     figs_axes = []
@@ -426,12 +456,20 @@ def plot_observables(log_dir, observables_dicts, training=False):
         )
 
         figs_axes.append(fig_ax)
+        print(80 * '-')
 
     return figs_axes
 
-def plot_top_charges_training(log_dir, charges_dict):
+def plot_top_charges(log_dir, charges_dict, training=False):
     """Plot top. charge history using samples generated during training."""
-    params, _, _, training_figs_dir_dict = find_training_samples(log_dir)
+    if training:
+        params, _, _, figs_dir_dict = find_training_samples(log_dir)
+        title_str_key = 'training'
+    else:
+        params, _, _, figs_dir_dict = find_samples(log_dir)
+        title_str_key = 'evaluation'
+    #  params, _, _, figs_dir_dict = find_samples(log_dir)
+
     plt.close('all')
 
     for key, val in charges_dict.items():
@@ -446,20 +484,74 @@ def plot_top_charges_training(log_dir, charges_dict):
             _ = ax.legend(loc='best')
             _ = ax.set_xlabel('Step', fontsize=14)
             _ = ax.set_ylabel('Topological charge', fontsize=14)
-            title_str = (r"$\beta = $"
-                         + f"{params['beta_final']}, {key} training steps")
+            if training:
+                title_str = (r"$\beta = $"
+                             + f"{params['beta_final']}, {key} training steps")
+            else:
+                title_str = (r"$\beta = $"
+                             + f"{params['beta_final']}, {key} eval steps")
             _ = ax.set_title(title_str, fontsize=16)
             out_dir = os.path.join(
-                training_figs_dir_dict[key], 'topological_charges_history'
+                figs_dir_dict[key], 'topological_charges_history'
             )
             check_else_make_dir(out_dir)
             out_file = os.path.join(
                 out_dir,
                 f'topological_charge_history_sample_{idx}.pdf'
             )
+            print(f"Saving figure to {out_file}.")
             if not os.path.isfile(out_file):
-                print(f"Saving figure to {out_file}.")
                 _ = fig.savefig(out_file, dpi=400, bbox_inches='tight')
+        print(80 * '-' + '\n')
+
+def plot_top_charges_counts(log_dir, charges_dict, training=False):
+    """Create scatter plot for the count of of unique values in charges_dict."""
+    if training:
+        params, _, _, figs_dir_dict = find_training_samples(log_dir)
+        title_str_key = 'training'
+    else:
+        params, _, _, figs_dir_dict = find_samples(log_dir)
+        title_str_key = 'evaluation'
+    #  params, _, _, training_figs_dir_dict = find_training_samples(log_dir)
+    #  plt.close('all')
+
+    for key, val in charges_dict.items():
+        for idx in range(val.shape[1]):
+            counts = Counter(val[:, idx])
+            fig, ax = plt.subplots()
+            ax.plot(list(counts.keys()),
+                    list(counts.values()),
+                    marker=MARKERS[idx],
+                    color=COLORS[idx],
+                    ls='',
+                    #  fillstyle='none',
+                    label=f'sample {idx}')
+            _ = ax.legend(loc='best')
+            _ = ax.set_xlabel('Topological charge', fontsize=14)
+            _ = ax.set_ylabel('Number of occurences', fontsize=14)
+            title_str = (r"$\beta = $"
+                         + f"{params['beta_final']}, "
+                         + f"{key} {title_str_key} steps")
+            #  title_str = (r"$\beta = $"
+            #               + f"{params['beta_final']}, {key} training steps")
+            _ = ax.set_title(title_str, fontsize=16)
+            out_dir = os.path.join(
+                figs_dir_dict[key], 'topological_charges_counts'
+            )
+            check_else_make_dir(out_dir)
+            out_file = os.path.join(
+                out_dir,
+                f'topological_charge_counts_sample_{idx}.pdf'
+            )
+            print(f"Saving figure to {out_file}.")
+            if not os.path.isfile(out_file):
+                _ = fig.savefig(out_file, dpi=400, bbox_inches='tight')
+        print(80 * '-' + '\n')
+
+
+
+
+
 
 
 ##############################################################################

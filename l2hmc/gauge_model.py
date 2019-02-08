@@ -55,6 +55,7 @@ PARAMS = {
     'dim': 2,
     'num_samples': 6,
     'rand': False,
+    'data_format': 'channels_last',
 #--------------------- Leapfrog parameters ---------------------------
     'num_steps': 5,
     'eps': 0.2,
@@ -68,14 +69,15 @@ PARAMS = {
     'annealing': True,
     'annealing_steps': 200,
     'annealing_factor': 0.97,
-    'beta': 2.,
+    #  'beta': 2.,
     'beta_init': 2.,
     'beta_final': 8.,
 #--------------------- Training parameters ---------------------------
     'train_steps': 10000,
     'save_steps': 1000,
     'logging_steps': 50,
-    'training_samples_steps': 500,
+    'print_steps': 1,
+    'training_samples_steps': 1000,
     'training_samples_length': 100,
 #--------------------- Model parameters ------------------------------
     'conv_net': True,
@@ -106,9 +108,6 @@ def tf_accept(x, _x, px):
     mask = (px - tf.random_uniform(tf.shape(px)) > 0.)
     return tf.where(mask, _x, x)
 
-# To be defunnable, the function cannot return an Operation, so the above
-# function is used for defun or eager, and this function is used in graph to be
-# able to run the gradient updates.
 def graph_step(dynamics, optimizer, samples, beta, step, out_file=None):
     with tf.name_scope('train'):
         loss, grads, samples, accept_prob = loss_and_grads(
@@ -117,7 +116,6 @@ def graph_step(dynamics, optimizer, samples, beta, step, out_file=None):
         train_op = optimizer.apply_gradients(zip(grads, dynamics.variables),
                                              global_step=step,
                                              name='train_op')
-
 
     return train_op, loss, grads, samples, accept_prob
 
@@ -301,7 +299,7 @@ class GaugeModel(object):
             'samples': [],
             'eps': params.get('eps', 0.),
             'beta_init': params.get('beta_init', 1.),
-            'beta': params.get('beta', 1.),
+            'beta': params.get('beta_init', 1.),
             'train_steps': params.get('train_steps', 1000),
             'learning_rate': params.get('learning_rate_init', 1e-4),
         }
@@ -433,8 +431,9 @@ class GaugeModel(object):
         with open(self.files['data_pkl_file'], 'wb') as f:
             pickle.dump(self.data, f)
 
-        with open(self.files['samples_pkl_file'], 'wb') as f:
-            pickle.dump(samples, f)
+        if samples is not None:
+            with open(self.files['samples_pkl_file'], 'wb') as f:
+                pickle.dump(samples, f)
 
         if not tf.executing_eagerly():
             ckpt_prefix = os.path.join(self.log_dir, 'ckpt')
@@ -1000,7 +999,6 @@ def main(flags):
     params['annealing'] = flags.annealing
     params['annealing_steps'] = flags.annealing_steps
     params['annealing_factor'] = flags.annealing_factor
-    params['beta'] = flags.beta
     params['beta_init'] = flags.beta_init
     params['beta_final'] = flags.beta_final
 ########################### Training parameters ##############################
@@ -1019,6 +1017,10 @@ def main(flags):
     params['clip_grads'] = flags.clip_grads
     params['clip_value'] = flags.clip_value
 
+    if flags.beta != flags.beta_init:
+        if flags.annealing:
+            params['beta'] = flags.beta_init
+
     eps_trainable = True
 
     if flags.hmc:
@@ -1034,6 +1036,19 @@ def main(flags):
         config.allow_soft_placement = True
         #  config.intra_op_parallelism_threads = flags.num_intra_threads
         #  config.inter_op_parallelism_threads = flags.num_inter_threads
+
+    if flags.theta:
+        print("Training on Theta @ ALCF...")
+        params['data_format'] = 'channels_last'
+        os.environ["KMP_BLOCKTIME"] = str(0)
+        os.environ["KMP_AFFINITY"] = "granularity=fine,verbose,compact,1,0"
+        config.allow_soft_placement = True
+        config.intra_op_parallelism_threads = str(62)
+
+
+
+    else:
+        params['data_format'] = 'channels_last'
 
 
     model = GaugeModel(params=params,
@@ -1274,6 +1289,11 @@ if __name__ == '__main__':
                         required=False, dest="gpu",
                         help=("Flag that when passed indicates we're training "
                               "using an NVIDIA GPU."))
+
+    parser.add_argument("--theta", action="store_true",
+                        required=False, dest="theta",
+                        help=("Flag that when passed indicates we're training "
+                              "on theta @ ALCf."))
 
     parser.add_argument("--num_intra_threads", default=0,
                         required=False, dest="num_intra_threads",

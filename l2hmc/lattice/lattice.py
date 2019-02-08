@@ -330,23 +330,11 @@ class GaugeLattice(object):
                 Sp = 1 - cos(Qp), where Qp is the plaquette operator defined as
                 the sum of the angles (phases) around an elementary plaquette.
         """
-        #  if links.shape != self.links.shape:
-        #      links = tf.reshape(links, self.links.shape)
-
         total_action = np.sum([
             1. - tf.cos(
                 links[v[0]] + links[v[1]] - links[v[2]] - links[v[3]]
             ) for v in list(self.plaquettes_dict.values())
         ])
-        #  total_action = 0.0
-        #  for v in self.plaquettes_dict.values():
-        #      total_action += 1. - tf.math.cos(
-        #          links[v[0]] + links[v[1]] - links[v[2]] - links[v[3]]
-        #      )
-        #  for plaq in self.plaquette_idxs:
-        #      *site, u, v = plaq
-        #      plaq_sum = self.plaquette_operator(site, u, v, links)
-        #      total_action += 1 - self.action_operator(plaq_sum)
 
         return total_action
 

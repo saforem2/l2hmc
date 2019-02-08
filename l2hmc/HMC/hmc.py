@@ -49,9 +49,6 @@ class HMC(object):
 
     def apply_transition(self, position):
         """Propose a new state and perform accept/reject step."""
-        #  if not isinstance(position, np.ndarray):
-        #      position = np.array(position)
-
         #  momentum = tf.random_normal(tf.shape(position))
         momentum = np.random.randn(*position.shape)
         position_post, momentum_post = position, momentum
@@ -62,15 +59,8 @@ class HMC(object):
         #  ]
         #  position_post, momentum_post = leapfrog_out
         for i in range(self.n_leapfrog_steps):
-            leapfrog_out = self._leapfrog_fn(position_post, momentum_post, i)
+            leapfrog_out = self._leapfrog_fn(position_post, momentum_post)#, i)
             position_post, momentum_post = leapfrog_out
-
-        #  old_hamil = self.hamiltonian(position, momentum)
-        #  new_hamil = self.hamiltonian(position_post, momentum_post)
-        #  prob = np.exp(np.minimum((old_hamil - new_hamil), 0.))
-        #  #  prob = np.minimum(np.exp(old_hamil - new_hamil), 1)
-        #  if np.random.uniform() <= prob:
-        #      return position_post, momentum_post, prob
 
         old_hamil = self.hamiltonian(position, momentum)
         new_hamil = self.hamiltonian(position_post, momentum_post)
@@ -87,12 +77,12 @@ class HMC(object):
 
         return new_position, new_momentum, prob
 
-    def _leapfrog_fn(self, position, momentum, i):
+    def _leapfrog_fn(self, position, momentum):
         """One leapfrog step."""
-        t = self._get_time(i)  # pylint: ignore-invalid-name
-        momentum = self._update_momentum(position, momentum, t)
-        position = self._update_position(position, momentum, t)
-        momentum = self._update_momentum(position, momentum, t)
+        #  t = self._get_time(i)  # pylint: ignore-invalid-name
+        momentum = self._update_momentum(position, momentum)#, t)
+        position = self._update_position(position, momentum)#, t)
+        momentum = self._update_momentum(position, momentum)#, t)
 
         return position, momentum
 
