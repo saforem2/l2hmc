@@ -1129,6 +1129,8 @@ def main(flags):
         config.allow_soft_placement = True
         #  config.intra_op_parallelism_threads = flags.num_intra_threads
         #  config.inter_op_parallelism_threads = flags.num_inter_threads
+    else:
+        params['data_format'] = 'channels_last'
 
     if flags.theta:
         print("Training on Theta @ ALCF...")
@@ -1136,11 +1138,9 @@ def main(flags):
         os.environ["KMP_BLOCKTIME"] = str(0)
         os.environ["KMP_AFFINITY"] = "granularity=fine,verbose,compact,1,0"
         config.allow_soft_placement = True
-        config.intra_op_parallelism_threads = 62
+        #  config.intra_op_parallelism_threads = 62
 
 
-    else:
-        params['data_format'] = 'channels_last'
 
 
     model = GaugeModel(params=params,
