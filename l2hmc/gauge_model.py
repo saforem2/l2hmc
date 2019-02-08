@@ -215,7 +215,7 @@ def loss_and_grads(dynamics, x, beta,
 class GaugeModel(object):
     """Wrapper class implementing L2HMC algorithm on lattice gauge models."""
     def __init__(self,
-                 params=None,
+                 params=PARAMS,
                  sess=None,
                  config=None,
                  log_dir=None,
@@ -226,61 +226,61 @@ class GaugeModel(object):
         tf.set_random_seed(GLOBAL_SEED)
         tf.enable_resource_variables()
 
+        # create attributes using key, value pairs in params
+        self._init_params(params)
+
         if config is None:
             config = tf.ConfigProto()
 
-        if log_dir is None:
-            dirs = helpers.create_log_dir('gauge_logs_graph')
-        else:
-            dirs = helpers.check_log_dir(log_dir)
+        # condition1 checks if we're not using horovod. 
+        # In that case, we don't have to worry about performany any file IO and
+        # things can proceed normally. Otherwise, if we are using horovod,
+        # condition2 checks if hvd.rank() == 0 before performing any file IO.
+        if self.condition1 or self.condition2:
+            if log_dir is None:
+                dirs = helpers.create_log_dir('gauge_logs_graph')
+            else:
+                dirs = helpers.check_log_dir(log_dir)
 
         self.log_dir, self.info_dir, self.figs_dir = dirs
+
+        self._create_dir_structure()
+
+        self._write_run_parameters(_print=True)
 
         self.summary_writer = (
             tf.contrib.summary.create_file_writer(self.log_dir)
         )
 
-        self.data = {}
-        self.train_samples = {}
-        self.losses_arr = []
-        self.steps_arr = []
-        self.samples_arr = []
-        self.accept_prob_arr = []
-        self.step_times_arr = []
-
-        # create attributes using key, value pairs in params
-        self._init_params(params)
-
-        with tf.name_scope('input'):
-            with tf.name_scope('lattice'):
-                self.lattice = GaugeLattice(time_size=self.time_size,
-                                            space_size=self.space_size,
-                                            dim=self.dim,
-                                            link_type=self.link_type,
-                                            num_samples=self.num_samples,
-                                            rand=self.rand,
-                                            data_format=self.data_format)
+        with tf.name_scope('lattice'):
+            self.lattice = GaugeLattice(time_size=self.time_size,
+                                        space_size=self.space_size,
+                                        dim=self.dim,
+                                        link_type=self.link_type,
+                                        num_samples=self.num_samples,
+                                        rand=self.rand,
+                                        data_format=self.data_format)
 
 
-            self.batch_size = self.lattice.samples.shape[0]
-            self.samples = tf.convert_to_tensor(
-                self.lattice.samples, dtype=tf.float32
-            )
-            if not tf.executing_eagerly():
-                self.x = tf.placeholder(dtype=tf.float32,
-                                        shape=self.samples.shape,
-                                        name='x')
+        self.batch_size = self.lattice.samples.shape[0]
+        self.samples = tf.convert_to_tensor(
+            self.lattice.samples, dtype=tf.float32
+        )
 
-                self.beta = tf.placeholder(tf.float32, shape=(), name='beta')
-            else:
-                self.beta = self.beta_init
+        if not tf.executing_eagerly():
+            self.x = tf.placeholder(dtype=tf.float32,
+                                    shape=self.samples.shape,
+                                    name='x')
+
+            self.beta = tf.placeholder(tf.float32, shape=(), name='beta')
+        else:
+            self.beta = self.beta_init
 
         with tf.name_scope('potential_fn'):
             self.potential_fn = self.lattice.get_energy_function(self.samples)
 
         if restore:
             self._restore_model(self.log_dir)
-
         else:
             kwargs = {
                 'beta_init': self.beta_init,
@@ -294,12 +294,6 @@ class GaugeModel(object):
                 self.dynamics = GaugeDynamics(lattice=self.lattice,
                                               potential_fn=self.potential_fn,
                                               **kwargs)
-                                              #  beta_init=self.beta_init,
-                                              #  num_steps=self.num_steps,
-                                              #  eps=self.eps,
-                                              #  conv_net=self.conv_net,
-                                              #  hmc=self.hmc,
-                                              #  eps_trainable=self.eps_trainable)
 
 
             # if running generic HMC, all we need is self.x_out to sample
@@ -324,10 +318,12 @@ class GaugeModel(object):
         for key, val in params.items():
             setattr(self, key, val)
 
-        #  if self.annealing:
-            #  self.beta = params.get('beta_init', 1.,)
-        #  else:
-            #  self.beta = params.get('beta_final')
+        #  self.train_samples = {}
+        self.losses_arr = []
+        #  self.steps_arr = []
+        #  self.samples_arr = []
+        #  self.accept_prob_arr = []
+        #  self.step_times_arr = []
 
         self.params = params
 
@@ -344,9 +340,11 @@ class GaugeModel(object):
             'learning_rate': params.get('learning_rate_init', 1e-4),
         }
 
-        self._create_dir_structure()
-
-        self._write_run_parameters(_print=True)
+        self.condition1 = not self.using_hvd
+        self.condition2 = False
+        if self.using_hvd:
+            if hvd.rank() == 0:
+                self.condition2 = True
 
         if not self.clip_grads:
             self.clip_value = None
@@ -363,15 +361,15 @@ class GaugeModel(object):
         }
 
         self.samples_history_dir = os.path.join(self.log_dir, 'samples_history')
-        check_else_make_dir(self.samples_history_dir)
-
+        self.train_samples_dir = os.path.join(self.log_dir, 'train_samples')
         self.train_samples_history_dir = os.path.join(
             self.samples_history_dir, 'training'
         )
-        check_else_make_dir(self.train_samples_history_dir)
 
-        self.train_samples_dir = os.path.join(self.log_dir, 'train_samples')
-        check_else_make_dir(self.train_samples_dir)
+        if self.condition1 or self.condition2:
+            check_else_make_dir(self.samples_history_dir)
+            check_else_make_dir(self.train_samples_history_dir)
+            check_else_make_dir(self.train_samples_dir)
 
     def _restore_checkpoint(self, log_dir):
         """Restore from `tf.train.Checkpoint`."""
@@ -428,7 +426,11 @@ class GaugeModel(object):
             staircase=True
         )
 
-        self.summary_writer = tf.contrib.summary.create_file_writer(log_dir)
+        if self.condition1 or self.condition2:
+            self.summary_writer = tf.contrib.summary.create_file_writer(
+                log_dir
+            )
+
         if not tf.executing_eagerly():
             self.build_graph()
             try:
@@ -816,11 +818,6 @@ class GaugeModel(object):
         #  dynamics = self.dynamics
         #  x = self.x
         #  dynamics_beta = self.dynamics.beta
-        cond1 = False
-        if self.using_hvd:
-            if hvd.rank() == 0:
-                cond1 = True
-        cond2 = not self.using_hvd
 
         if pre_train:
             self.pre_train()
@@ -839,11 +836,12 @@ class GaugeModel(object):
         samples_np = np.array(self.lattice.samples, dtype=np.float32)
         try:
             log(data_header)
-            helpers.write_run_data(
-                self.files['run_info_file'],
-                self.data,
-                header=True
-            )
+            if self.condition1 or self.condition2:
+                helpers.write_run_data(
+                    self.files['run_info_file'],
+                    self.data,
+                    header=True
+                )
             for step in range(initial_step, initial_step + num_train_steps):
                 start_step_time = time.time()
 
@@ -878,9 +876,10 @@ class GaugeModel(object):
                     self.losses_arr.append(loss_np)
 
                     #  if (step + 1) % 10 == 0:
-                    helpers.print_run_data(self.data)
-                    helpers.write_run_data(self.files['run_info_file'],
-                                           self.data)
+                    if self.condition1 or self.condition2:
+                        helpers.print_run_data(self.data)
+                        helpers.write_run_data(self.files['run_info_file'],
+                                               self.data)
 
                 if self.annealing:
                     _beta_np = beta_np / self.annealing_factor
@@ -893,16 +892,18 @@ class GaugeModel(object):
                         beta_np = self.beta_final
                         step = self.sess.run(self.global_step)
                         self._save_model(samples=samples_np, step=step)
-                        helpers.write_run_data(self.files['run_info_file'],
-                                               self.data)
-                        sys.stdout.flush()
+                        if self.condition1 or self.condition2:
+                            helpers.write_run_data(self.files['run_info_file'],
+                                                   self.data)
+                            sys.stdout.flush()
+
                         return 0
 
                 # Intermittently run sampler and save samples to pkl file.
                 # We can calculate observables from these samples to
                 # evaluate the samplers performance while we continue training.
                 if (step + 1) % self.training_samples_steps == 0:
-                    if cond1 or cond2:
+                    if self.condition1 or self.condition2:
                         t0 = time.time()
                         log(80 * '-')
                         log(f"\nEvaluating sampler for {tsl} steps"
@@ -915,7 +916,7 @@ class GaugeModel(object):
                         log(data_header)
 
                 if (step + 2) % self.save_steps == 0:
-                    if cond1 or cond2:
+                    if self.condition1 or self.condition2:
                         self._save_model(samples=samples_np, step=step-2)
                         helpers.write_run_data(self.files['run_info_file'],
                                                self.data)
@@ -936,11 +937,11 @@ class GaugeModel(object):
                             self.beta: beta_np
                         }, options=options, run_metadata=run_metadata
                     )
-                    if cond1 or cond2:
+                    if self.condition1 or self.condition2:
                         self.writer.add_summary(summary_str,
                                                 global_step=step)
                     if trace:
-                        if cond1 or cond2:
+                        if self.condition1 or self.condition2:
                             self.writer.add_run_metadata(run_metadata,
                                                          global_step=step)
                     self.writer.flush()
@@ -1153,12 +1154,14 @@ def main(flags):
                        restore=flags.restore)
 
 
-    save_params_to_pkl_file(params, model.info_dir)
+    if flags.horovod:
+        if hvd.rank() == 0:
+            save_params_to_pkl_file(params, model.info_dir)
 
     #  start_time_str = time.strftime("%a, %d %b %Y %H:%M:%S",
     #                                 time.ctime(time.time()))
 
-    print(f"Training began at: {time.ctime()}")
+    log(f"Training began at: {time.ctime()}")
 
     model.train(flags.train_steps, kill_sess=False)
 
@@ -1169,7 +1172,7 @@ def main(flags):
 
         #  _ = model.run(flags.run_steps)
     except (KeyboardInterrupt, SystemExit):
-        print("\nKeyboardInterrupt detected! \n")
+        log("\nKeyboardInterrupt detected! \n")
         import pdb
         pdb.set_trace()
 

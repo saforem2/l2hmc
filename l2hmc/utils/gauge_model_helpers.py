@@ -139,8 +139,8 @@ def _create_log_dir(base_name):
     """Create directory for storing information about experiment."""
     root_log_dir = os.path.join(os.path.split(ROOT_DIR)[0], base_name)
     log_dir = make_run_dir(root_log_dir)
-    info_dir = log_dir + 'run_info/'
-    figs_dir = log_dir + 'figures/'
+    info_dir = os.path.join(log_dir, 'run_info')
+    figs_dir = os.path.join(log_dir, 'figures')
     if not os.path.isdir(info_dir):
         os.makedirs(info_dir)
     if not os.path.isdir(figs_dir):
