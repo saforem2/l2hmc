@@ -25,6 +25,12 @@ import numpy as np
 import tensorflow as tf
 
 try:
+    import horovod.tensorflow as hvd
+    HAS_HOROVOD = True
+except ImportError:
+    HAS_HOROVOD = False
+
+try:
     import matplotlib.pyplot as plt
     HAS_MATPLOTLIB = True
 except ImportError:
@@ -37,6 +43,7 @@ from utils.tf_logging import variable_summaries
 
 
 tfe = tf.contrib.eager
+tf.logging.set_verbosity(tf.logging.INFO)
 
 GLOBAL_SEED = 42
 np.random.seed(GLOBAL_SEED)
@@ -89,18 +96,32 @@ PARAMS = {
     'clip_value': 10.,
 }
 
+def write(s, f, mode='a', nl=True):
+    if HAS_HOROVOD and hvd.rank() != 0:
+        return
+    with open(f, mode) as f:
+        f.write(s)
+        if nl:
+            f.write('\n')
+
+def log(s, nl=True):
+    if HAS_HOROVOD and hvd.rank() != 0:
+        return
+    print(s, end='\n' if nl else '')
 
 def check_else_make_dir(d):
     """If directory `d` doesn't exist, it is created."""
     if not os.path.isdir(d):
-        print(f"Creating directory: {d}.")
+        log(f"Creating directory: {d}")
+        #  print(f"Creating directory: {d}.")
         os.makedirs(d)
 
 def save_params_to_pkl_file(params, out_dir):
     """Save `params` dictionary to `parameters.pkl` in `out_dir.`"""
     check_else_make_dir(out_dir)
     params_file = os.path.join(out_dir, 'parameters.pkl')
-    print(f"Saving params to: {params_file}.")
+    #  print(f"Saving params to: {params_file}.")
+    log(f"Saving params to: {params_file}.")
     with open(params_file, 'wb') as f:
         pickle.dump(params, f)
 
@@ -122,7 +143,7 @@ def graph_step(dynamics, optimizer, samples, beta, step, out_file=None):
 # Loss function
 def compute_loss(dynamics, x, beta, scale=.1, eps=1e-4, out_file=None):
     """Compute loss defined in equation (8)."""
-    print("    Creating loss...")
+    log("    Creating loss...")
     t0 = time.time()
 
     z = tf.random_normal(tf.shape(x))  # Auxiliary variable
@@ -142,18 +163,20 @@ def compute_loss(dynamics, x, beta, scale=.1, eps=1e-4, out_file=None):
         )
 
     t_diff = time.time() - t0
-    print(f"    done. took: {t_diff:4.3g} s.")
+    log(f"    done. took: {t_diff:4.3g} s.")
 
     if out_file is not None:
-        with open(out_file, 'a') as f:
-            f.write(f'Loss took: {t_diff:4.3g} s to create.\n')
+        s = f'Loss took: {t_diff:4.3g} s to create.'
+        write(s, out_file, 'a')
+        #  with open(out_file, 'a') as f:
+        #      f.write(f'Loss took: {t_diff:4.3g} s to create.\n')
 
 
     return loss, x_out, px
 
 def loss_and_grads(dynamics, x, beta, loss_fn=compute_loss, out_file=None):
     """Obtain loss value and gradients."""
-    print(f"  Creating gradient operations...")
+    log(f"  Creating gradient operations...")
     t0 = time.time()
 
     with tf.name_scope('grads'):
@@ -162,11 +185,13 @@ def loss_and_grads(dynamics, x, beta, loss_fn=compute_loss, out_file=None):
         grads = tape.gradient(loss_val, dynamics.trainable_variables)
 
     t_diff = time.time() - t0
-    print(f"  done. took: {t_diff:4.3g} s")
+    log(f"  done. took: {t_diff:4.3g} s")
 
     if out_file is not None:
-        with open(out_file, 'a') as f:
-            f.write(f'Gradient operations took: {t_diff:4.3g} s to create.\n')
+        s = f'Gradient operations took: {t_diff:4.3g} s to create.\n'
+        write(s, out_file, 'a')
+        #  with open(out_file, 'a') as f:
+        #      f.write(f'Gradient operations took: {t_diff:4.3g} s to create.\n')
 
     return loss_val, grads, out, accept_prob
 
@@ -345,7 +370,7 @@ class GaugeModel(object):
     def _restore_model(self, log_dir):
         """Restore model from previous run contained in `log_dir`."""
         if self.hmc:
-            print(f"ERROR: self.hmc: {self.hmc}. No model to restore. Exiting.")
+            log(f"ERROR: self.hmc: {self.hmc}. No model to restore. Exiting.")
             sys.exit(1)
 
         assert os.path.isdir(log_dir), (f"log_dir: {log_dir} does not exist.")
@@ -400,16 +425,16 @@ class GaugeModel(object):
             self.sess.run(tf.global_variables_initializer())
             ckpt = tf.train.get_checkpoint_state(log_dir)
             if ckpt and ckpt.model_checkpoint_path:
-                print("Restoring previous model from: "
+                log("Restoring previous model from: "
                       f"{ckpt.model_checkpoint_path}")
                 self.saver.restore(self.sess, ckpt.model_checkpoint_path)
                 #  self.sess.run(tf.global_variables_initializer())
-                print("Model restored.")
+                log("Model restored.")
                 self.global_step = tf.train.get_global_step()
         else:
             latest_path = tf.train.latest_checkpoint(log_dir)
             self.checkpoint.restore(latest_path)
-            print("Restored latest checkpoint from:\"{}\"".format(latest_path))
+            log("Restored latest checkpoint from:\"{}\"".format(latest_path))
 
         if not self.hmc:
             if tf.executing_eagerly():
@@ -425,6 +450,11 @@ class GaugeModel(object):
 
     def _save_model(self, samples=None, step=None):
         """Save run `data` to `files` in `log_dir` using `checkpointer`"""
+
+        if HAS_HOROVOD and self.using_hvd:
+            if hvd.rank() != 0:
+                return
+
         if samples is None:
             samples = self.samples
 
@@ -438,14 +468,14 @@ class GaugeModel(object):
         if not tf.executing_eagerly():
             ckpt_prefix = os.path.join(self.log_dir, 'ckpt')
             ckpt_file = os.path.join(self.log_dir, 'model.ckpt')
-            print(f'Saving checkpoint to: {ckpt_file}\n')
+            log(f'Saving checkpoint to: {ckpt_file}\n', nl=False)
             self.saver.save(self.sess, ckpt_file, global_step=step)
             self.writer.flush()
         else:
             saved_path = self.checkpoint.save(
                 file_prefix=os.path.join(self.log_dir, 'ckpt')
             )
-            print(f"\n Saved checkpoint to: {saved_path}\n")
+            log(f"\n Saved checkpoint to: {saved_path}\n", nl=False)
 
         if not self.hmc:
             if tf.executing_eagerly():
@@ -462,15 +492,27 @@ class GaugeModel(object):
         """Write model parameters out to human readable .txt file."""
         if _print:
             for key, val in self.params.items():
-                print(f'{key}: {val}')
+                log(f'{key}: {val}')
 
-        with open(self.files['parameters_file'], 'w') as f:
-            f.write('Parameters:\n')
-            f.write(80 * '-' + '\n')
-            for key, val in self.params.items():
-                f.write(f'{key}: {val}\n')
-            f.write(80*'=')
-            f.write('\n')
+
+        s0 = 'Parameters'
+        sep_str = 80 * '-'
+        strings = []
+        for key, val in self.params.items():
+            strings.append(f'{key}: {val}')
+
+        write(s0, self.files['parameters_file'], 'w')
+        write(sep_str, self.files['parameters_file'], 'a')
+        _ = [write(s, self.files['parameters_file'], 'a') for s in strings]
+        write(sep_str, self.files['parameters_file'], 'a')
+
+        #  with open(self.files['parameters_file'], 'w') as f:
+        #      f.write('Parameters:\n')
+        #      f.write(80 * '-' + '\n')
+        #      for key, val in self.params.items():
+        #          f.write(f'{key}: {val}\n')
+        #      f.write(80*'=')
+        #      f.write('\n')
 
     def _create_summaries(self):
         """Create summary objects for logging in TensorBoard."""
@@ -664,9 +706,11 @@ class GaugeModel(object):
             learning_rate=self.learning_rate,
             name='AdamOptimizer'
         )
+        if self.using_hvd:
+            opt = hvd.DistributedOptimizer(self.optimizer)
 
-        print(80 * '-' + '\n')
-        print(f"Building graph... (started at: {time.ctime()})")
+        log(80 * '-' + '\n', nl=False)
+        log(f"Building graph... (started at: {time.ctime()})")
         start_time = time.time()
         #  str0 = f"Building graph... (started at: {time.ctime()})\n"
         outputs = graph_step(self.dynamics, self.optimizer, self.x, self.beta,
@@ -674,8 +718,11 @@ class GaugeModel(object):
                              out_file=self.files['run_info_file'])
         self.train_op, self.loss_op, self.grads, self.x_out, self.px = outputs
 
-        with open(self.files['run_info_file'], 'a') as f:
-            f.write(f"Building graph... (started at: {time.ctime()})\n")
+        s = f"Building graph... (started at: {time.ctime()})\n"
+        write(s, self.files['run_info_file'], 'a')
+
+        #  with open(self.files['run_info_file'], 'a') as f:
+        #      f.write(f"Building graph... (started at: {time.ctime()})\n")
 
         #  self._create_loss()
 
@@ -689,19 +736,26 @@ class GaugeModel(object):
         #  print(t_diff_str(t1, t2) + '\n' + str5 + '\n')
         #  _write_strs_to_file([t_diff_str(t1, t2), str5])
 
-        print("  Creating summaries...")
+        log("  Creating summaries...")
         t0 = time.time()
         self._create_summaries()
         t_diff = time.time() - t0
-        print(f'  done. took: {t_diff:4.3g} s to create.')
-        print(f'done. took: {time.time() - start_time:4.3g} s to create.\n')
-        print(80 * '-' + '\n')
+        log(f'  done. took: {t_diff:4.3g} s to create.')
+        log(f'done. took: {time.time() - start_time:4.3g} s to create.\n',False)
+        log(80 * '-' + '\n', nl=False)
 
         dt = time.time() - start_time
-        with open(self.files['run_info_file'], 'a') as f:
-            f.write(f'Summaries took: {t_diff:4.3g} s to create.\n')
-            f.write(f'Graph took: {dt:4.3g} s to build.\n')
-            f.write(80 * '-' + '\n')
+        s0 = f'Summaries took: {t_diff:4.3g} s to create.\n'
+        s1 = f'Graph took: {dt:4.3g} s to build.\n'
+        sep_str = 80 * '-'
+        write(s0, self.files['run_info_file'], 'a')
+        write(s1, self.files['run_info_file'], 'a')
+        write(sep_str, self.files['run_info_file'], 'a')
+
+        #  with open(self.files['run_info_file'], 'a') as f:
+        #      f.write(f'Summaries took: {t_diff:4.3g} s to create.\n')
+        #      f.write(f'Graph took: {dt:4.3g} s to build.\n')
+        #      f.write(80 * '-' + '\n')
 
         #  print(t_diff_str(t2, time.time()) + '\n' + t_diff_str1(t0) + '\n')
         #  _write_strs_to_file(
@@ -712,13 +766,15 @@ class GaugeModel(object):
         """Set up training for the model."""
         self.saver = tf.train.Saver(max_to_keep=3)
         self.sess.run(tf.global_variables_initializer())
+        if self.using_hvd:
+            self.sess.run(hvd.broadcast_global_variables(0))
         ckpt = tf.train.get_checkpoint_state(self.log_dir)
         time_delay = 0.
         if ckpt and ckpt.model_checkpoint_path:
-            print('Restoring previous model from: '
+            log('Restoring previous model from: '
                   f'{ckpt.model_checkpoint_path}')
             self.saver.restore(self.sess, ckpt.model_checkpoint_path)
-            print('Model restored.\n')
+            log('Model restored.\n', nl=False)
             self.global_step = tf.train.get_global_step()
             initial_step = self.sess.run(self.global_step)
 
@@ -756,7 +812,7 @@ class GaugeModel(object):
         beta_np = self.beta_init
         samples_np = np.array(self.lattice.samples, dtype=np.float32)
         try:
-            print(data_header)
+            log(data_header)
             helpers.write_run_data(
                 self.files['run_info_file'],
                 self.data,
@@ -806,8 +862,8 @@ class GaugeModel(object):
                     if _beta_np < self.beta_final:
                         beta_np = _beta_np
                     else:
-                        print("Annealing schedule finished!")
-                        print("Saving model and exiting...")
+                        log("Annealing schedule finished!")
+                        log("Saving model and exiting...")
                         beta_np = self.beta_final
                         step = self.sess.run(self.global_step)
                         self._save_model(samples=samples_np, step=step)
@@ -820,16 +876,17 @@ class GaugeModel(object):
                 # We can calculate observables from these samples to
                 # evaluate the samplers performance while we continue training.
                 if (step + 1) % self.training_samples_steps == 0:
-                    t0 = time.time()
-                    print(80 * '-')
-                    print(f"\nEvaluating sampler for {tsl} steps"
-                          f" at beta = {self.beta_final}.")
-                    self.run(self.training_samples_length,
-                             current_step=step+1,
-                             beta=self.beta_final)
-                    print(f"  done. took: {time.time() - t0}.")
-                    print(80 * '-')
-                    print(data_header)
+                    if hvd.rank() == 0:
+                        t0 = time.time()
+                        log(80 * '-')
+                        log(f"\nEvaluating sampler for {tsl} steps"
+                              f" at beta = {self.beta_final}.")
+                        self.run(self.training_samples_length,
+                                 current_step=step+1,
+                                 beta=self.beta_final)
+                        log(f"  done. took: {time.time() - t0}.")
+                        log(80 * '-')
+                        log(data_header)
 
                 if (step + 2) % self.save_steps == 0:
                     self._save_model(samples=samples_np, step=step-2)
@@ -852,14 +909,19 @@ class GaugeModel(object):
                             self.beta: beta_np
                         }, options=options, run_metadata=run_metadata
                     )
-                    self.writer.add_summary(summary_str, global_step=step)
+                    cond1 = self.using_hvd and hvd.rank() == 0
+                    cond2 = not self.using_hvd
+                    if cond1 or cond2:
+                        self.writer.add_summary(summary_str,
+                                                global_step=step)
                     if trace:
-                        self.writer.add_run_metadata(run_metadata,
-                                                     global_step=step)
+                        if cond1 or cond2:
+                            self.writer.add_run_metadata(run_metadata,
+                                                         global_step=step)
                     self.writer.flush()
 
 
-            print("Training complete!")
+            log("Training complete!")
             step = self.sess.run(self.global_step)
             self._save_model(samples=samples_np, step=step)
 
@@ -872,8 +934,8 @@ class GaugeModel(object):
             return 0
 
         except (KeyboardInterrupt, SystemExit):
-            print("\nKeyboardInterrupt detected! \n"
-                  "Saving current state and exiting.\n")
+            log("\nKeyboardInterrupt detected! \n"
+                  "Saving current state and exiting.\n", nl=False)
             step = self.sess.run(self.global_step)
             self._save_model(samples=samples_np, step=step)
             if kill_sess:
@@ -892,9 +954,9 @@ class GaugeModel(object):
         px_history = []
 
         if self.hmc:
-            print(f"Running generic HMC sampler for {run_steps} steps...")
+            log(f"Running generic HMC sampler for {run_steps} steps...")
         else:
-            print(f"Running (trained) L2HMC sampler for {run_steps} steps...")
+            log(f"Running (trained) L2HMC sampler for {run_steps} steps...")
 
         if current_step is None:
             eval_file = os.path.join(
@@ -927,15 +989,19 @@ class GaugeModel(object):
                             f'step size: {eps:^6.4g} '
                             f'\t time/step: {tt:^6.4g}\n')
 
-                print(eval_str)
-                print('accept prob: ', px)
-                print('\n')
+                log(eval_str)
+                log('accept prob: ', px)
+                log('\n')
 
                 try:
-                    with open(eval_file, 'a') as f:
-                        f.write(eval_str)
-                        f.write('accept_prob: ', px)
-                        f.write('\n')
+                    write(eval_str, eval_file, 'a')
+                    write('accept_prob:', eval_file, 'a', nl=False)
+                    write(px, eval_file, 'a', nl=True)
+                    write('', eval_file, 'a')
+                    #  with open(eval_file, 'a') as f:
+                    #      f.write(eval_str)
+                    #      f.write('accept_prob: ', px)
+                    #      f.write('\n')
                 except:
                     continue
 
@@ -965,10 +1031,10 @@ class GaugeModel(object):
         with open(px_file, 'wb') as f:
             pickle.dump(px_history, f)
 
-        print(f'\nSamples saved to: {out_file}.')
-        print(f'Accept probabilities saved to: {px_file}.')
-        print(f'\n Time to complete run: {time.time() - start_time} seconds.')
-        print(80*'-' + '\n')
+        log(f'\nSamples saved to: {out_file}.')
+        log(f'Accept probabilities saved to: {px_file}.')
+        log(f'\n Time to complete run: {time.time() - start_time} seconds.')
+        log(80*'-' + '\n', nl=False)
 
         if ret:
             return samples_history
@@ -1026,6 +1092,10 @@ def main(flags):
     if flags.hmc:
         eps_trainable = False
 
+    if flags.horovod:
+        params['using_hvd'] = True
+        params['train_steps'] = params['train_steps'] // hvd.size()
+
     config = tf.ConfigProto()
 
     if flags.gpu:
@@ -1044,7 +1114,6 @@ def main(flags):
         os.environ["KMP_AFFINITY"] = "granularity=fine,verbose,compact,1,0"
         config.allow_soft_placement = True
         config.intra_op_parallelism_threads = 62
-
 
 
     else:
@@ -1294,6 +1363,11 @@ if __name__ == '__main__':
                         required=False, dest="theta",
                         help=("Flag that when passed indicates we're training "
                               "on theta @ ALCf."))
+
+    parser.add_argument("--horovod", action="store_true",
+                        required=False, dest="horovod",
+                        help=("Flag that when passed uses Horovod for "
+                              "distributed training on multiple nodes."))
 
     parser.add_argument("--num_intra_threads", default=0,
                         required=False, dest="num_intra_threads",

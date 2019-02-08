@@ -11,6 +11,12 @@ import pickle
 import numpy as np
 
 try:
+    import horovod.tensorflow as hvd
+    HAS_HOROVOD = True
+except ImportError:
+    HAS_HOROVOD = False
+
+try:
     import matplotlib.pyplot as plt
     HAS_MATPLOTLIB = True
 except ImportError:
@@ -20,6 +26,20 @@ from definitions import ROOT_DIR
 
 from lattice.gauge_lattice import u1_plaq_exact
 #  from utils.tf_logging import make_run_dir
+
+
+def write(s, f, mode='a', nl=True):
+    if HAS_HOROVOD and hvd.rank() != 0:
+        return
+    with open(f, mode) as f:
+        f.write(s)
+        if nl:
+            f.write('\n')
+
+def log(s, nl=True):
+    if HAS_HOROVOD and hvd.rank() != 0:
+        return
+    print(s, end='\n' if nl else '')
 
 
 def get_run_num(log_dir):
@@ -52,7 +72,7 @@ def make_run_dir(log_dir):
     if os.path.isdir(run_dir):
         raise f'Directory: {run_dir} already exists, exiting!'
     else:
-        print(f'Creating directory for new run: {run_dir}')
+        log(f'Creating directory for new run: {run_dir}')
         os.makedirs(run_dir)
     return run_dir
 
@@ -88,8 +108,8 @@ def print_run_data(data, header=False):
     data_str = format_run_data(data)
     if header:
         header = data_header()
-        print(header)
-    print(data_str)
+        log(header)
+    log(data_str)
 
 def write_run_data(file_path, data, header=False):
     """Write run `data` to human-readable file at `file_path`."""
@@ -97,14 +117,16 @@ def write_run_data(file_path, data, header=False):
 
     if header:
         header_str = data_header()
-        with open(file_path, 'a') as f:
-            f.write(header_str)
-            f.write('\n')
+        write(header_str, file_path, 'a')
+        #  with open(file_path, 'a') as f:
+        #      f.write(header_str)
+        #      f.write('\n')
 
     step = data['step']
-    with open(file_path, 'a') as f:
-        f.write(data_str)
-        f.write('\n')
+    write(data_str, file_path, 'a')
+    #  with open(file_path, 'a') as f:
+    #      f.write(data_str)
+    #      f.write('\n')
 
 def write_run_parameters(file_path, parameters):
     """Write `parameters` to human-readable file at `file_path`.
@@ -113,16 +135,33 @@ def write_run_parameters(file_path, parameters):
         file_path: Path to file to save `parameters` to.
         parameters (dict)
     """
-    with open(file_path, 'w') as f:
-        f.write('Parameters:\n')
-        f.write(80 * '-' + '\n')
-        for key, val in parameters.items():
-            if isinstance(val, (int, float, str)):
-                print(f'{key}: {val}\n')
-        #  for key, val in parameters.items():
-        #      f.write(f'{key}: {val}\n')
-        f.write(80*'=')
-        f.write('\n')
+    #  with open(file_path, 'w') as f:
+    #      f.write('Parameters:\n')
+    #      f.write(80 * '-' + '\n')
+    #      for key, val in parameters.items():
+    #          if isinstance(val, (int, float, str)):
+    #              log(f'{key}: {val}\n')
+    #      #  for key, val in parameters.items():
+    #      #      f.write(f'{key}: {val}\n')
+    #      f.write(80*'=')
+    #      f.write('\n')
+
+    strings = []
+    for key, val in parameters.items():
+        if isinstance(val, (int, float, str)):
+            strings.append(f'{key}: {val}')
+            #  log(s)
+            #  write(s, file_path, 'a')
+    write('Parameters', file_path, 'w')
+    write(80 * '-', file_path, 'a')
+    _ = [write(s, file_path, 'a') for s in strings]
+
+    log('Parameters')
+    log(80 * '-')
+    _ = [log(s) for s in strings]
+
+
+
 
 def data_header():
     """Create formatted (header) string containing labels for printing data."""
@@ -189,7 +228,7 @@ def plot_run_data(data, params, steps_arr, out_dir, skip_steps=1):
     ax.legend(loc='best')
 
     file_name = os.path.join(out_dir, 'average_plaquettes_vs_step.pdf')
-    print(f"Saving plot to {file_name}...")
+    log(f"Saving plot to {file_name}...")
     fig.savefig(file_name, dpi=400, bbox_inches='tight')
 
     fig, ax = _plot_data(steps_arr, avg_top_charge_arr,
@@ -197,7 +236,7 @@ def plot_run_data(data, params, steps_arr, out_dir, skip_steps=1):
                          skip_steps=skip_steps)
 
     file_name = os.path.join(out_dir, 'average_topological_charge_vs_step.pdf')
-    print(f"Saving plot to {file_name}...")
+    log(f"Saving plot to {file_name}...")
     fig.savefig(file_name, dpi=400, bbox_inches='tight')
 
     fig, ax = _plot_data(steps_arr, total_actions_arr,
@@ -205,14 +244,14 @@ def plot_run_data(data, params, steps_arr, out_dir, skip_steps=1):
                          skip_steps=skip_steps)
 
     file_name = os.path.join(out_dir, 'average_total_action_vs_step.pdf')
-    print(f"Saving plot to {file_name}...")
+    log(f"Saving plot to {file_name}...")
     fig.savefig(file_name, dpi=400, bbox_inches='tight')
-    print('done.')
+    log('done.')
 
 def save_run_data(checkpointer, log_dir, files, data, samples, params):
     """Save run `data` to `files` in `log_dir` using `checkpointer`"""
     saved_path = checkpointer.save(file_prefix=os.path.join(log_dir, "ckpt"))
-    print(f"Saved checkpoint to: {saved_path}")
+    log(f"Saved checkpoint to: {saved_path}")
     np.save(files['average_plaquettes_file'], data['average_plaquettes_arr'])
     np.save(files['total_actions_file'], data['total_actions_arr'])
     np.save(files['topological_charges_file'], data['topological_charges_arr'])

@@ -13,7 +13,19 @@ import pickle
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-import matplotlib.pyplot as plt
+
+try:
+    import horovod.tensorflow as hvd
+    HAS_HOROVOD = True
+except ImportError:
+    HAS_HOROVOD = False
+
+try:
+    import matplotlib.pyplot as plt
+    HAS_MATPLOTLIB = True
+except ImportError:
+    HAS_MATPLOTLIB = False
+
 
 from scipy.optimize import curve_fit
 from pandas.plotting import autocorrelation_plot
@@ -26,6 +38,8 @@ from lattice.lattice import GaugeLattice, u1_plaq_exact
 #  from l2hmc_eager import gauge_dynamics_eager as gde
 
 from .plot_helper import plot_broken_xaxis, plot_multiple_lines
+from .gauge_model_helpers import log, write
+
 from .autocorr import (
     integrated_time, autocorr_func_1d, AutocorrError, calc_ESS,
     calc_iat, autocorr_fast, autocorr, autocovariance, acl_spectrum
@@ -42,7 +56,7 @@ LINESTYLES = ['-', '--', ':', '-.', '-', '--', ':', '-.', '-', '--']
 def check_else_make_dir(d):
     """Checks if directory exists, otherwise creates directory."""
     if not os.path.isdir(d):
-        print(f"Making directory: {d}.")
+        log(f"Making directory: {d}.")
         os.makedirs(d)
 
 def _load_params(log_dir):
@@ -61,7 +75,7 @@ def _load_params(log_dir):
         return params
 
     except FileNotFoundError:
-        print(f"Unable to find {params_file} in {info_dir}. Returning 0.")
+        log(f"Unable to find {params_file} in {info_dir}. Returning 0.")
         return 0
 
 
@@ -137,13 +151,13 @@ def _calc_susceptibility_stats(charges):
                 f"consisting of {q_rs.shape[0]} L2HMC steps.")
         sep_str = len(str0) * '-' + '\n'
 
-        print(sep_str)
-        print(str0)
-        print(f'estimate: {estimate}')
-        print(f'bias: {bias}')
-        print(f'stderr: {stderr}')
-        print(f'conf_interval: {conf_interval}\n')
-        print(sep_str)
+        log(sep_str)
+        log(str0)
+        log(f'estimate: {estimate}')
+        log(f'bias: {bias}')
+        log(f'stderr: {stderr}')
+        log(f'conf_interval: {conf_interval}\n')
+        log(sep_str)
 
         estimate_arr.append(estimate)
         bias_arr.append(bias)
@@ -193,14 +207,14 @@ def _calc_observables(samples, params):
         avg_plaquettes.append(plaqs)
         top_charges.append(charges)
 
-        print(f"step: {idx} "
+        log(f"step: {idx} "
               f"time/step: {time.time() - t0:^6.4g} "
               f"avg action: {np.mean(actions):^6.4g} "
               f"avg plaquette: {np.mean(plaqs):^6.4g} ")
               #  "top charges: ")
-        print('\n')
-        print('top_charges: ', [int(i) for i in charges])
-        print('\n')
+        log('\n')
+        log('top_charges: ', [int(i) for i in charges])
+        log('\n')
 
     return (np.array(total_actions),
             np.array(avg_plaquettes),
@@ -332,7 +346,7 @@ def calc_observables(log_dir, observables_dicts=None, training=False):
     for idx, sample_file in enumerate(samples_files):
         step = step_keys[idx]
         if step not in charges_dict.keys():
-            print(f"Calculating observables for {step}...")
+            log(f"Calculating observables for {step}...")
             with open(sample_file, 'rb') as f:
                 samples = pickle.load(f)
 
@@ -351,7 +365,7 @@ def calc_observables(log_dir, observables_dicts=None, training=False):
 
             del samples
         else:
-            print(f"Observables alredy calculated for {step} eval steps.")
+            log(f"Observables alredy calculated for {step} eval steps.")
 
     observables_dir = os.path.join(log_dir, 'observables/')
     if training:
@@ -372,33 +386,43 @@ def calc_observables(log_dir, observables_dicts=None, training=False):
             obs_dir, f'susceptibility_stats_{key}.txt'
         )
 
-        print(80 * '-' + '\n')
-        print(f"Saving actions to: {actions_file}.")
+        log(80 * '-' + '\n')
+        log(f"Saving actions to: {actions_file}.")
         with open(actions_file, 'wb') as f:
             pickle.dump(actions_dict[key], f)
 
-        print(f"Saving plaquettes to: {plaqs_file}.")
+        log(f"Saving plaquettes to: {plaqs_file}.")
         with open(plaqs_file, 'wb') as f:
             pickle.dump(plaqs_dict[key], f)
 
-        print(f"Saving topological charges to: {charges_file}.")
+        log(f"Saving topological charges to: {charges_file}.")
         with open(charges_file, 'wb') as f:
             pickle.dump(charges_dict[key], f)
 
-        print(f"Saving suscept. stats to: {susceptibility_stats_pkl_file}")
+        log(f"Saving suscept. stats to: {susceptibility_stats_pkl_file}")
         with open(susceptibility_stats_pkl_file, 'wb') as f:
             pickle.dump(susceptibility_stats_dict[key], f)
 
-        print(f"Writing suscept. stats to: {susceptibility_stats_txt_file}")
-        with open(susceptibility_stats_txt_file, 'w') as f:
-            str0 = f'Topological suscept. stats for {key} steps.\n'
-            f.write(str0)
-            f.write(len(str0) * '-' + '\n')
-            for k, v in susceptibility_stats_dict[key].items():
-                f.write(f'{k}:\n   {v}\n')
-                f.write('\n')
-            f.write(str0 + '\n')
-        print('\n' + 80 * '-' + '\n')
+        log(f"Writing suscept. stats to: {susceptibility_stats_txt_file}")
+        strings = []
+        for k, v in susceptibility_stats_dict[key].items():
+            strings.append(f'{k}:\n  {v}')
+
+        str0 = f'Topological suscept. stats for {key} steps.\n'
+        sep_str = len(str0) * '-'
+
+        write(str0, susceptibility_stats_txt_file, 'w')
+        write(sep_str, susceptibility_stats_txt_file, 'a')
+        _ = [write(s, susceptibility_stats_txt_file, 'a') for s in strings]
+        write(sep_str, susceptibility_stats_txt_file, 'a')
+        #  with open(susceptibility_stats_txt_file, 'w') as f:
+            #  f.write(str0)
+            #  f.write(len(str0) * '-' + '\n')
+            #  for k, v in susceptibility_stats_dict[key].items():
+            #      f.write(f'{k}:\n   {v}\n')
+            #      f.write('\n')
+            #  f.write(str0 + '\n')
+        log('\n' + 80 * '-' + '\n')
 
     observables_dicts = (actions_dict, plaqs_dict,
                          charges_dict, susceptibility_stats_dict)
@@ -456,7 +480,7 @@ def plot_observables(log_dir, observables_dicts, training=False):
         )
 
         figs_axes.append(fig_ax)
-        print(80 * '-')
+        log(80 * '-')
 
     return figs_axes
 
@@ -499,10 +523,10 @@ def plot_top_charges(log_dir, charges_dict, training=False):
                 out_dir,
                 f'topological_charge_history_sample_{idx}.pdf'
             )
-            print(f"Saving figure to {out_file}.")
+            log(f"Saving figure to {out_file}.")
             if not os.path.isfile(out_file):
                 _ = fig.savefig(out_file, dpi=400, bbox_inches='tight')
-        print(80 * '-' + '\n')
+        log(80 * '-' + '\n')
 
 def plot_top_charges_counts(log_dir, charges_dict, training=False):
     """Create scatter plot for the count of of unique values in charges_dict."""
@@ -543,10 +567,10 @@ def plot_top_charges_counts(log_dir, charges_dict, training=False):
                 out_dir,
                 f'topological_charge_counts_sample_{idx}.pdf'
             )
-            print(f"Saving figure to {out_file}.")
+            log(f"Saving figure to {out_file}.")
             if not os.path.isfile(out_file):
                 _ = fig.savefig(out_file, dpi=400, bbox_inches='tight')
-        print(80 * '-' + '\n')
+        log(80 * '-' + '\n')
 
 
 
@@ -643,14 +667,14 @@ def calc_integrated_autocorr_time(data):
         try:
             iat, _flag = integrated_time(data[:, idx], quiet=True)
             if _flag:
-                print(f'\n Failed on idx: {idx}\n')
+                log(f'\n Failed on idx: {idx}\n')
             iat_arr.append(iat)
             # `function_1d` computes the autocorr. fn of 1-D time-series
             acf_arr.append(autocorr_func_1d(data[:, idx]))
         except AutocorrError as err:
-            print(f'Failed on idx: {idx}\n')
-            print(err)
-            print('\n')
+            log(f'Failed on idx: {idx}\n')
+            log(err)
+            log('\n')
             continue
 
     return np.array(acf_arr), np.array(iat_arr)
@@ -716,7 +740,7 @@ def make_multiple_lines_plots(beta, observables, **kwargs):
 
     multiple_lines_figs_axes.append((fig, ax))
     if plaquettes_file is not None:
-        print(f"Saving figure to: {plaquettes_file}.")
+        log(f"Saving figure to: {plaquettes_file}.")
         plt.savefig(plaquettes_file, dpi=400, bbox_inches='tight')
 
     ###########################################################################
@@ -755,7 +779,7 @@ def make_pandas_autocorrelation_plot(data, x_label, y_label, out_file=None):
         ax.set_ylabel(y_label, fontsize=14)
 
     if out_file:
-        print(f"Saving figure to: {out_file}.")
+        log(f"Saving figure to: {out_file}.")
         plt.savefig(out_file, dpi=400, bbox_inches='tight')
 
     return fig, ax
@@ -796,7 +820,7 @@ def make_matplotlib_autocorrelation_plot(data, **kwargs):
         ax.set_ylabel(y_label, fontsize=14)
 
     if out_file:
-        print(f"Saving figure to: {out_file}.")
+        log(f"Saving figure to: {out_file}.")
         plt.savefig(out_file, dpi=400, bbox_inches='tight')
 
     return lags, autocorr_vec, fig, ax
@@ -844,7 +868,7 @@ def plot_autocorr_with_iat(acf_arr, iat_arr, ESS_arr, **kwargs):
     if y_label:
         ax.set_ylabel(y_label, fontsize=14)
     if out_file:
-        print(f'Saving figure to: {out_file}.')
+        log(f'Saving figure to: {out_file}.')
         plt.savefig(out_file, dpi=400, bbox_inches='tight')
 
     return fig, ax
@@ -866,7 +890,7 @@ def make_samples_acl_spectrum_plot(samples, out_file=None):
 
     if out_file:
         #  out_file = os.path.join(figs_dir, 'links_autocorrelation_vs_step.pdf')
-        print(f"Saving figure to: {out_file}.")
+        log(f"Saving figure to: {out_file}.")
         plt.savefig(out_file, dpi=400, bbox_inches='tight')
 
     return fig, ax
