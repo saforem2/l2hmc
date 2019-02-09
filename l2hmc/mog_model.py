@@ -1,11 +1,11 @@
 """
-Gaussian mixture model, sample application of L2HMC algorithm. 
+Gaussian mixture model, sample application of L2HMC algorithm.
 
 Using the L2HMC algorithm, this module learns to effectively sample from a
 mixture of Gaussians target distribution.
 
 ###############################################################################
-#  TODO: 
+#  TODO:
 # -----------------------------------------------------------------------------
 #  (!!)  * Look at using tensorflow.contrib.training.HParams to store
 #          hyperparameter values.
@@ -17,9 +17,9 @@ mixture of Gaussians target distribution.
 #          - Try to get network to be compatible with complex numbers and
 #            eventually complex matrices.
 # -----------------------------------------------------------------------------
-#        * COMPLETED: 
+#        * COMPLETED:
 #            (x)  * Implement model with pair of Gaussians both separated along
-#                   a single axis, and separated diagonally across all 
+#                   a single axis, and separated diagonally across all
 #                   dimensions.
 #            (x)  * Look at replacing self.params['...'] with setattr for
 #                   initalization.
@@ -55,7 +55,10 @@ from utils.network import network
 from utils.dynamics import Dynamics
 from utils.sampler import propose
 from utils.notebook_utils import get_hmc_samples
-from utils.tf_logging import variable_summaries, get_run_num, make_run_dir
+from utils.tf_logging import (
+    variable_summaries, get_run_num, 
+    make_run_dir, check_log_dir, create_log_dir
+)
 from utils.trajectories import calc_tunneling_rate, calc_avg_distances
 from utils.plot_helper import errorbar_plot, annealing_schedule_plot
 from utils.func_utils import accept, jacobian, autocovariance,\
@@ -77,34 +80,6 @@ def lazy_property(function):
     return decorator
 
 
-def check_log_dir(log_dir):
-    if not os.path.isdir(log_dir):
-        raise ValueError(f'Unable to locate {log_dir}, exiting.')
-    else:
-        if not log_dir.endswith('/'):
-            log_dir += '/'
-        info_dir = log_dir + 'run_info/'
-        figs_dir = log_dir + 'figures/'
-        if not os.path.isdir(info_dir):
-            os.makedirs(info_dir)
-        if not os.path.isdir(figs_dir):
-            os.makedirs(figs_dir)
-    return log_dir, info_dir, figs_dir
-
-
-def create_log_dir():
-    """Create directory for storing information about experiment."""
-    #  root_log_dir = '../../log_mog_tf/'
-    #  root_log_dir = os.path.join(ROOT_DIR, log_mog_tf)
-    root_log_dir = os.path.join(os.path.split(ROOT_DIR)[0], 'log_mog_tf')
-    log_dir = make_run_dir(root_log_dir)
-    info_dir = log_dir + 'run_info/'
-    figs_dir = log_dir + 'figures/'
-    if not os.path.isdir(info_dir):
-        os.makedirs(info_dir)
-    if not os.path.isdir(figs_dir):
-        os.makedirs(figs_dir)
-    return log_dir, info_dir, figs_dir
 
 
 def distribution_arr(x_dim, n_distributions):

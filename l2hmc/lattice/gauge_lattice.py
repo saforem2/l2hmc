@@ -44,19 +44,29 @@ def project_angle(x):
     return x - 2 * np.pi * tf.math.floor((x + np.pi) / (2 * np.pi))
 
 
+# pylint: disable=invalid-name, too-many-instance-attributes
 class GaugeLattice(object):
     """Lattice with Gauge field existing on links."""
-    def __init__(self, time_size, space_size, dim, beta, link_type,
-                 num_samples=None, rand=False):
+    def __init__(self,
+                 time_size,
+                 space_size,
+                 dim,
+                 beta,
+                 link_type,
+                 num_samples=None,
+                 rand=False):
         """Initialization for GaugeLattice object.
 
         Args:
             time_size (int): Temporal extent of lattice.
             space_size (int): Spatial extent of lattice.
             dim (int): Dimensionality
-            link_type (str): 
-                String representing the type of gauge group for the link
-                variables. Must be either 'U1', 'SU2', or 'SU3'
+            beta (float): Inverse coupling constant.
+            link_type (str): String representing the type of gauge group for
+                the link variables. Must be either 'U1', 'SU2', or 'SU3'
+            num_samples (int): Number of sample lattices to use.
+            rand (bool): Flag specifying if lattice should be initialized
+                randomly or uniformly.
         """
         assert link_type.upper() in ['U1', 'SU2', 'SU3'], (
             "Invalid link_type. Possible values: U1', 'SU2', 'SU3'"
@@ -251,6 +261,19 @@ class GaugeLattice(object):
                 return self.total_action(samples)
         return fn
 
+    def get_grad_potential_fn(self, samples=None):
+        """
+        Returns function object used for calculating the gradient of the
+        potential.
+        """
+        if samples is None:
+            def fn(links):
+                return self._grad_action(links)
+        else:
+            def fn(samples):
+                return self.grad_action(samples)
+        return fn
+
     def _calc_plaq_observables(self, links):
         """Computes the average plaquette of a particular lattice of links."""
         if links.shape != self.links.shape:
@@ -270,41 +293,42 @@ class GaugeLattice(object):
 
             total_action += 1 - local_action
             plaquettes_sum += local_action
-            topological_charge = project_angle(plaq_sum)
+            topological_charge += project_angle(plaq_sum)
 
         return [self.beta * total_action,
                 plaquettes_sum / self.num_plaquettes,
-                topological_charge / (2 * np.pi)]
+                int(topological_charge / (2 * np.pi))]
 
-    def _calc_plaq_observables_np(self, links):
-        """Compute the average plaquette of a particular lattice of links."""
-        if links.shape != self.links.shape:
-            links = links.reshape(*self.links.shape)
-
-        shape = self.site_idxs
-        plaquettes_sum = 0.
-        topological_charge = 0.
-        total_action = 0.
-
-        for plaq in self.plaquette_idxs:
-            *site, u, v = plaq
-            #  plaq_sum = self.plaquette_operator(site, u, v, links)
-
-            l1 = links[tuple(pbc(site, shape) + [u])]
-            l2 = links[tuple(pbc(site + self.bases[u], shape) + [v])]
-            l3 = links[tuple(pbc(site + self.bases[v], shape) + [u])]
-            l4 = links[tuple(pbc(site, shape) + [v])]
-
-            plaq_sum = l1 + l2 - l3 - l4
-
-            local_action = np.cos(plaq_sum)
-            total_action += 1 - local_action
-            plaquettes_sum += local_action
-            topological_charge = project_angle(plaq_sum)
-
-        return [self.beta * total_action,
-                plaquettes_sum / self.num_plaquettes,
-                topological_charge / (2 * np.pi)]
+    #  def _calc_plaq_observables_np(self, links):
+    #      """Compute the average plaquette of a particular lattice of links."""
+    #      if links.shape != self.links.shape:
+    #          links = links.reshape(*self.links.shape)
+    #
+    #      shape = self.site_idxs
+    #      plaquettes_sum = 0.
+    #      topological_charge = 0.
+    #      total_action = 0.
+    #
+    #      for plaq in self.plaquette_idxs:
+    #          *site, u, v = plaq
+    #          #  plaq_sum = self.plaquette_operator(site, u, v, links)
+    #
+    #          l1 = links[tuple(pbc(site, shape) + [u])]
+    #          l2 = links[tuple(pbc(site + self.bases[u], shape) + [v])]
+    #          l3 = links[tuple(pbc(site + self.bases[v], shape) + [u])]
+    #          l4 = links[tuple(pbc(site, shape) + [v])]
+    #
+    #          plaq_sum = l1 + l2 - l3 - l4
+    #
+    #          local_action = np.cos(plaq_sum)
+    #          total_action += 1 - local_action
+    #          plaquettes_sum += local_action
+    #          topological_charge += plaq_sum
+    #          #  topological_charge += project_angle(plaq_sum)
+    #
+    #      return [self.beta * total_action,
+    #              plaquettes_sum / self.num_plaquettes,
+    #              topological_charge / (2 * np.pi)]
 
     def calc_plaq_observables(self, samples):
         """Calculate the average plaquette for each sample in samples."""
@@ -320,9 +344,9 @@ class GaugeLattice(object):
 
             return np.array(plaq_observables).reshape((-1, 3)).T
 
-    def calc_plaq_observables_np(self, samples):
-        """Calculate the average plaquette for each sample in samples."""
-        return [self._calc_plaq_observables_np(sample) for sample in samples]
+    #  def calc_plaq_observables_np(self, samples):
+    #      """Calculate the average plaquette for each sample in samples."""
+    #      return [self._calc_plaq_observables_np(sample) for sample in samples]
 
     def local_action(self, *links, all_links):
         """Compute local action (internal energy) of a collection of `links`
@@ -334,10 +358,6 @@ class GaugeLattice(object):
             all_links (array-like):
                 Links array, shape = self.links.shape 
         """
-        #  assert all_links.shape != self.links.shape, ("`all_links` must have"
-        #                                               " the same shape as"
-        #                                               " self.links.shape.")
-
         S = 0.0
         for link in links:
             site1 = link[:-1]
@@ -364,12 +384,7 @@ class GaugeLattice(object):
                 Sp = 1 - cos(Qp), where Qp is the plaquette operator defined as
                 the sum of the angles (phases) around an elementary plaquette.
         """
-        #  if links is None:
-        #      links = self.links
         if links.shape != self.links.shape:
-            #  print((f"{self._action_counter} Bad link shape in "
-            #         f"`_total_action`. input_shape: {links.shape}"))
-            #  self._action_counter += 1
             links = tf.reshape(links, self.links.shape)
 
         total_action = 0.0
@@ -379,31 +394,26 @@ class GaugeLattice(object):
             local_action = self._action_op(plaq_sum)
 
             total_action += 1 - local_action
-        #  for site in self.iter_sites():
-        #      for u in range(self.dim):
-        #          for v in range(self.dim):
-        #              if v > u:
-        #                  plaq = self.plaquette_operator(site, u, v, links)
-        #                  action += 1 - self._action_op(plaq)
-                        #  S += 1 - const * plaq
-        return self.beta * total_action #/ self.num_sites
+
+        return self.beta * total_action
 
     def total_action(self, samples):
-        """Return the total action (sum over all plaquettes) for each sample in
+        """
+        Return the total action (sum over all plaquettes) for each sample in
         samples, at inverse coupling strength `self.beta`. 
 
-            Args:
-                samples (array-like):
-                    Array of `links` arrays, each one representing the links of
-                    an individual lattice.  NOTE: If samples is None, only a
-                    single `GaugeLattice` was instantiated during the __init__
-                    method, so this will return the total action of that single
-                    lattice.
-            Returns:
-                _ (float or list of floats): 
-                    If samples is None, returns action of instantiated lattice
-                    as a float. Otherwise, returns list containing the action
-                    of each sample in samples.
+        Args:
+            samples (array-like):
+                Array of `links` arrays, each one representing the links of
+                an individual lattice.  NOTE: If samples is None, only a
+                single `GaugeLattice` was instantiated during the __init__
+                method, so this will return the total action of that single
+                lattice.
+        Returns:
+            _ (float or list of floats): 
+                If samples is None, returns action of instantiated lattice
+                as a float. Otherwise, returns list containing the action
+                of each sample in samples.
         """
         if tf.executing_eagerly():
             return [self._total_action(sample) for sample in samples]
@@ -461,17 +471,6 @@ class GaugeLattice(object):
         return [
             self._grad_action(sample) for sample in samples
         ]
-
-    def topological_charge_op(self, plaq):
-        """Calculate the (local) topological charge of the plaquette.
-        Args:
-            plaq: list containing the four link variables that define the
-                plaquette.
-        Returns:
-            topological_charge: The sum of the link variables (for the U1
-                case.)
-        """
-        pass
 
     def _action_op_u1(self, plaq):
         """Operator used in calculating the action."""
@@ -538,6 +537,7 @@ class GaugeLattice(object):
         prod = tf.matmul(prod, mat_adj(l4))
         return prod
 
+    # pylint: disable=too-many-locals
     def _get_staples(self, site, u, links=None):
         """Calculates each of the staples for the link variable at site + u."""
         if links is None:
@@ -554,8 +554,8 @@ class GaugeLattice(object):
                 l2 = self.get_link(site + self.bases[v], u, shape, links)
                 l3 = self.get_link(site, v, shape, links)
 
-                l4 = self.get_link(site + self.bases[u] - self.bases[v], v,
-                                   shape, links)
+                l4 = self.get_link(site + self.bases[u] - self.bases[v],
+                                   v, shape, links)
                 l5 = self.get_link(site - self.bases[v], u, shape, links)
                 l6 = self.get_link(site - self.bases[v], v, shape, links)
 
@@ -579,18 +579,19 @@ class GaugeLattice(object):
         return staples
 
     def rect_operator(self, site, u, v, links=None):
+        """Rectangular plaquette operator."""
         if links is None:
             links = self.links
 
         shape = self.sites.shape
 
         #  site = np.array(site)
-        l1 = tuple(pbc(site) + [u])  #pylint: ignore invalid-name
-        l2 = tuple(pbc(site + self.bases[u]) + [u])
-        l3 = tuple(pbc(site + 2 * self.bases[u]) + [v])
-        l4 = tuple(pbc(site + self.bases[u]+self.bases[v]) + [u])
-        l5 = tuple(pbc(site + self.bases[v]) + [u])
-        l6 = tuple(pbc(site) + [v])
+        l1 = tuple(pbc(site, shape) + [u])  #pylint: ignore invalid-name
+        l2 = tuple(pbc(site + self.bases[u], shape) + [u])
+        l3 = tuple(pbc(site + 2 * self.bases[u], shape) + [v])
+        l4 = tuple(pbc(site + self.bases[u]+self.bases[v], shape) + [u])
+        l5 = tuple(pbc(site + self.bases[v], shape) + [u])
+        l6 = tuple(pbc(site, shape) + [v])
 
         if self.link_shape != ():
             return 1.0 * tf.real(tf.trace(links[l1]
@@ -599,9 +600,8 @@ class GaugeLattice(object):
                                           * tf.transpose(tf.conj(links[l4]))
                                           * tf.transpose(tf.conj(links[l5]))
                                           * tf.transpose(tf.conj(links[l6]))))
-        else:
-            return (links[l1] + links[l2] + links[l3]
-                    - links[l4] - links[l5] - links[l6])
+        return (links[l1] + links[l2] + links[l3]
+                - links[l4] - links[l5] - links[l6])
 
     def _update_link(self, site, d, links=None):
         """Update the link located at site + d using Metropolis-Hastings
@@ -654,4 +654,3 @@ class GaugeLattice(object):
             for site in self.iter_sites():
                 for d in range(self.dim):
                     num_acceptances += self._update_link(self, site, d)
-
