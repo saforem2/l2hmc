@@ -32,7 +32,7 @@ try:
 except ImportError:
     HAS_HOROVOD = False
 
-from lattice.lattice import GaugeLattice, u1_plaq_exact
+from lattice.lattice import GaugeLattice
 from dynamics.gauge_dynamics import GaugeDynamics
 import utils.gauge_model_helpers as helpers
 from utils.tf_logging import variable_summaries
@@ -134,8 +134,8 @@ def tf_accept(x, _x, px):
     mask = (px - tf.random_uniform(tf.shape(px)) > 0.)
     return tf.where(mask, _x, x)
 
-def graph_step(dynamics, optimizer, samples, beta, step, 
-               aux=True):
+def graph_step(dynamics, optimizer, samples, beta, step, aux=True):
+    """Perform a single training update step using graph execution."""
     with tf.name_scope('train'):
         loss, grads, samples, accept_prob = loss_and_grads(
             dynamics, samples, beta, loss_fn=compute_loss, aux=aux

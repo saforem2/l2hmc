@@ -199,7 +199,6 @@ class GaugeLattice(object):
 
             self.plaquettes_dict[tuple(site)] = [idx1, idx2, idx3, idx4]
 
-
     def _generate_links(self, rand=False, link_type=None):
         """Method for obtaning an array of randomly initialized link variables.
             Args:
@@ -286,8 +285,18 @@ class GaugeLattice(object):
                 return self.total_action(samples)
         return fn
 
-    def _calc_plaq_observables(self, links, beta):
-        """Computes the average plaquette of a particular lattice of links."""
+    def _calc_plaq_observables(self, links):
+        """Computes plaquette observables for an individual lattice of links.
+
+        Args:
+            links: Lattice of link variables.
+
+        Returns:
+            total_action: Total action of `links`.
+            avg_plaq: Average plaquette value (sum of links around elementary
+                plaquette).
+            topological_charge: Topological charge of `links`.
+        """
         #  if links.shape != self.links.shape:
         #      links = tf.reshape(links, shape=self.links.shape)
         p = [tuple(i) for i in list(self.plaquettes_dict.values())]
@@ -303,7 +312,12 @@ class GaugeLattice(object):
         return [total_action, avg_plaq, int(topological_charge)]
 
     def calc_plaq_observables(self, samples, beta):
-        """Calculate the average plaquette for each sample in samples."""
+        """Calculate plaquette observables for each sample in `samples.`
+
+        Args:
+            samples: Array (a `batch`) of samples of link configurations.
+            beta: Inverse coupling constant.
+        """
         if tf.executing_eagerly():
             return np.array([
                 self._calc_plaq_observables(sample, beta) for sample in samples

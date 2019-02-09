@@ -134,7 +134,7 @@ class GaugeDynamics(tf.keras.Model):
             'num_hidden': 256,
             'num_filters': int(2 * self.lattice.space_size),
             'filter_sizes': [(2, 2), (2, 2)], # for 1st and 2nd conv. layer
-            'name_scope': 'x_net',
+            'name_scope': 'position',
             'data_format': self.lattice.data_format,
         }
 
@@ -155,26 +155,18 @@ class GaugeDynamics(tf.keras.Model):
             'x_dim': self.x_dim,
             'links_shape': self.lattice.links.shape,
             'num_hidden': int(2 * self.x_dim),
+            'name_scope': 'position',
             'factor': 2.
         }
 
         with tf.name_scope("DynamicsNetwork"):
             with tf.name_scope("XNet"):
                 self.position_fn = GenericNet(model_name='XNet', **kwargs)
-                    #  self.x_dim,
-                    #  self.lattice.links.shape,
-                    #  factor=2.,
-                    #  num_hidden=int(2*self.x_dim)
-                #  )
 
             kwargs['factor'] = 1.
+            kwargs['name_scope'] = 'momentum'
             with tf.name_scope("VNet"):
                 self.momentum_fn = GenericNet(model_name='VNet', **kwargs)
-                #      self.x_dim,
-                #      self.lattice.links.shape,
-                #      factor=1.,
-                #      num_hidden=int(2*self.x_dim)
-                #  )
 
     # pylint:disable=too-many-locals
     def apply_transition(self, position, beta):
