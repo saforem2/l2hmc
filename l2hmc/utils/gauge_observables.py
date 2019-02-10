@@ -5,6 +5,7 @@ sample configurations generated from the (L2)HMC sampler.
 Author: Sam Foreman (twitter/github @saforem2)
 Date: 12 / 9 / 2018
 """
+#pylint: disable=invalid-name, too-many-locals
 import os
 import sys
 import time
@@ -197,9 +198,9 @@ def _calc_observables(samples, params):
     for idx, sample in enumerate(samples):
         t0 = time.time()
         try:
-            observables = np.array(lattice.calc_plaq_observables(sample, beta))
+            observables = np.array(lattice.calc_plaq_observables(sample))
         except:
-            observables = np.array(lattice._calc_plaq_observables(sample, beta))
+            observables = np.array(lattice._calc_plaq_observables(sample))
 
         actions, plaqs, charges = observables
 
@@ -208,10 +209,10 @@ def _calc_observables(samples, params):
         top_charges.append(charges)
 
         log(f"step: {idx} "
-              f"time/step: {time.time() - t0:^6.4g} "
-              f"avg action: {np.mean(actions):^6.4g} "
-              f"avg plaquette: {np.mean(plaqs):^6.4g} ")
-              #  "top charges: ")
+            f"time/step: {time.time() - t0:^6.4g} "
+            f"avg action: {np.mean(actions):^6.4g} "
+            f"avg plaquette: {np.mean(plaqs):^6.4g} ")
+        #  "top charges: ")
         log('\n')
         log('top_charges: ', nl=False)
         log(charges)
@@ -220,80 +221,6 @@ def _calc_observables(samples, params):
     return (np.array(total_actions),
             np.array(avg_plaquettes),
             np.array(top_charges))
-
-
-##############################################################################
-# Load samples and create necessary directory structure
-##############################################################################
-
-def find_samples(log_dir):
-    """Calculate observables from collection of samples stored in log_dir.
-
-    Args:
-        log_dir: Root directory containing information about run.
-    Returns:
-        params: Dictionary of parameters. 
-            keys: name of parameter
-            value: parameter value
-        step_keys: List containing the number of steps the sampler was
-            evaluated for.
-        samples_files: List of files containing samples generated from sampler. 
-        figs_dir_dict: Dictionary of directories containing directories to hold
-            figures of observables plots.
-    """
-    params = _load_params(log_dir)
-    info_dir = os.path.join(log_dir, 'run_info/')
-    figs_dir = os.path.join(log_dir, 'figures')
-
-    samples_dir = os.path.join(log_dir, 'samples_history/')
-    samples_files = [
-        samples_dir + i for i in os.listdir(samples_dir)
-        if i.endswith('.pkl') and i.startswith('samples_history')
-    ]
-
-    step_keys = [
-        int(i.split('/')[-1].split('_')[-1].rstrip('.pkl'))
-        for i in samples_files
-    ]
-
-    figs_dir_dict = {}
-
-    for key in step_keys:
-        _figs_dir = os.path.join(figs_dir, f'{key}_steps')
-        check_else_make_dir(_figs_dir)
-        figs_dir_dict[key] = _figs_dir
-
-    return params, step_keys, samples_files, figs_dir_dict
-
-def find_training_samples(log_dir):
-    """Find files containing samples generated during training."""
-    info_dir = os.path.join(log_dir, 'run_info/')
-    samples_dir = os.path.join(log_dir, 'samples_history/')
-    train_samples_dir = os.path.join(samples_dir, 'training/')
-    params = _load_params(log_dir)
-
-    figs_dir = os.path.join(log_dir, 'figures')
-
-    train_samples_files = [
-        train_samples_dir + i for i in os.listdir(train_samples_dir)
-        if i.endswith('.pkl') and i.startswith('samples_history')
-    ]
-
-    step_keys = [
-        int(i.split('/')[-1].split('_')[2]) for i in train_samples_files
-    ]
-
-    training_figs_dir = os.path.join(figs_dir, 'training/')
-    check_else_make_dir(training_figs_dir)
-    training_figs_dir_dict = {}
-
-    for key in step_keys:
-        _dir = os.path.join(training_figs_dir, f'{key}_train_steps/')
-        check_else_make_dir(_dir)
-        training_figs_dir_dict[key] = _dir
-
-    return params, step_keys, train_samples_files, training_figs_dir_dict
-
 
 ##############################################################################
 # Calculate observables directly from `log_dir` using the methods above to help
@@ -371,7 +298,7 @@ def calc_observables(log_dir, observables_dicts=None, training=False):
     observables_dir = os.path.join(log_dir, 'observables/')
     if training:
         observables_dir = os.path.join(observables_dir, 'training')
-    #  observables_dir_dict = {}
+
     for key in step_keys:
         obs_dir = os.path.join(observables_dir, f'{key}_steps')
         check_else_make_dir(obs_dir)
@@ -416,13 +343,6 @@ def calc_observables(log_dir, observables_dicts=None, training=False):
         write(sep_str, susceptibility_stats_txt_file, 'a')
         _ = [write(s, susceptibility_stats_txt_file, 'a') for s in strings]
         write(sep_str, susceptibility_stats_txt_file, 'a')
-        #  with open(susceptibility_stats_txt_file, 'w') as f:
-            #  f.write(str0)
-            #  f.write(len(str0) * '-' + '\n')
-            #  for k, v in susceptibility_stats_dict[key].items():
-            #      f.write(f'{k}:\n   {v}\n')
-            #      f.write('\n')
-            #  f.write(str0 + '\n')
         log('\n' + 80 * '-' + '\n')
 
     observables_dicts = (actions_dict, plaqs_dict,
@@ -446,6 +366,138 @@ def _calc_thermalization_time(samples):
 
     return popt, pcov
 
+##############################################################################
+# Load samples and create necessary directory structure
+##############################################################################
+class Loader(object):
+    def __init__(self, log_dir, training=False):
+        self.log_dir = log_dir
+        self.training = training
+        self.info_dir = os.path.join(self.log_dir, 'run_info')
+        self.eval_dir = os.path.join(self.log_dir, 'eval_info')
+        self.figs_dir = os.path.join(self.log_dir, 'figures')
+        check_else_make_dir(self.figs_dir)
+
+        if training:
+            self.eval_dir = os.path.join(self.eval_dir, 'training')
+            self.samples_dir = os.path.join(self.eval_dir, 'samples')
+            self.figs_dir = os.path.join(self.figs_dir, 'training')
+            check_else_make_dir(self.figs_dir)
+        else:
+            self.samples_dir = os.path.join(self.eval_dir, 'samples')
+
+        self.params = self.load_params()
+        output = self.find_samples()
+        self.step_keys, self.samples_files, self.figs_dir_dict = output
+
+    def load_params(self):
+        """Load in model parameters.
+
+        Returns:
+            params: Dictionary containing relevant parameters necessary to
+                recreate lattice and calculate observables.
+        """
+        params_file = os.path.join(self.info_dir, 'parameters.pkl')
+        try:
+            with open(params_file, 'rb') as f:
+                params = pickle.load(f)
+            return params
+
+        except FileNotFoundError:
+            log(f"Unable to find {params_file} in {self.info_dir}. Exiting.")
+            return None
+
+    def find_samples(self):
+        """Find sample files from root directory `self.log_dir`. """
+        if self.training:
+            train_step_idx = 2
+
+        samples_files = [os.path.join(self.samples_dir, f)
+                         for f in os.listdir(self.samples_dir)
+                         if 'samples' in f and f.endswith('.pkl')]
+
+        run_steps_idx = -3
+        step_keys = [int(i.split('/')[-1].split('_')[run_steps_idx])
+                     for i in self.samples_files]
+
+        figs_dir_dict = {}
+        for key in step_keys:
+            d = os.path.join(self.figs_dir, f'{key}_train_steps')
+            check_else_make_dir(d)
+            figs_dir_dict[key] = d
+
+        return step_keys, samples_files, figs_dir_dict
+
+
+
+def find_samples(log_dir):
+    """Calculate observables from collection of samples stored in log_dir.
+
+    Args:
+        log_dir: Root directory containing information about run.
+    Returns:
+        params: Dictionary of parameters. 
+            keys: name of parameter
+            value: parameter value
+        step_keys: List containing the number of steps the sampler was
+            evaluated for.
+        samples_files: List of files containing samples generated from sampler. 
+        figs_dir_dict: Dictionary of directories containing directories to hold
+            figures of observables plots.
+    """
+    params = _load_params(log_dir)
+    info_dir = os.path.join(log_dir, 'run_info')
+    figs_dir = os.path.join(log_dir, 'figures')
+
+    samples_dir = os.path.join(log_dir, 'samples_history/')
+    samples_files = [
+        os.path.join(samples_dir, i) for i in os.listdir(samples_dir)
+        if 'samples_history' in i
+    ]
+
+    step_keys = [
+        int(i.split('/')[-1].split('_')[3].rstrip('.pkl'))
+        for i in samples_files
+    ]
+
+    figs_dir_dict = {}
+
+    for key in step_keys:
+        _figs_dir = os.path.join(figs_dir, f'{key}_steps')
+        check_else_make_dir(_figs_dir)
+        figs_dir_dict[key] = _figs_dir
+
+    return params, step_keys, samples_files, figs_dir_dict
+
+def find_training_samples(log_dir):
+    """Find files containing samples generated during training."""
+    info_dir = os.path.join(log_dir, 'run_info/')
+    eval_dir = os.path.join(log_dir, 'eval_info/')
+    samples_dir = os.path.join(log_dir, 'samples_history/')
+    train_samples_dir = os.path.join(samples_dir, 'training/')
+    params = _load_params(log_dir)
+
+    figs_dir = os.path.join(log_dir, 'figures')
+
+    train_samples_files = [
+        train_samples_dir + i for i in os.listdir(train_samples_dir)
+        if i.endswith('.pkl') and i.startswith('samples_history')
+    ]
+
+    step_keys = [
+        int(i.split('/')[-1].split('_')[2]) for i in train_samples_files
+    ]
+
+    training_figs_dir = os.path.join(figs_dir, 'training/')
+    check_else_make_dir(training_figs_dir)
+    training_figs_dir_dict = {}
+
+    for key in step_keys:
+        _dir = os.path.join(training_figs_dir, f'{key}_train_steps/')
+        check_else_make_dir(_dir)
+        training_figs_dir_dict[key] = _dir
+
+    return params, step_keys, train_samples_files, training_figs_dir_dict
 
 ##############################################################################
 # High-level plotting functions.
@@ -537,8 +589,6 @@ def plot_top_charges_counts(log_dir, charges_dict, training=False):
     else:
         params, _, _, figs_dir_dict = find_samples(log_dir)
         title_str_key = 'evaluation'
-    #  params, _, _, training_figs_dir_dict = find_training_samples(log_dir)
-    #  plt.close('all')
 
     for key, val in charges_dict.items():
         for idx in range(val.shape[1]):
@@ -572,11 +622,6 @@ def plot_top_charges_counts(log_dir, charges_dict, training=False):
             if not os.path.isfile(out_file):
                 _ = fig.savefig(out_file, dpi=400, bbox_inches='tight')
         log(80 * '-' + '\n')
-
-
-
-
-
 
 
 ##############################################################################
@@ -687,9 +732,8 @@ def calc_integrated_autocorr_time(data):
 
 def make_multiple_lines_plots(beta, observables, **kwargs):
     """Create all relevant plots."""
-
     figs_dir = kwargs.get('figs_dir', None)
-    legend = kwargs.get('legend', False)
+    #  legend = kwargs.get('legend', False)
     title = kwargs.get('title', None)
 
     actions, avg_plaquettes, top_charges = observables
