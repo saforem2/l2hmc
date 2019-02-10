@@ -311,7 +311,7 @@ class GaugeLattice(object):
 
         return [total_action, avg_plaq, int(topological_charge)]
 
-    def calc_plaq_observables(self, samples, beta):
+    def calc_plaq_observables(self, samples):
         """Calculate plaquette observables for each sample in `samples.`
 
         Args:
@@ -320,12 +320,12 @@ class GaugeLattice(object):
         """
         if tf.executing_eagerly():
             return np.array([
-                self._calc_plaq_observables(sample, beta) for sample in samples
+                self._calc_plaq_observables(sample) for sample in samples
             ]).reshape((-1, 3)).T
 
         plaq_observables = []
         for idx in range(samples.shape[0]):
-            observables = self._calc_plaq_observables(samples[idx], beta)
+            observables = self._calc_plaq_observables(samples[idx])
             plaq_observables.extend(observables)
 
         return np.array(plaq_observables).reshape((-1, 3)).T
