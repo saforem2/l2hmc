@@ -779,6 +779,10 @@ class GaugeModel(object):
                                                self.data)
 
                 if step % self.logging_steps == 0:
+                    if self.using_hvd:
+                        if hvd.rank() != 0:
+                            continue
+
                     if trace:
                         options = tf.RunOptions(
                             trace_level=tf.RunOptions.FULL_TRACE
@@ -789,14 +793,13 @@ class GaugeModel(object):
                         options = None
                         run_metadata = None
 
-                    summary_str = self.sess.run(
-                        self.summary_op, feed_dict={
-                            self.x: samples_np,
-                            self.beta: beta_np
-                        }, options=options, run_metadata=run_metadata
-                    )
-
-                    if self.condition1 or self.condition2:
+                    #  if self.condition1 or self.condition2:
+                        summary_str = self.sess.run(
+                            self.summary_op, feed_dict={
+                                self.x: samples_np,
+                                self.beta: beta_np
+                            }, options=options, run_metadata=run_metadata
+                        )
                         self.writer.add_summary(summary_str,
                                                 global_step=step)
                         if trace:
