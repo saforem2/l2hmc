@@ -314,7 +314,6 @@ class GaugeDynamics(tf.keras.Model):
     # pylint:disable=invalid-name
     def _update_momentum_forward(self, position, momentum, beta, t):
         """Update v in the forward leapfrog step."""
-        #  grad = self.grad_potential(position, beta)
         grad = self.grad_potential(position, beta)
 
         scale, translation, transformed = self.momentum_fn([position, grad, t])
@@ -390,7 +389,6 @@ class GaugeDynamics(tf.keras.Model):
     def _compute_accept_prob(self, position, momentum, position_post,
                              momentum_post, sumlogdet, beta):
         """Compute the prob of accepting the proposed state given old state."""
-        #  beta = self.lattice.beta
         old_hamil = self.hamiltonian(position, momentum, beta)
         new_hamil = self.hamiltonian(position_post, momentum_post, beta)
         prob = tf.exp(tf.minimum((old_hamil - new_hamil + sumlogdet), 0.))
@@ -458,20 +456,16 @@ class GaugeDynamics(tf.keras.Model):
             grad_fn = tfe.gradients_function(self.potential_energy,
                                              params=["position"])
             grad = grad_fn(position, beta)[0]
-            #  grad_fn = tfe.gradients_function(self.potential_energy, params=[0])
-            #  (grad,) = grad_fn(position, beta)
-            #  grad = tfe.gradients_function(self.potential_energy)(position)[0]
         else:
-            grad = tf.gradients(
-                self.potential_energy(position, beta), position
-            )[0]
+            grad = tf.gradients(self.potential_energy(position, beta),
+                                position)[0]
         return grad
 
     def flatten_tensor(self, tensor):
         """Flattens tensor along axes 1:, since axis=0 indexes sample in batch.
 
         Example: for a tensor of shape [b, x, y, t] -->
-        returns a tensor of shape [b, x * y * t]
+            returns a tensor of shape [b, x * y * t]
         """
         batch_size = tensor.shape[0]
         return tf.reshape(tensor, shape=(batch_size, -1))
