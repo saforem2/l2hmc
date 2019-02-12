@@ -14,7 +14,7 @@ import numpy as np
 import numpy.random as npr
 import tensorflow as tf
 
-from network.conv_net import ConvNet
+from network.conv_net import ConvNet2D, ConvNet3D
 from network.generic_net import GenericNet
 
 from lattice.lattice import GaugeLattice
@@ -64,34 +64,12 @@ class GaugeDynamics(tf.keras.Model):
             if key != 'eps':  # want to use self.eps as tf.Variable
                 setattr(self, key, val)
 
-        #  if not self.hmc:
-        #      alpha = tf.get_variable(
-        #          'alpha',
-        #          initializer=tf.log(tf.constant(self.eps)),
-        #          trainable=self.eps_trainable,
-        #      )
-        #  else:
-        #      alpha = tf.log(tf.constant(self.eps, dtype=tf.float32))
-
-        #  self.eps = tf.exp(alpha, name='eps')
         self.eps = tf.Variable(
             initial_value=kwargs.get('eps', 0.1),
             name='eps',
             dtype=tf.float32,
             trainable=self.eps_trainable
         )
-        #
-        #  if not tf.executing_eagerly():
-        #      self.beta = tf.placeholder(tf.float32, shape=(), name='beta')
-        #  else:
-        #      self.beta = self.beta_init
-
-
-        # In the case of two-dimensions, samples_tensor has shape:
-        #     [batch_size, time_size, space_size, dim]
-        #  self.samples = tf.convert_to_tensor(
-        #      self.lattice.samples, dtype=tf.float32  # batch of link configs
-        #  )
 
         self._construct_time()
         self._construct_masks()
@@ -113,11 +91,35 @@ class GaugeDynamics(tf.keras.Model):
 
         else:
             if self.conv_net:
-                self._build_conv_nets()
+                self._build_conv_nets_3D()
             else:
                 self._build_generic_nets()
 
-    def _build_conv_nets(self):
+    def _build_conv_nets_3D(self):
+        """Build ConvNet3D architecture for position and momentum functions."""
+        kwargs = {
+            '_input_shape': (self.batch_size, *self.lattice.links.shape),
+            'links_shape': self.lattice.links.shape,
+            'x_dim': self.lattice.num_links,  # dimensionality of target space
+            'factor': 2.,
+            'spatial_size': self.lattice.space_size,
+            'num_hidden': 512,
+            'num_filters': int(2 * self.lattice.space_size),
+            'filter_sizes': [(2, 2, 1), (2, 2, 1)],
+            'name_scope': 'position',
+            'data_format': self.data_format
+        }
+
+        with tf.name_scope("DynamicsNetwork"):
+            with tf.name_scope("XNet"):
+                self.position_fn = ConvNet3D(model_name='XNet', **kwargs)
+
+            kwargs['name_scope'] = 'momentum'
+            kwargs['factor'] = 1.
+            with tf.name_scope("VNet"):
+                self.momentum_fn = ConvNet3D(model_name='VNet', **kwargs)
+
+    def _build_conv_nets_2D(self):
         """Build ConvNet architecture for position and momentum functions."""
         #  num_hidden = int(2 * self.x_dim)             # num hidden nodes in MLP
         #  num_filters = 2 * self.lattice.space_size    # num filters in Conv2D
@@ -131,22 +133,21 @@ class GaugeDynamics(tf.keras.Model):
             'x_dim': self.lattice.num_links, # dimensionality of target space
             'factor': 2.,
             'spatial_size': self.lattice.space_size,
-            'num_hidden': 256,
+            'num_hidden': 1024,
             'num_filters': int(2 * self.lattice.space_size),
-            'filter_sizes': [(2, 2), (2, 2)], # for 1st and 2nd conv. layer
+            'filter_sizes': [(3, 3), (2, 2)], # for 1st and 2nd conv. layer
             'name_scope': 'position',
             'data_format': self.lattice.data_format,
         }
 
-
         with tf.name_scope("DynamicsNetwork"):
             with tf.name_scope("XNet"):
-                self.position_fn = ConvNet(model_name='XNet', **kwargs)
+                self.position_fn = ConvNet2D(model_name='XNet', **kwargs)
 
             kwargs['name_scope'] = 'momentum'
             kwargs['factor'] = 1.
             with tf.name_scope("VNet"):
-                self.momentum_fn = ConvNet(model_name='VNet', **kwargs)
+                self.momentum_fn = ConvNet2D(model_name='VNet', **kwargs)
 
     def _build_generic_nets(self):
         """Build GenericNet FC-architectures for position and momentum fns. """
@@ -207,8 +208,10 @@ class GaugeDynamics(tf.keras.Model):
             2 * np.pi
         )
 
-        momentum_post = (forward_mask[:, None, None, None] * momentum_f
-                         + backward_mask[:, None, None, None] * momentum_b)
+        momentum_post = (
+            forward_mask[:, None, None, None] * momentum_f
+            + backward_mask[:, None, None, None] * momentum_b
+        )
 
         # Probability of accepting the proposed states
         accept_prob = (forward_mask * accept_prob_f
@@ -352,7 +355,6 @@ class GaugeDynamics(tf.keras.Model):
         """Update v in the backward leapforg step. Invert the forward update."""
         #  grad = self.grad_potential(position, beta)
         grad = self.grad_potential(position, beta)
-
 
         scale, translation, transformed = self.momentum_fn([position, grad, t])
 

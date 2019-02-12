@@ -53,13 +53,268 @@ def create_periodic_padding(samples, filter_size):
     return np.array(x, dtype=np.float32).reshape(*original_size)
 
 
+
 # pylint:disable=too-many-arguments, too-many-instance-attributes
-class ConvNet(tf.keras.Model):
+class ConvNet3D(tf.keras.Model):
     """Conv. neural net with different initialization scale based on input."""
     def __init__(self, model_name, **kwargs):
         """Initialization method."""
 
-        super(ConvNet, self).__init__(name=model_name)
+        super(ConvNet3D, self).__init__(name=model_name)
+
+        for key, val in kwargs.items():
+            setattr(self, key, val)
+
+        #  with tf.variable_scope(self.variable_scope):
+        with tf.name_scope(self.name_scope):
+
+            self.coeff_scale = tf.Variable(
+                initial_value=tf.zeros([1, self.x_dim]),
+                name='coeff_scale',
+                trainable=True,
+                dtype=tf.float32
+            )
+
+            self.coeff_transformation = tf.Variable(
+                initial_value=tf.zeros([1, self.x_dim]),
+                name='coeff_transformation',
+                trainable=True,
+                dtype=tf.float32
+            )
+
+            self.conv_x1 = tf.keras.layers.Conv3D(
+                filters=self.num_filters,
+                kernel_size=self.filter_sizes[0],
+                activation=tf.nn.relu,
+                #  input_shape=self._input_shape,
+                input_shape=self._input_shape,
+                padding='same',
+                name='conv_x1',
+                dtype=tf.float32,
+                data_format=self.data_format
+
+            )
+
+            self.max_pool_x1 = tf.keras.layers.MaxPooling3D(
+                pool_size=(2, 2, 1),
+                strides=2,
+                padding='same',
+                name='max_pool_x1'
+            )
+
+            self.conv_v1 = tf.keras.layers.Conv3D(
+                filters=self.num_filters,
+                kernel_size=self.filter_sizes[0],
+                activation=tf.nn.relu,
+                input_shape=self._input_shape,
+                padding='same',
+                name='conv_v1',
+                dtype=tf.float32,
+                data_format=self.data_format
+            )
+
+            self.max_pool_v1 = tf.keras.layers.MaxPooling3D(
+                pool_size=(2, 2, 1),
+                strides=2,
+                padding='same',
+                name='max_pool_x1'
+            )
+
+            self.conv_x2 = tf.keras.layers.Conv3D(
+                filters=2*self.num_filters,
+                kernel_size=self.filter_sizes[1],
+                activation=tf.nn.relu,
+                padding='same',
+                name='conv_x2',
+                dtype=tf.float32,
+                data_format=self.data_format
+            )
+
+            self.max_pool_x2 = tf.keras.layers.MaxPooling3D(
+                pool_size=(2, 2, 1),
+                strides=2,
+                padding='same',
+                name='max_pool_x1'
+            )
+
+            self.conv_v2 = tf.keras.layers.Conv3D(
+                filters=2 * self.num_filters,
+                kernel_size=self.filter_sizes[1],
+                activation=tf.nn.relu,
+                padding='same',
+                name='conv_v2',
+                dtype=tf.float32,
+                data_format=self.data_format
+            )
+
+            self.max_pool_v2 = tf.keras.layers.MaxPooling3D(
+                pool_size=(2, 2, 1),
+                strides=2,
+                padding='same',
+                name='max_pool_x1'
+            )
+
+            self.flatten = tf.keras.layers.Flatten(name='flatten')
+
+            self.x_layer = _custom_dense(self.num_hidden, self.factor/3.,
+                                         name='x_layer')
+
+            self.v_layer = _custom_dense(self.num_hidden, 1./3.,
+                                         name='v_layer')
+
+            self.t_layer = _custom_dense(self.num_hidden, 1./3.,
+                                         name='t_layer')
+
+            self.h_layer = _custom_dense(self.num_hidden, name='h_layer')
+
+            #  self.hidden_layer1 = tf.keras.layers.Dense(
+            #      2 * self.x_dim,
+            #      activation=tf.nn.relu
+            #  )
+
+            self.scale_layer = _custom_dense(self.x_dim, 0.001,
+                                             name='scale_layer')
+
+            self.translation_layer = _custom_dense(self.x_dim, 0.001,
+                                                   name='translation_layer')
+
+            self.transformation_layer = _custom_dense(
+                self.x_dim,
+                0.001,
+                name='transformation_layer'
+            )
+
+
+    # pylint: disable=invalid-name, arguments-differ
+    def call(self, inputs):
+        """call method.
+
+        NOTE: Architecture looks like 
+        
+        - inputs: x, v, t
+
+            x --> CONV_X1, MAX_POOL_X1, --> CONV_X1, MAX_POOL_X2 -->
+                   FLATTEN_X --> X_LAYER --> X_OUT
+
+            v --> CONV_V1, MAX_POOL_V1, --> CONV_V1, MAX_POOL_V2 -->
+                   FLATTEN_V --> V_LAYER --> V_OUT
+
+            t --> T_LAYER --> T_OUT
+
+            X_OUT + V_OUT + T_OUT --> H_LAYER --> H_OUT
+
+
+        - H_OUT is then fed to three separate layers:
+
+            (1.) H_OUT --> (SCALE_LAYER, TANH) * exp(COEFF_SCALE)
+
+                 output: scale
+            
+            (2.) H_OUT --> TRANSLATION_LAYER --> TRANSLATION_OUT
+
+                 output: translation
+
+            (3.) H_OUT --> (TRANSFORMATION_LAYER, TANH) 
+                            * exp(COEFF_TRANSFORMATION)
+
+                 output: transformation
+
+       Returns:
+           scale, translation, transformation
+        """
+        v, x, t = inputs
+
+        v = self.reshape_5D(v)
+        x = self.reshape_5D(x)
+
+        x = self.max_pool_x1(self.conv_x1(x))
+        #  x = tf.nn.local_response_normalization(x)
+        x = self.max_pool_x2(self.conv_x2(x))
+        #  x = tf.nn.local_response_normalization(x)
+        x = self.flatten(x)
+
+        v = self.max_pool_v1(self.conv_v1(v))
+        #  v = tf.nn.local_response_normalization(v)
+        v = self.max_pool_v2(self.conv_v2(v))
+        #  v = tf.nn.local_response_normalization(v)
+        v = self.flatten(v)
+
+        h = tf.nn.relu(self.v_layer(v) + self.x_layer(x) + self.t_layer(t))
+        h = tf.nn.relu(self.h_layer(h))
+        #  h = self.hidden_layer1(h)
+
+        def reshape(t, name):
+            return tf.squeeze(tf.reshape(t, shape=self._input_shape,
+                                         name=name))
+
+        translation = reshape(self.translation_layer(h), name='translation')
+
+        scale = reshape(
+            tf.nn.tanh(self.scale_layer(h)) * tf.exp(self.coeff_scale),
+            name='scale'
+        )
+
+        transformation = reshape(
+            self.transformation_layer(h) * tf.exp(self.coeff_transformation),
+            name='transformation'
+        )
+
+        #  translation = tf.reshape(self.translation_layer(h),
+        #                           shape=self._input_shape,
+        #                           name='translation')
+
+        #  scale = (tf.nn.tanh(self.scale_layer(h))
+        #           * tf.exp(self.coeff_scale))
+        #  scale = tf.reshape(scale, shape=self._input_shape, name='scale')
+
+        #  transformation = (self.transformation_layer(h)
+        #                    * tf.exp(self.coeff_transformation))
+        #
+        #  transformation = tf.reshape(transformation,
+        #                              shape=self._input_shape,
+        #                              name='transformation')
+
+        return scale, translation, transformation
+
+    def reshape_5D(self, tensor):
+        """
+        Reshape tensor to be compatible with tf.keras.layers.Conv3D.
+
+        If self.data_format is 'channels_first', and input `tensor` has shape
+        (N, 2, L, L), the output tensor has shape (N, 1, 2, L, L).
+
+        If self.data_format is 'channels_last' and input `tensor` has shape 
+        (N, L, L, 2), the output tensor has shape (N, 2, L, L, 1).
+        """
+        if self.data_format == 'channels_first':
+            N, D, H, W = tensor.shape
+            if isinstance(tensor, np.ndarray):
+                return np.reshape(tensor, (N, 1, H, W, D))
+                #  return np.expand_dims(tensor, axis=1)
+            #  return tf.expand_dims(tensor, 1)
+            return tf.reshape(tensor, (N, 1, D, H, W))
+
+        elif self.data_format == 'channels_last':
+            N, H, W, D = tensor.shape
+            if isinstance(tensor, np.ndarray):
+                #  return np.expand_dims(tensor, axis=-1)
+                return np.reshape(tensor, (N, H, W, D, 1))
+            #  return tf.expand_dims(tensor, -1)
+            return tf.reshape(tensor, (N, H, W, D, 1))
+
+        else:
+            raise AttributeError("`self.data_format` should be one of "
+                                 "'channels_first' or 'channels_last'")
+
+
+
+# pylint:disable=too-many-arguments, too-many-instance-attributes
+class ConvNet2D(tf.keras.Model):
+    """Conv. neural net with different initialization scale based on input."""
+    def __init__(self, model_name, **kwargs):
+        """Initialization method."""
+
+        super(ConvNet2D, self).__init__(name=model_name)
 
         for key, val in kwargs.items():
             setattr(self, key, val)

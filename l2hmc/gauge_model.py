@@ -98,13 +98,9 @@ def write(s, f, mode='a', nl=True):
             return
         with open(f, mode) as ff:
             ff.write(s + '\n' if nl else '')
-            #  if nl:
-            #      f.write('\n')
     except NameError:
         with open(f, mode) as ff:
             ff.write(s + '\n' if nl else '')
-            #  if nl:
-            #      f.write('\n')
 
 def log(s, nl=True):
     try:
@@ -134,71 +130,80 @@ def tf_accept(x, _x, px):
     mask = (px - tf.random_uniform(tf.shape(px)) > 0.)
     return tf.where(mask, _x, x)
 
-def graph_step(dynamics, optimizer, samples, beta, step, aux=True):
+###############################################################################
+#            Perform a single update step using graph execution
+###############################################################################
+def graph_step(dynamics, optimizer, samples, beta, step, metric_fn):
     """Perform a single training update step using graph execution."""
     with tf.name_scope('train'):
         loss, grads, samples, accept_prob = loss_and_grads(
-            dynamics, samples, beta, loss_fn=compute_loss, aux=aux
+            dynamics, samples, beta, metric_fn, loss_fn=compute_loss
         )
-        train_op = optimizer.apply_gradients(zip(grads, dynamics.variables),
+        train_op = optimizer.apply_gradients(zip(grads,
+                                                 dynamics.trainable_variables),
                                              global_step=step,
                                              name='train_op')
 
     return train_op, loss, grads, samples, accept_prob
 
 # pylint: disable=too-many-locals
-def compute_loss(dynamics, x, beta, aux=True, scale=.1, eps=1e-4):
+def compute_loss(dynamics, x, beta, metric_fn, scale=.1, eps=1e-4):
     """Compute loss defined in equation (8)."""
     log("    Creating loss...")
     t0 = time.time()
 
     x_, _, px, x_out = dynamics.apply_transition(x, beta)
-    if aux:
-        z = tf.random_normal(tf.shape(x))  # Auxiliary variable
-        z_, _, pz, _ = dynamics.apply_transition(z, beta)
+
+    z = tf.random_normal(tf.shape(x))  # Auxiliary variable
+    z_, _, pz, _ = dynamics.apply_transition(z, beta)
 
     # Add eps for numerical stability; following released impl
     with tf.name_scope('loss'):
         with tf.name_scope('x_loss'):
-            x_loss = tf.reduce_sum((x - x_)**2, axis=dynamics.axes) * px + eps
-        if aux:
-            with tf.name_scope('z_loss'):
-                z_loss = (
-                    tf.reduce_sum((z - z_)**2, axis=dynamics.axes) * pz + eps
-                )
+            x_loss = tf.reduce_sum(metric_fn(x, x_),
+                                   axis=dynamics.axes) * px + eps
 
-            loss = tf.reduce_mean(
-                (1. / x_loss + 1. / z_loss) * scale - (x_loss + z_loss) / scale,
-                axis=0
-            )
-        else:
-            loss = tf.reduce_mean(scale  / x_loss - x_loss / scale, axis=0)
+        with tf.name_scope('z_loss'):
+            z_loss = tf.reduce_sum(metric_fn(z, z_),
+                                   axis=dynamics.axes) * pz + eps
+
+        loss = tf.reduce_mean(
+            (1. / x_loss + 1. / z_loss) * scale - (x_loss + z_loss) / scale,
+            axis=0
+        )
+        #  x_loss = tf.reduce_sum((x - x_)**2, axis=dynamics.axes) * px + eps
+        #  z_loss = (
+        #      tf.reduce_sum((z - z_)**2, axis=dynamics.axes) * pz + eps
+        #  )
+        #  else:
+        #      loss = tf.reduce_mean(scale  / x_loss - x_loss / scale, axis=0)
 
     t_diff = time.time() - t0
     log(f"    done. took: {t_diff:4.3g} s.")
 
     return loss, x_out, px
 
-def loss_and_grads(dynamics, x, beta, loss_fn=compute_loss, aux=True):
+def loss_and_grads(dynamics, x, beta, metric_fn, loss_fn=compute_loss):
     """Obtain loss value and gradients."""
     log(f"  Creating gradient operations...")
     t0 = time.time()
 
-    with tf.name_scope('grads'):
-        with tf.GradientTape() as tape:
-            loss_val, out, accept_prob = loss_fn(dynamics, x, beta, aux)
-        grads = tape.gradient(loss_val, dynamics.trainable_variables)
+    if tf.executing_eagerly():
+        with tf.name_scope('grads'):
+            with tf.GradientTape() as tape:
+                loss_val, out, accept_prob = loss_fn(dynamics, x,
+                                                     beta, metric_fn)
+            grads = tape.gradient(loss_val, dynamics.trainable_variables)
+    else:
+        loss_val, out, accept_prob = loss_fn(dynamics, x, beta, metric_fn)
+        grads = tf.gradients(loss_val, dynamics.trainable_variables)
 
     t_diff = time.time() - t0
     log(f"  done. took: {t_diff:4.3g} s")
 
-    #  if out_file is not None:
-    #      s = f'Gradient operations took: {t_diff:4.3g} s to create.\n'
-    #      write(s, out_file, 'a')
-        #  with open(out_file, 'a') as f:
-        #      f.write(f'Gradient operations took: {t_diff:4.3g} s to create.\n')
-
     return loss_val, grads, out, accept_prob
+
+
 
 
 # pylint: disable=attribute-defined-outside-init
@@ -227,7 +232,8 @@ class GaugeModel(object):
         if restore:
             self._restore_model(log_dir, sess, config)
         else:
-            self.build_graph(sess, config)
+            if not tf.executing_eagerly():
+                self.build_graph(sess, config)
 
     def _init_params(self, params):
         """Parse key value pairs from params and set as class attributes."""
@@ -314,13 +320,11 @@ class GaugeModel(object):
                                         dim=self.dim,
                                         link_type=self.link_type,
                                         num_samples=self.num_samples,
-                                        rand=self.rand,
-                                        data_format=self.data_format)
+                                        rand=self.rand)
+                                        #  data_format=self.data_format)
 
     def _init_dynamics(self, kwargs=None):
         """Initialize dynamics object."""
-        self.potential_fn = self.lattice.get_energy_function(self.samples)
-
         if kwargs is None:
             kwargs = {
                 'eps': self.eps,
@@ -328,19 +332,58 @@ class GaugeModel(object):
                 'conv_net': self.conv_net,
                 'beta_init': self.beta_init,
                 'num_steps': self.num_steps,
-                'eps_trainable': self.eps_trainable
+                'eps_trainable': self.eps_trainable,
+                'data_format': self.data_format
+
             }
+
+        with tf.name_scope('potential_fn'):
+            self.potential_fn = self.lattice.get_energy_function(self.samples)
 
         with tf.name_scope('dynamics'):
             self.dynamics = GaugeDynamics(lattice=self.lattice,
                                           potential_fn=self.potential_fn,
                                           **kwargs)
 
+    def reshape_5D(self, tensor):
+        """
+        Reshape tensor to be compatible with tf.keras.layers.Conv3D.
+
+        If self.data_format is 'channels_first', and input `tensor` has shape
+        (N, 2, L, L), the output tensor has shape (N, 1, 2, L, L).
+
+        If self.data_format is 'channels_last' and input `tensor` has shape 
+        (N, L, L, 2), the output tensor has shape (N, 2, L, L, 1).
+        """
+        if self.data_format == 'channels_first':
+            N, D, H, W = tensor.shape
+            if isinstance(tensor, np.ndarray):
+                return np.reshape(tensor, (N, 1, H, W, D))
+                #  return np.expand_dims(tensor, axis=1)
+            #  return tf.expand_dims(tensor, 1)
+            return tf.reshape(tensor, (N, 1, D, H, W))
+
+        elif self.data_format == 'channels_last':
+            N, H, W, D = tensor.shape
+            if isinstance(tensor, np.ndarray):
+                #  return np.expand_dims(tensor, axis=-1)
+                return np.reshape(tensor, (N, H, W, D, 1))
+            #  return tf.expand_dims(tensor, -1)
+            return tf.reshape(tensor, (N, H, W, D, 1))
+
+        else:
+            raise AttributeError("`self.data_format` should be one of "
+                                 "'channels_first' or 'channels_last'")
+
+
     def _init_tensors(self):
         """Initialize tensors (and placeholders if executing in graph mode)."""
         self.batch_size = self.lattice.samples.shape[0]
         self.samples = tf.convert_to_tensor(self.lattice.samples,
                                             dtype=tf.float32)
+
+        #  self.samples = self.reshape_5D(self.samples)
+
         if not tf.executing_eagerly():
             self.x = tf.placeholder(tf.float32, self.samples.shape, name='x')
             self.beta = tf.placeholder(tf.float32, shape=(), name='beta')
@@ -538,9 +581,11 @@ class GaugeModel(object):
         if self.metric == 'cos2':
             self.metric_fn = lambda x1, x2: tf.square(tf.cos(x1) - tf.cos(x2))
 
+        if self.metric == 'cos_diff':
+            self.metric_fn = lambda x1, x2: 1. - tf.cos(x1 - x2)
+
     def _create_sampler(self):
         """Create operation for generating new samples using dynamics engine.
-
 
         This method is to be used when running generic HMC to create operations
         for dealing with `dynamics.apply_transition` without building
@@ -569,12 +614,15 @@ class GaugeModel(object):
         else:
             self.sess = sess
 
-        if self.hmc:  # if running generic HMC, all we need is the sampler
+        # if running generic HMC, all we need is the sampler
+        if self.hmc:
             self._create_sampler()
             self.sess.run(tf.global_variables_initializer())
             return
 
         self.global_step = tf.train.get_or_create_global_step()
+        self.global_step.assign(1)
+
         self.learning_rate = tf.train.exponential_decay(
             self.learning_rate_init,
             self.global_step,
@@ -590,13 +638,14 @@ class GaugeModel(object):
         if self.using_hvd:
             opt = hvd.DistributedOptimizer(self.optimizer)
 
+        self._create_metric_fn()
         start_time = time.time()
         outputs = graph_step(self.dynamics,
                              self.optimizer,
                              self.x,
                              self.beta,
                              self.global_step,
-                             aux=self.aux)
+                             self.metric_fn)
                              #  out_file=self.files['run_info_file'])
 
         self.train_op, self.loss_op, self.grads, self.x_out, self.px = outputs
@@ -690,6 +739,7 @@ class GaugeModel(object):
             beta_np = self.beta_init
 
         samples_np = np.array(self.lattice.samples, dtype=np.float32)
+        #  samples_np = self.reshape_5D(samples_np)
 
         try:
             log(data_header)
@@ -763,8 +813,6 @@ class GaugeModel(object):
                     if self.condition1 or self.condition2:
                         t0 = time.time()
                         log(80 * '-')
-                        log(f"\nEvaluating sampler for {tsl} steps"
-                              f" at beta = {self.beta_final}.")
                         self.run(self.training_samples_length,
                                  current_step=step+1,
                                  beta=self.beta_final)
@@ -772,7 +820,7 @@ class GaugeModel(object):
                         log(80 * '-')
                         log(data_header)
 
-                if (step + 2) % self.save_steps == 0:
+                if step % self.save_steps == 0:
                     if self.condition1 or self.condition2:
                         self._save_model(samples=samples_np, step=step-2)
                         helpers.write_run_data(self.files['run_info_file'],
@@ -868,7 +916,7 @@ class GaugeModel(object):
             pkl_file = (f'samples_history_{current_step}_TRAIN_'
                         f'steps_{run_steps}_beta_{beta}.pkl')
 
-            eval_file = os.path.join(self.train_samples_dir, txt_file)
+            eval_file = os.path.join(self.train_eval_dir, txt_file)
             out_file = os.path.join(self.train_samples_dir, pkl_file)
 
         eps = self.sess.run(self.dynamics.eps)
@@ -881,14 +929,14 @@ class GaugeModel(object):
                                                   self.beta: beta}
             )
 
-            samples_history.append(samples)
+            samples_history.append(np.squeeze(samples))
 
             if step % 10 == 0:
                 tt = (time.time() - t0)# / (norm_factor)
                 eval_str = (f'step: {step:>6.4g}/{run_steps:<6.4g} '
                             f'accept prob (avg): {np.mean(px):^9.4g} '
                             f'step size: {eps:^6.4g} '
-                            f'\t time/step: {tt:^6.4g}\n')
+                            f'  time/step: {tt:^6.4g}\n')
 
                 log(eval_str)
                 log('accept prob: ', nl=False)
