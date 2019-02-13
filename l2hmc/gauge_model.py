@@ -248,16 +248,16 @@ class GaugeModel(object):
         self.losses_arr = []
 
         self.data = {
-            'step': 0,
+            'step': 1,
             'loss': 0.,
             'step_time': 0.,
             'accept_prob': 0.,
             'samples': [],
             'eps': params.get('eps', 0.),
-            'beta_init': params.get('beta_init', 1.),
-            'beta': params.get('beta_init', 1.),
-            'train_steps': params.get('train_steps', 1000),
-            'learning_rate': params.get('learning_rate_init', 1e-4),
+            'beta_init': params.get('beta_init', 2.),
+            'beta': params.get('beta_init', 2.),
+            'train_steps': params.get('train_steps', 20000),
+            'learning_rate': params.get('learning_rate_init', 1e-3),
         }
 
         self.condition1 = not self.using_hvd  # condition1: NOT using horovod
@@ -671,10 +671,24 @@ class GaugeModel(object):
             write(s1, self.files['run_info_file'], 'a')
             write(sep_str, self.files['run_info_file'], 'a')
 
+    def update_beta(self, step):
+        temp = ((1. / self.beta_init - 1. / self.beta_final)
+                * (1. - step / float(self.train_steps))
+                + 1. / self.beta_final)
+        new_beta = 1. / temp
+
+        return new_beta
+
+
     def pre_train(self):
         """Set up training for the model."""
         if self.condition1 or self.condition2:
             self.saver = tf.train.Saver(max_to_keep=3)
+
+        self.samples_file_path = os.path.join(self.eval_dir,
+                                              'training',
+                                              'intermediate_beta')
+        check_else_make_dir(self.samples_file_path)
 
         self.sess.run(tf.global_variables_initializer())
 
@@ -697,7 +711,12 @@ class GaugeModel(object):
         self.sess.graph.finalize()
 
     #pylint: disable=too-many-statements
-    def train(self, train_steps, beta_init=None, pre_train=True, trace=False):
+    def train(self, 
+              train_steps, 
+              samples_init=None, 
+              beta_init=None, 
+              pre_train=True, 
+              trace=False):
         """Train the L2HMC sampler for `train_steps`.
 
         Args:
@@ -737,8 +756,13 @@ class GaugeModel(object):
         lr_np = self.data['learning_rate']
         if beta_init is None:
             beta_np = self.beta_init
+        else:
+            beta_np = beta_init
 
-        samples_np = np.array(self.lattice.samples, dtype=np.float32)
+        if samples_init is None:
+            samples_np = np.array(self.lattice.samples, dtype=np.float32)
+        else:
+            samples_np = samples_init
         #  samples_np = self.reshape_5D(samples_np)
 
         try:
@@ -751,6 +775,9 @@ class GaugeModel(object):
                 )
             for step in range(initial_step, initial_step + train_steps):
                 start_step_time = time.time()
+
+
+                beta_np = self.update_beta(step)
 
                 fd = {self.x: samples_np,
                       self.beta: beta_np}
@@ -788,23 +815,23 @@ class GaugeModel(object):
                         helpers.write_run_data(self.files['run_info_file'],
                                                self.data)
 
-                if self.annealing:
-                    _beta_np = beta_np / self.annealing_factor
-
-                    if _beta_np < self.beta_final:
-                        beta_np = _beta_np
-                    else:
-                        log("Annealing schedule finished!")
-                        log("Saving model and exiting...")
-                        beta_np = self.beta_final
-                        step = self.sess.run(self.global_step)
-                        self._save_model(samples=samples_np, step=step)
-                        if self.condition1 or self.condition2:
-                            helpers.write_run_data(self.files['run_info_file'],
-                                                   self.data)
-                            sys.stdout.flush()
-
-                        return 0
+                #  if self.annealing:
+                #      _beta_np = beta_np / self.annealing_factor
+                #
+                #      if _beta_np < self.beta_final:
+                #          beta_np = _beta_np
+                #      else:
+                #          log("Annealing schedule finished!")
+                #          log("Saving model and exiting...")
+                #          beta_np = self.beta_final
+                #          step = self.sess.run(self.global_step)
+                #          self._save_model(samples=samples_np, step=step)
+                #          if self.condition1 or self.condition2:
+                #              helpers.write_run_data(self.files['run_info_file'],
+                #                                     self.data)
+                #              sys.stdout.flush()
+                #
+                #          return 0
 
                 # Intermittently run sampler and save samples to pkl file.
                 # We can calculate observables from these samples to
@@ -830,6 +857,13 @@ class GaugeModel(object):
                     if self.using_hvd:
                         if hvd.rank() != 0:
                             continue
+
+                    samples_file_name = (f'training_samples_{step}_train_steps'
+                                         f'_beta_{beta_np:.1g}.pkl')
+                    out_file = os.path.join(self.samples_file_path,
+                                            samples_file_name)
+                    with open(out_file, 'wb') as f:
+                        pickle.dump(samples_np, f)
 
                     if trace:
                         options = tf.RunOptions(
