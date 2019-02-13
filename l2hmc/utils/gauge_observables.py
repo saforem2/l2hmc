@@ -166,33 +166,13 @@ def calc_susceptibility_stats(charges):
         stderr_arr.append(stderr)
         conf_interval_arr.extend(conf_interval)
 
-    # Compute susceptibility statistics over all (tot) samples 
-    #  q_rs_all = jackknife_resampling(np.array(charges).flatten())
-    #  stats_all = jackknife_stats(q_rs_all,
-    #                                test_statistic,
-    #                                0.95)
-    #  estimate_all, bias_all, stderr_all, conf_interval_all = stats_all
-
-    #  str0 = (f"Topological susceptibility statistics for combined samples"
-    #          f"consisting of {q_rs.shape[0]} L2HMC steps.")
-    #  sep_str1 = len(str0) * '=' + '\n'
-    #  sep_str0 = len(str0) * '-' + '\n'
-    #
-    #  log(sep_str1)
-    #  log(str0)
-    #  log(f'estimate: {estimate_all}')
-    #  log(f'bias: {bias_all}')
-    #  log(f'stderr: {stderr_all}')
-    #  log(f'conf_interval: {conf_interval_all}\n')
-    #  log(sep_str)
-
     stats = (estimate_arr, bias_arr, stderr_arr, conf_interval_arr)
     #  stats_all = (estimate_all, bias_all, stderr_all, conf_interval_all)
 
     return stats #, stats_all
 
 # pylint: disable=invalid-name, too-many-locals
-def _calc_observables(samples, params):
+def _calc_observables(samples, params, steps, beta):
     """Calculate lattice observables for each sample in `samples`.
     
     Args:
@@ -230,7 +210,8 @@ def _calc_observables(samples, params):
         avg_plaquettes.append(plaqs)
         top_charges.append(charges)
 
-        log(f"step: {idx} "
+        log(f"step: {idx} / {steps} "
+            f"beta: {beta:^3.3g} "
             f"time/step: {time.time() - t0:^6.4g} "
             f"avg action: {np.mean(actions):^6.4g} "
             f"avg plaquette: {np.mean(plaqs):^6.4g} ")
@@ -304,7 +285,8 @@ def calc_observables(log_dir, observables_dicts=None, training=False):
             with open(sample_file, 'rb') as f:
                 samples = pickle.load(f)
 
-            actions, plaqs, charges = _calc_observables(samples, params)
+            actions, plaqs, charges = _calc_observables(samples, params,
+                                                        step_key, beta_key)
             actions_dict[step_key, beta_key] = actions
             plaqs_dict[step_key, beta_key] = plaqs
             charges_dict[step_key, beta_key] = charges
