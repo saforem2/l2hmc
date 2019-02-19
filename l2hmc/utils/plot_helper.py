@@ -1,13 +1,19 @@
+"""
+Helper methods for creating plots.
+
+Author: Sam Foreman (github: @saforem2)
+Last modified: 2/14/2019
+"""
+# pylint: disable=invalid-name
 import os
 import numpy as np
-import matplotlib.pyplot as plt
+try:
+    import matplotlib.pyplot as plt
+    HAS_MATPLOTLIB = True
+except ImportError:
+    HAS_MATPLOTLIB = False
 
-#  try:
-#      plt.style.use('/Users/saforem2/.config/matplotlib/'
-#                     + 'stylelib/ggplot_sam.mplstyle')
-#
-#  except:
-#      plt.style.use('ggplot')
+
 plt.rcParams['xtick.direction'] = 'in'
 plt.rcParams['ytick.direction'] = 'in'
 plt.rcParams['xtick.major.pad'] = 3.5
@@ -17,17 +23,21 @@ plt.rcParams['xtick.minor.pad'] = 3.4
 plt.rcParams['xtick.minor.size'] = 2.0
 plt.rcParams['xtick.minor.width'] = 0.6
 
-COLORS = 4 * ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9']
-MARKERS = 4 * ['o', 's', 'x', 'v', 'h', '^', 'p', '<', 'd', '>', 'o']
-LINESTYLES = 4 * ['-', '--', ':', '-.', '-', '--', ':', '-.', '-', '--']
-#  linestyles = 10 * ['']
-#  linestyles = ['-', '--', ':', '-.', '-', '--', ':', '-.', '-', '--']
+COLORS = 10 * ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9']
+MARKERS = 10 * ['o', 's', 'x', 'v', 'h', '^', 'p', '<', 'd', '>', 'o']
+LINESTYLES = 10 * ['-', '--', ':', '-.', '-', '--', ':', '-.', '-', '--']
 MARKERSIZE = 3
 
 
 # pylint: disable=too-many-arguments
-def plot_broken_xaxis(x_data, y_data, x_label, y_label, 
-                      xlim1=None, xlim2=None, legend=True, out_file=None):
+def plot_broken_xaxis(x_data, 
+                      y_data, 
+                      x_label, 
+                      y_label, 
+                      xlim1=None, 
+                      xlim2=None, 
+                      legend=True, 
+                      out_file=None):
     fig, (ax, ax2) = plt.subplots(1, 2, sharey=True, facecolor='w')
     # plot the same data on both axes
     for idx in range(y_data.shape[1]):
@@ -67,7 +77,7 @@ def plot_broken_xaxis(x_data, y_data, x_label, y_label,
     _ = ax.tick_params(labelright=False)
     _ = ax2.yaxis.tick_right()
 
-    D = .015 # how big to make the diagonal lines in axes coordinates
+    D = 0.015 # how big to make the diagonal lines in axes coordinates
     # arguments to pass plot, just so we don't keep repeating them
     kwargs = dict(transform=ax.transAxes, color='k', clip_on=False)
     _ = ax.plot((1 - D, 1 + D), (-D, +D), **kwargs)
@@ -89,11 +99,6 @@ def plot_broken_xaxis(x_data, y_data, x_label, y_label,
 
     return fig, ax, ax2
 
-def plot_shared_xaxis(x_data, y_data, x_label, y_label, out_file,
-                      markers=False, lines=True, legend=False, **kwargs):
-    """Create multiple plots with a shared x-axis."""
-    pass
-
 
 def plot_multiple_lines(x_data, y_data, x_label, y_label, **kwargs):
     """Plot multiple lines along with their average."""
@@ -102,17 +107,18 @@ def plot_multiple_lines(x_data, y_data, x_label, y_label, **kwargs):
     lines = kwargs.get('lines', True)
     legend = kwargs.get('legend', False)
     title = kwargs.get('title', None)
+    ret = kwargs.get('ret', False)
 
     fig, ax = plt.subplots()
 
-    marker=None
-    ls='-'
-    fillstyle='full'
+    marker = None
+    ls = '-'
+    fillstyle = 'full'
     for idx, row in enumerate(y_data):
         if markers:
             marker = MARKERS[idx]
-            fillstyle='none'
-            ls=':'
+            fillstyle = 'none'
+            ls = ':'
         if not lines:
             ls = ''
         _ = ax.plot(x_data, row, label=f'sample {idx}', fillstyle=fillstyle,
@@ -131,7 +137,11 @@ def plot_multiple_lines(x_data, y_data, x_label, y_label, **kwargs):
     if out_file:
         print(f'Saving figure to {out_file}.')
         fig.savefig(out_file, dpi=400, bbox_inches='tight')
-    return fig, ax
+
+    if ret:
+        return fig, ax
+    else:
+        return 0
 
 
 # pylint: disable=too-many-statements,too-many-locals
@@ -140,7 +150,7 @@ def errorbar_plot(x_data, y_data, y_errors, out_file=None, **kwargs):
     x = np.array(x_data)
     y = np.array(y_data)
     y_err = np.array(y_errors)
-    if not (x.shape == y.shape == y_err.shape):
+    if not x.shape == y.shape == y_err.shape:
         import pdb
         pdb.set_trace()
         err_str = ("x, y, and y_errors all must have the same shape.\n"
@@ -177,9 +187,6 @@ def errorbar_plot(x_data, y_data, y_errors, out_file=None, **kwargs):
                         fillstyle=fillstyle, alpha=alpha,
                         capsize=capsize, capthick=capthick,
                         label=legend_labels[idx])
-            #  if idx == 0:
-            #      ax.set_title(title, fontsize=16)
-            #  ax.set_xlabel('', fontsize=10)
             if grid:
                 ax.grid(True)
             if reverse_x:
@@ -215,8 +222,8 @@ def errorbar_plot(x_data, y_data, y_errors, out_file=None, **kwargs):
 
     if num_entries > 1:
         return fig, axes
-    else:
-        return fig, ax
+
+    return fig, ax
 
 
 # pylint: disable=too-many-statements,too-many-locals
@@ -225,9 +232,9 @@ def annealing_schedule_plot(**kwargs):
     train_steps = kwargs.get('num_training_steps')
     temp_init = kwargs.get('temp_init')
     annealing_factor = kwargs.get('annealing_factor')
-    annealing_steps = kwargs.get('annealing_steps')
+    #  annealing_steps = kwargs.get('annealing_steps')
     annealing_steps_init = kwargs.get('_annealing_steps_init')
-    tunneling_steps = kwargs.get('tunneling_rate_steps')
+    #  tunneling_steps = kwargs.get('tunneling_rate_steps')
     tunneling_steps_init = kwargs.get('_tunneling_rate_steps_init')
     figs_dir = kwargs.get('figs_dir')
     steps_arr = kwargs.get('steps_arr')
