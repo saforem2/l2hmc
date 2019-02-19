@@ -7,7 +7,7 @@ from scipy.special import i0, i1
 #  from matrices import GELLMANN_MATRICES, PAULI_MATRICES
 from .gauge_generators import generate_SU2, generate_SU3, generate_SU3_array
 
-from HMC.hmc import HMC
+#  from HMC.hmc import HMC
 
 import tensorflow.contrib.eager as tfe
 
