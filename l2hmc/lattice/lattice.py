@@ -368,6 +368,9 @@ class GaugeLattice(object):
                 as a float. Otherwise, returns list containing the action
                 of each sample in samples.
         """
+        if samples.shape != self.samples.shape:
+            samples = tf.reshape(samples, self.samples.shape)
+
         if tf.executing_eagerly():
             return np.array([self._total_action(sample) for sample in samples],
                             dtype=np.float32)
