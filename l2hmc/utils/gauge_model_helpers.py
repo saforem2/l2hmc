@@ -147,6 +147,7 @@ def _create_log_dir(base_name):
         os.makedirs(figs_dir)
     return log_dir, info_dir, figs_dir
 
+
 def create_log_dir(base_name):
     """Create directory for storing information about experiment."""
     try:
@@ -158,6 +159,7 @@ def create_log_dir(base_name):
 
     return dirs
 
+
 def print_run_data(data, header=False):
     """Print information about current run to std out."""
     data_str = format_run_data(data)
@@ -165,6 +167,7 @@ def print_run_data(data, header=False):
         header = data_header()
         log(header)
     log(data_str)
+
 
 def write_run_data(file_path, data, header=False):
     """Write run `data` to human-readable file at `file_path`."""
@@ -176,6 +179,7 @@ def write_run_data(file_path, data, header=False):
 
     #  step = data['step']
     write(data_str, file_path, 'a')
+
 
 def write_run_parameters(file_path, parameters):
     """Write `parameters` to human-readable file at `file_path`.
@@ -203,12 +207,13 @@ def data_header():
     """Create formatted (header) string containing labels for printing data."""
     h_str = ("{:^15s}{:^14s}{:^14s}{:^14s}{:^14s}{:^14s}{:^14s}")
     h_strf = h_str.format("STEP", "LOSS", "TIME/STEP", "ACCEPT %",
-                          "EPS", "BETA", "LR")#, "ACTION", "TOP Q", "PLAQ")
+                          "EPS", "BETA", "LR")  # "ACTION", "TOP Q", "PLAQ")
     dash0 = (len(h_strf) + 1) * '-'
     dash1 = (len(h_strf) + 1) * '-'
     header_str = dash0 + '\n' + h_strf + '\n' + dash1
 
     return header_str
+
 
 def format_run_data(data):
     """Create formatted string containing relevant information from `data`."""
@@ -223,6 +228,7 @@ def format_run_data(data):
     )
 
     return data_str
+
 
 def _plot_data(x_data, y_data, x_label, y_label, skip_steps=1):
     """Create plot consisting of `x_data`, `y_data` with x and y labels. 
@@ -244,8 +250,9 @@ def _plot_data(x_data, y_data, x_label, y_label, skip_steps=1):
 
     return fig, ax
 
+
 def plot_run_data(data, params, steps_arr, out_dir, skip_steps=1):
-    """Create plots of relevant lattice observables using `_plot_data` above."""
+    """Create plots of relevant lattice observables using _plot_data above."""
     avg_plaqs_arr = data['average_plaquettes_arr']
     avg_top_charge_arr = data['topological_charges_arr']
     total_actions_arr = data['total_actions_arr']
@@ -283,6 +290,7 @@ def plot_run_data(data, params, steps_arr, out_dir, skip_steps=1):
     log(f"Saving plot to {file_name}...")
     fig.savefig(file_name, dpi=400, bbox_inches='tight')
     log('done.')
+
 
 def save_run_data(checkpointer, log_dir, files, data, samples, params):
     """Save run `data` to `files` in `log_dir` using `checkpointer`"""
