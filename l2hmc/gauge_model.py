@@ -39,6 +39,8 @@ import utils.gauge_model_helpers as helpers
 
 from lattice.lattice import GaugeLattice
 from utils.tf_logging import variable_summaries
+#  from utils.dynamics import Dynamics as DynamicsOld
+from network.conv_net import ConvNet2D, ConvNet3D
 
 from dynamics.gauge_dynamics import GaugeDynamics
 
@@ -155,24 +157,22 @@ def compute_loss(dynamics, x, beta, metric_fn, scale=.1, eps=1e-4):
     with tf.name_scope('compute_loss'):
         with tf.name_scope('DynamicsTransition'):
             with tf.name_scope('x_transition'):
-                inputs = (x, beta)
-                x_, _, px, x_out = dynamics(inputs)
-                #  x_, _, px, x_out = dynamics.apply_transition(x, beta)
+                #  inputs = (x, beta)
+                #  x_, _, px, x_out = dynamics(inputs)
+                x_, _, px, x_out = dynamics.apply_transition(x, beta)
             with tf.name_scope('z_transition'):
                 z = tf.random_normal(tf.shape(x))  # Auxiliary variable
-                inputs = (z, beta)
-                z_, _, pz, _ = dynamics(inputs)
-                #  z_, _, pz, _ = dynamics.apply_transition(z, beta)
+                #  inputs = (z, beta)
+                #  z_, _, pz, _ = dynamics(inputs)
+                z_, _, pz, _ = dynamics.apply_transition(z, beta)
 
         # Add eps for numerical stability; following released impl
         with tf.name_scope('loss'):
             with tf.variable_scope('x_loss'):
-                x_loss = tf.reduce_sum(metric_fn(x, x_),
-                                       axis=dynamics.axes) * px + eps
+                x_loss = tf.reduce_sum(metric_fn(x, x_), axis=1) * px + eps
 
             with tf.variable_scope('z_loss'):
-                z_loss = tf.reduce_sum(metric_fn(z, z_),
-                                       axis=dynamics.axes) * pz + eps
+                z_loss = tf.reduce_sum(metric_fn(z, z_), axis=1) * pz + eps
 
             loss = tf.reduce_mean((1. / x_loss + 1. / z_loss) * scale
                                   - (x_loss + z_loss) / scale, axis=0)
@@ -241,9 +241,7 @@ class GaugeModel(object):
         tf.set_random_seed(GLOBAL_SEED)
         tf.enable_resource_variables()
 
-
-        # create attributes using key, value pairs in params
-        self._create_params(params)
+        self._create_attrs(params)
         self._create_dir_structure(log_dir)
         self._write_run_parameters(_print=True)
         self._create_lattice()
@@ -256,23 +254,74 @@ class GaugeModel(object):
             if not tf.executing_eagerly():
                 self.build_graph(sess, config)
 
-    def _create_params(self, params):
+    def _parse_params(self, params):
+        """Parse key, value pairs from params and set class attributes."""
+    # --------------------- LATTICE PARAMETERS -------------------------------
+        self.time_size = params.get('time_size', 8)
+        self.space_size = params.get('space_size', 8)
+        self.link_type = params.get('link_type', 'U1')
+        self.dim = params.get('dim', 2)
+        self.num_samples = params.get('num_samples', 6)
+        self.rand = params.get('rand', False)
+    # --------------------- LEAPFROG PARAMETERS ------------------------------
+        self.num_steps = params.get('num_steps', 5)
+        self.eps = params.get('eps', 0.1)
+        self.loss_scale = params.get('loss_scale', 0.1)
+    # --------------------- LEARNING RATE PARAMETERS -------------------------
+        self.learning_rate_init = params.get('learning_rate_init', 1e-3)
+        self.learning_rate_decay_steps = params.get(
+            'learning_rate_decay_steps', 1000
+        )
+        self.learning_rate_decay_rate = params.get(
+            'learning_rate_decay_rate', 0.98
+        )
+    # --------------------- ANNEALING RATE PARAMETERS ------------------------
+        self.annealing = params.get('annealing', True)
+        self.beta_init = params.get('beta_init', 2.)
+        self.beta_final = params.get('beta_final', 4.)
+    # --------------------- TRAINING PARAMETERS ------------------------------
+        self.train_steps = params.get('train_steps', 5000)
+        self.save_steps = params.get('save_steps', 1000)
+        self.logging_steps = params.get('logging_steps', 50)
+        self.print_steps = params.get('print_steps', 1)
+        self.training_samples_steps = params.get(
+            'training_samples_steps', 1000
+        )
+        self.training_samples_length = params.get(
+            'training_samples_length', 100
+        )
+    # --------------------- MODEL PARAMETERS ---------------------------------
+        self.network_arch = params.get('network_arch', 'conv3D')
+        self.data_format = params.get('data_format', 'channels_last')
+        self.hmc = params.get('hmc', False)
+        self.eps_trainable = params.get('eps_trainable', True)
+        self.metric = params.get('metric', 'cos_diff')
+        self.aux = params.get('aux', True)
+        self.clip_grads = params.get('clip_grads', False)
+        self.clip_value = params.get('clip_value', 1.)
+        self.using_hvd = params.get('using_hvd', False)
+
+    def _create_attrs(self, params):
         """Parse key value pairs from params and set as class attributes."""
         if params is None:
             print('Using default parameters...')
-            for key, val in params.items():
-                print(f'{key}: {val}')
             params = PARAMS
+        else:
+            self._parse_params(params)
 
         self.params = params
 
         for key, val in params.items():
+            #  print(f"Creating new class attribute: `self.{key} = {val}`.")
             setattr(self, key, val)
 
         if not self.clip_grads:
             self.clip_value = None
 
+        self.training_samples_dict = {}
         self.losses_arr = []
+        self.accept_prob_arr = []
+        self.eps_arr = []
 
         self.data = {
             'step': 1,
@@ -296,14 +345,13 @@ class GaugeModel(object):
             if hvd.rank() == 0:               # AND rank == 0:
                 self.condition2 = True        # condition2: True
 
-
     def _create_dir_structure(self, log_dir):
         """Create self.files and directory structure."""
         if self.using_hvd:
             if hvd.rank() != 0:
                 return
 
-        if self.condition1 or self.condition2:  # DEFINED IN: _create_params
+        if self.condition1 or self.condition2:  # DEFINED IN: _create_attrs
             if log_dir is None:
                 dirs = helpers.create_log_dir('gauge_logs_graph')
             else:
@@ -316,16 +364,8 @@ class GaugeModel(object):
             'run_info_file': os.path.join(self.info_dir, 'run_info.txt'),
             'data_pkl_file': os.path.join(self.info_dir, 'data.pkl'),
             'samples_pkl_file': os.path.join(self.info_dir, 'samples.pkl'),
-            'parameters_pkl_file': os.path.join(self.info_dir,
-                                                'parameters.pkl'),
+            'params_pkl_file': os.path.join(self.info_dir, 'parameters.pkl'),
         }
-
-        #  self.samples_history_dir = os.path.join(self.log_dir,
-        #  'samples_history')
-        #  self.train_samples_dir = os.path.join(self.log_dir, 'train_samples')
-        #  self.train_samples_history_dir = os.path.join(
-        #      self.samples_history_dir, 'training'
-        #  )
 
         self.eval_dir = os.path.join(self.log_dir, 'eval_info')
         self.samples_dir = os.path.join(self.eval_dir, 'samples')
@@ -357,8 +397,7 @@ class GaugeModel(object):
                 'network_arch': self.network_arch,
                 'num_steps': self.num_steps,
                 'eps_trainable': self.eps_trainable,
-                'data_format': self.data_format
-
+                'data_format': self.data_format,
             }
         if self.hmc:
             kwargs['network_arch'] = None
@@ -372,46 +411,15 @@ class GaugeModel(object):
                                           potential_fn=self.potential_fn,
                                           **kwargs)
 
-    def reshape_5D(self, tensor):
-        """
-        Reshape tensor to be compatible with tf.keras.layers.Conv3D.
-
-        If self.data_format is 'channels_first', and input `tensor` has shape
-        (N, 2, L, L), the output tensor has shape (N, 1, 2, L, L).
-
-        If self.data_format is 'channels_last' and input `tensor` has shape 
-        (N, L, L, 2), the output tensor has shape (N, 2, L, L, 1).
-        """
-        if self.data_format == 'channels_first':
-            N, D, H, W = tensor.shape
-            if isinstance(tensor, np.ndarray):
-                return np.reshape(tensor, (N, 1, H, W, D))
-                #  return np.expand_dims(tensor, axis=1)
-            #  return tf.expand_dims(tensor, 1)
-            return tf.reshape(tensor, (N, 1, D, H, W))
-
-        elif self.data_format == 'channels_last':
-            N, H, W, D = tensor.shape
-            if isinstance(tensor, np.ndarray):
-                #  return np.expand_dims(tensor, axis=-1)
-                return np.reshape(tensor, (N, H, W, D, 1))
-            #  return tf.expand_dims(tensor, -1)
-            return tf.reshape(tensor, (N, H, W, D, 1))
-
-        else:
-            raise AttributeError("`self.data_format` should be one of "
-                                 "'channels_first' or 'channels_last'")
-
     def _create_tensors(self):
         """Initialize tensors (and placeholders if executing in graph mode)."""
         self.batch_size = self.lattice.samples.shape[0]
+        self.x_dim = self.lattice.num_links
         self.samples = tf.convert_to_tensor(self.lattice.samples,
                                             dtype=tf.float32)
 
-        #  self.samples = self.reshape_5D(self.samples)
-
         if not tf.executing_eagerly():
-            self.x = tf.placeholder(tf.float32, self.samples.shape, name='x')
+            self.x = tf.placeholder(tf.float32, (None, self.x_dim), name='x')
             self.beta = tf.placeholder(tf.float32, shape=(), name='beta')
         else:
             self.beta = self.beta_init
@@ -445,7 +453,7 @@ class GaugeModel(object):
         assert os.path.isdir(run_info_dir), (f"run_info_dir: {run_info_dir}"
                                              " does not exist.")
 
-        with open(self.files['parameters_pkl_file'], 'rb') as f:
+        with open(self.files['params_pkl_file'], 'rb') as f:
             self.params = pickle.load(f)
 
         with open(self.files['data_pkl_file'], 'rb') as f:
@@ -454,7 +462,7 @@ class GaugeModel(object):
         with open(self.files['samples_pkl_file'], 'rb') as f:
             self.samples = pickle.load(f)
 
-        self._create_params(self.params)
+        self._create_attrs(self.params)
         self.global_step.assign(self.data['step'])
         self.learning_rate.assign(self.data['learning_rate'])
 
@@ -535,7 +543,6 @@ class GaugeModel(object):
             for key, val in self.params.items():
                 log(f'{key}: {val}')
 
-
         s0 = 'Parameters'
         sep_str = 80 * '-'
         strings = []
@@ -565,37 +572,36 @@ class GaugeModel(object):
             tf.summary.scalar('step_size', self.dynamics.eps)
 
         with tf.name_scope('summaries'):
-            with tf.name_scope('position_fn'):
-                for var in self.dynamics.position_fn.trainable_variables:
-                    try:
-                        layer, type = var.name.split('/')[-2:]
-                        name = layer + '_' + type[:-2]
-                    except:
-                        name = var.name[:-2]
+            #  with tf.name_scope('position_fn'):
+            #      for var in self.dynamics.position_fn.trainable_variables:
+            #          try:
+            #              layer, type = var.name.split('/')[-2:]
+            #              name = layer + '_' + type[:-2]
+            #          except:
+            #              name = var.name[:-2]
+            #
+            #          variable_summaries(var, name)
+            #
+            #  with tf.name_scope('momentum_fn'):
+            #      for var in self.dynamics.momentum_fn.trainable_variables:
+            #          try:
+            #              layer, type = var.name.split('/')[-2:]
+            #              name = layer + '_' + type[:-2]
+            #          except:
+            #              name = var.name[:-2]
+            #
+            #          variable_summaries(var, name)
+            #  with tf.name_scope('grads'):
+            for grad, var in grads_and_vars:
+                try:
+                    layer, type = var.name.split('/')[-2:]
+                    name = layer + '_' + type[:-2]
+                except:
+                    name = var.name[:-2]
+                variable_summaries(var, name)
+                variable_summaries(grad, name + '_gradient')
 
-                    variable_summaries(var, name)
-
-            with tf.name_scope('momentum_fn'):
-                for var in self.dynamics.momentum_fn.trainable_variables:
-                    try:
-                        layer, type = var.name.split('/')[-2:]
-                        name = layer + '_' + type[:-2]
-                    except:
-                        name = var.name[:-2]
-
-                    variable_summaries(var, name)
-
-            with tf.name_scope('grads'):
-                for grad, var in grads_and_vars:
-                    try:
-                        layer, type = var.name.split('/')[-2:]
-                        name = layer + '_' + type[:-2]
-                    except:
-                        name = var.name[:-2]
-
-                    variable_summaries(grad, name + '_gradient')
-
-            self.summary_op = tf.summary.merge_all(name='summary_op')
+        self.summary_op = tf.summary.merge_all(name='summary_op')
 
     def _create_metric_fn(self):
         """Create metric fn for measuring the distance between two samples."""
@@ -726,11 +732,6 @@ class GaugeModel(object):
         if self.condition1 or self.condition2:
             self.saver = tf.train.Saver(max_to_keep=3)
 
-        self.samples_file_path = os.path.join(self.eval_dir,
-                                              'training',
-                                              'intermediate_beta')
-        check_else_make_dir(self.samples_file_path)
-
         self.sess.run(tf.global_variables_initializer())
 
         if self.using_hvd:
@@ -780,20 +781,9 @@ class GaugeModel(object):
         #  dynamics = self.dynamics
         #  x = self.x
         #  dynamics_beta = self.dynamics.beta
-
         start_time = time.time()
         if pre_train:
             self.pre_train()
-
-        initial_step = self.data['step']
-
-        #  tsl = self.training_samples_length
-        norm_factor = self.num_steps * self.batch_size * self.lattice.num_links
-
-        data_header = helpers.data_header()
-
-        self.data['learning_rate'] = self.sess.run(self.learning_rate)
-        lr_np = self.data['learning_rate']
 
         if beta_init is None:
             beta_np = self.beta_init
@@ -801,10 +791,22 @@ class GaugeModel(object):
             beta_np = beta_init
 
         if samples_init is None:
-            samples_np = np.array(self.lattice.samples, dtype=np.float32)
+            samples_np = np.array(self.lattice.samples,
+                                  dtype=np.float32).reshape((-1, self.x_dim))
         else:
             samples_np = samples_init
-        #  samples_np = self.reshape_5D(samples_np)
+
+        initial_step = self.data['step']
+        norm_factor = self.num_steps * self.batch_size * self.lattice.num_links
+        data_header = helpers.data_header()
+
+        self.data['learning_rate'] = self.sess.run(self.learning_rate)
+        lr_np = self.data['learning_rate']
+
+        training_samples_dir = os.path.join(self.log_dir, 'training_samples')
+        check_else_make_dir(training_samples_dir)
+
+        #  annealing_sched = [self.update_beta(i) for i in range(train_steps)]
 
         try:
             log(data_header)
@@ -814,21 +816,25 @@ class GaugeModel(object):
                     self.data,
                     header=True
                 )
-            for step in range(initial_step, initial_step + train_steps):
+            for step in range(initial_step, train_steps):
                 start_step_time = time.time()
 
-                beta_np = self.update_beta(beta_np)
+                #  beta_np = annealing_sched[step]
+                beta_np = self.update_beta(step)
 
                 fd = {self.x: samples_np,
                       self.beta: beta_np}
 
-                _, loss_np, samples_np, px_np, eps_np = self.sess.run([
+                _, loss_np, samples_np, px_np, alpha_np = self.sess.run([
                     self.train_op,
                     self.loss_op,
                     self.x_out,
                     self.px,
-                    self.dynamics.eps
+                    self.dynamics.alpha
                 ], feed_dict=fd)
+
+                if step % 10 == 0:
+                    self.training_samples_dict[(step, beta_np)] = samples_np
 
                 if step % self.learning_rate_decay_steps == 0:
                     lr_np = self.sess.run(self.learning_rate)
@@ -837,7 +843,7 @@ class GaugeModel(object):
                     self.data['step'] = step
                     self.data['loss'] = loss_np
                     self.data['accept_prob'] = px_np
-                    self.data['eps'] = eps_np
+                    self.data['eps'] = np.exp(alpha_np)
                     self.data['beta'] = beta_np
                     self.data['learning_rate'] = lr_np
                     self.data['step_time_norm'] = (
@@ -847,35 +853,15 @@ class GaugeModel(object):
                         time.time() - start_step_time
                     )
                     self.losses_arr.append(loss_np)
+                    #  self.accept_prob_arr.extend(px_np)
+                    #  self.eps_arr.append(eps_np)
+                    #  self.losses_arr.append(loss_np)
 
                     #  if (step + 1) % 10 == 0:
                     if self.condition1 or self.condition2:
                         helpers.print_run_data(self.data)
                         helpers.write_run_data(self.files['run_info_file'],
                                                self.data)
-
-                #  if step % self.annealing_steps == 0:
-                #      new_beta = beta_np / self.annealing_factor
-                #
-                #      if new_beta < self.beta_final:
-                #          beta_np = new_beta
-                #      else:
-                #          train_time = time.time() - start_time
-                #          log("Annealing schedule finished!")
-                #          log("Time to complete training: {train_time:.3g}.")
-                #          log("Saving model and exiting...")
-                #          beta_np = self.beta_final
-                #          step = self.sess.run(self.global_step)
-                #          self.data['step'] = step
-                #          self.data['eps'] = eps_np
-                #          self.data['beta_np'] = beta_np
-                #          self._save_model(samples=samples_np, step=step)
-                #          if self.condition1 or self.condition2:
-                #              helpers.write_run_data(self.files['run_info_file'],
-                #                                     self.data)
-                #              sys.stdout.flush()
-                #
-                #          return 0
 
                 # Intermittently run sampler and save samples to pkl file.
                 # We can calculate observables from these samples to
@@ -896,19 +882,27 @@ class GaugeModel(object):
                         self._save_model(samples=samples_np, step=step-2)
                         helpers.write_run_data(self.files['run_info_file'],
                                                self.data)
+                        samples_out_file = os.path.join(
+                            training_samples_dir,
+                            f'training_samples_{step}.pkl'
+                        )
+                        log(f"Saving training samples to: {samples_out_file}.")
+                        with open(samples_out_file, 'wb') as f:
+                            pickle.dump(self.training_samples_dict, f)
+                        log('done.')
 
                 if step % self.logging_steps == 0:
                     if self.using_hvd:
                         if hvd.rank() != 0:
                             continue
 
-                    #  samples_file_name =
-                    #  (f'training_samples_{step}_train_steps'
-                    #  f'_beta_{beta_np:.1g}.pkl')
-                    #  out_file = os.path.join(self.samples_file_path,
-                    #                          samples_file_name)
-                    #  with open(out_file, 'wb') as f:
-                    #      pickle.dump(samples_np, f)
+                    alpha_np, eps_np = self.sess.run([
+                        self.dynamics.eps,
+                        self.dynamics.alpha,
+                    ])
+                    log(f'dynamics_alpha: {alpha_np:^.3g}')
+                    log(f'dynamics_eps: {eps_np:^.3g}')
+                    log(f'exp(dynamics_alpha): {np.exp(alpha_np):^.3g}')
 
                     if trace:
                         options = tf.RunOptions(
@@ -947,6 +941,28 @@ class GaugeModel(object):
         except (KeyboardInterrupt, SystemExit):
             log("\nKeyboardInterrupt detected! \n", nl=False)
             log("Saving current state and exiting.\n", nl=False)
+            self.data['step'] = step
+            self.data['loss'] = loss_np
+            self.data['accept_prob'] = px_np
+            self.data['eps'] = eps_np
+            self.data['beta'] = beta_np
+            self.data['learning_rate'] = lr_np
+            self.data['step_time_norm'] = (
+                (time.time() - start_step_time) / norm_factor
+            )
+            self.data['step_time'] = (
+                time.time() - start_step_time
+            )
+            self.losses_arr.append(loss_np)
+            #  self.accept_prob_arr.extend(px_np)
+            #  self.eps_arr.append(eps_np)
+            #  self.losses_arr.append(loss_np)
+
+            #  if (step + 1) % 10 == 0:
+            if self.condition1 or self.condition2:
+                helpers.print_run_data(self.data)
+                helpers.write_run_data(self.files['run_info_file'],
+                                       self.data)
             step = self.sess.run(self.global_step)
             self._save_model(samples=samples_np, step=step)
 
@@ -979,7 +995,8 @@ class GaugeModel(object):
             beta = self.beta_final
 
         # start with randomly generated samples
-        samples = np.random.randn(*self.samples.shape)
+        samples = np.random.randn(*(self.batch_size, self.x_dim))
+        #  samples = np.random.randn(*self.samples.shape)
         samples_history = []
 
         log(f"Running sampler for {run_steps} steps at beta = {beta}...")
