@@ -68,7 +68,8 @@ class ConvNet3D(tf.keras.Model):
         #  with tf.variable_scope(self.variable_scope):
         with tf.name_scope(self.name_scope):
 
-            with tf.variable_scope('coeff_scale'):
+            #  with tf.variable_scope('coeff_scale'):
+            with tf.name_scope('coeff_scale'):
                 self.coeff_scale = tf.Variable(
                     initial_value=tf.zeros([1, self.x_dim]),
                     name='coeff_scale',
@@ -76,7 +77,7 @@ class ConvNet3D(tf.keras.Model):
                     dtype=tf.float32
                 )
 
-            with tf.variable_scope('coeff_transformation'):
+            with tf.name_scope('coeff_transformation'):
                 self.coeff_transformation = tf.Variable(
                     initial_value=tf.zeros([1, self.x_dim]),
                     name='coeff_transformation',
@@ -84,8 +85,8 @@ class ConvNet3D(tf.keras.Model):
                     dtype=tf.float32
                 )
 
-            with tf.variable_scope('conv_layers'):
-                with tf.variable_scope('conv_x1'):
+            with tf.name_scope('conv_layers'):
+                with tf.name_scope('conv_x1'):
                     self.conv_x1 = tf.keras.layers.Conv3D(
                         filters=self.num_filters,
                         kernel_size=self.filter_sizes[0],
@@ -97,7 +98,7 @@ class ConvNet3D(tf.keras.Model):
                         data_format=self.data_format
 
                     )
-
+                with tf.name_scope('pool_x1'):
                     self.max_pool_x1 = tf.keras.layers.MaxPooling3D(
                         pool_size=(2, 2, 1),
                         strides=2,
@@ -105,7 +106,7 @@ class ConvNet3D(tf.keras.Model):
                         name='pool_x1'
                     )
 
-                with tf.variable_scope('conv_v1'):
+                with tf.name_scope('conv_v1'):
                     self.conv_v1 = tf.keras.layers.Conv3D(
                         filters=self.num_filters,
                         kernel_size=self.filter_sizes[0],
@@ -117,6 +118,7 @@ class ConvNet3D(tf.keras.Model):
                         data_format=self.data_format
                     )
 
+                with tf.name_scope('pool_v1'):
                     self.max_pool_v1 = tf.keras.layers.MaxPooling3D(
                         pool_size=(2, 2, 1),
                         strides=2,
@@ -124,7 +126,7 @@ class ConvNet3D(tf.keras.Model):
                         name='pool_v1'
                     )
 
-                with tf.variable_scope('conv_x2'):
+                with tf.name_scope('conv_x2'):
                     self.conv_x2 = tf.keras.layers.Conv3D(
                         filters=2*self.num_filters,
                         kernel_size=self.filter_sizes[1],
@@ -135,6 +137,7 @@ class ConvNet3D(tf.keras.Model):
                         data_format=self.data_format
                     )
 
+                with tf.name_scope('pool_x2'):
                     self.max_pool_x2 = tf.keras.layers.MaxPooling3D(
                         pool_size=(2, 2, 1),
                         strides=2,
@@ -142,7 +145,7 @@ class ConvNet3D(tf.keras.Model):
                         name='pool_x2'
                     )
 
-                with tf.variable_scope('conv_v2'):
+                with tf.name_scope('conv_v2'):
                     self.conv_v2 = tf.keras.layers.Conv3D(
                         filters=2 * self.num_filters,
                         kernel_size=self.filter_sizes[1],
@@ -153,6 +156,7 @@ class ConvNet3D(tf.keras.Model):
                         data_format=self.data_format
                     )
 
+                with tf.name_scope('pool_v2'):
                     self.max_pool_v2 = tf.keras.layers.MaxPooling3D(
                         pool_size=(2, 2, 1),
                         strides=2,
@@ -161,40 +165,40 @@ class ConvNet3D(tf.keras.Model):
                     )
 
 
-            with tf.variable_scope('fc_layers'):
-                with tf.variable_scope('flatten'):
+            with tf.name_scope('fc_layers'):
+                with tf.name_scope('flatten'):
                     self.flatten = tf.keras.layers.Flatten(name='flatten')
 
-                with tf.variable_scope('x_layer'):
+                with tf.name_scope('x_layer'):
                     self.x_layer = _custom_dense(self.num_hidden,
                                                  self.factor/3.,
                                                  name='x_layer')
 
-                with tf.variable_scope('v_layer'):
+                with tf.name_scope('v_layer'):
                     self.v_layer = _custom_dense(self.num_hidden,
                                                  1./3.,
                                                  name='v_layer')
 
-                with tf.variable_scope('t_layer'):
+                with tf.name_scope('t_layer'):
                     self.t_layer = _custom_dense(self.num_hidden,
                                                  1./3.,
                                                  name='t_layer')
 
-                with tf.variable_scope('h_layer'):
+                with tf.name_scope('h_layer'):
                     self.h_layer = _custom_dense(self.num_hidden,
                                                  name='h_layer')
 
 
-                with tf.variable_scope('scale_layer'):
+                with tf.name_scope('scale_layer'):
                     self.scale_layer = _custom_dense(self.x_dim, 0.001,
                                                      name='scale_layer')
 
-                with tf.variable_scope('translation_layer'):
+                with tf.name_scope('translation_layer'):
                     self.translation_layer = _custom_dense(
                         self.x_dim, 0.001, name='translation_layer'
                     )
 
-                with tf.variable_scope('transformation_layer'):
+                with tf.name_scope('transformation_layer'):
                     self.transformation_layer = _custom_dense(
                         self.x_dim,
                         0.001,
@@ -269,21 +273,24 @@ class ConvNet3D(tf.keras.Model):
                                          name=name))
 
         with tf.name_scope('translation'):
-            translation = reshape(self.translation_layer(h),
-                                  name='translation')
+            #  translation = reshape(self.translation_layer(h),
+            #                        name='translation')
+            translation = self.translation_layer(h)
 
         with tf.name_scope('scale'):
-            scale = reshape(
-                tf.nn.tanh(self.scale_layer(h)) * tf.exp(self.coeff_scale),
-                name='scale'
-            )
+            #  scale = reshape(
+            #      tf.nn.tanh(self.scale_layer(h)) * tf.exp(self.coeff_scale),
+            #      name='scale'
+            scale = tf.nn.tanh(self.scale_layer(h)) * tf.exp(self.coeff_scale)
 
         with tf.name_scope('transformation'):
-            transformation = reshape(
-                (self.transformation_layer(h)
-                 * tf.exp(self.coeff_transformation)),
-                name='transformation'
-            )
+            #  transformation = reshape(
+            #      (self.transformation_layer(h)
+            #       * tf.exp(self.coeff_transformation)),
+            #      name='transformation'
+            #  )
+            transformation = (self.transformation_layer(h)
+                              * tf.exp(self.coeff_transformation))
 
         #  translation = tf.reshape(self.translation_layer(h),
         #                           shape=self._input_shape,
@@ -313,7 +320,8 @@ class ConvNet3D(tf.keras.Model):
         (N, L, L, 2), the output tensor has shape (N, 2, L, L, 1).
         """
         if self.data_format == 'channels_first':
-            N, D, H, W = tensor.shape
+            N, D, H, W = self._input_shape
+            #  N, D, H, W = tensor.shape
             if isinstance(tensor, np.ndarray):
                 return np.reshape(tensor, (N, 1, H, W, D))
                 #  return np.expand_dims(tensor, axis=1)
@@ -321,7 +329,8 @@ class ConvNet3D(tf.keras.Model):
             return tf.reshape(tensor, (N, 1, D, H, W))
 
         elif self.data_format == 'channels_last':
-            N, H, W, D = tensor.shape
+            #  N, H, W, D = tensor.shape
+            N, H, W, D = self._input_shape
             if isinstance(tensor, np.ndarray):
                 #  return np.expand_dims(tensor, axis=-1)
                 return np.reshape(tensor, (N, H, W, D, 1))
@@ -331,7 +340,6 @@ class ConvNet3D(tf.keras.Model):
         else:
             raise AttributeError("`self.data_format` should be one of "
                                  "'channels_first' or 'channels_last'")
-
 
 
 # pylint:disable=too-many-arguments, too-many-instance-attributes
@@ -462,43 +470,43 @@ class ConvNet2D(tf.keras.Model):
                 name='transformation_layer'
             )
 
-
     # pylint: disable=invalid-name, arguments-differ
     def call(self, inputs):
         """call method.
 
-        NOTE: Architecture looks like 
-        
-        - inputs: x, v, t
+        Args: 
+            inputs: Tuple consisting of (v, x, t) (momenta, position, time).
 
-            x --> CONV_X1, MAX_POOL_X1, --> CONV_X1, MAX_POOL_X2 -->
-                   FLATTEN_X --> X_LAYER --> X_OUT
-
-            v --> CONV_V1, MAX_POOL_V1, --> CONV_V1, MAX_POOL_V2 -->
-                   FLATTEN_V --> V_LAYER --> V_OUT
-
-            t --> T_LAYER --> T_OUT
-
-            X_OUT + V_OUT + T_OUT --> H_LAYER --> H_OUT
-
-
-        - H_OUT is then fed to three separate layers:
-
-            (1.) H_OUT --> (SCALE_LAYER, TANH) * exp(COEFF_SCALE)
-
-                 output: scale
-            
-            (2.) H_OUT --> TRANSLATION_LAYER --> TRANSLATION_OUT
-
-                 output: translation
-
-            (3.) H_OUT --> (TRANSFORMATION_LAYER, TANH) 
-                            * exp(COEFF_TRANSFORMATION)
-
-                 output: transformation
-
-       Returns:
+        Returns:
            scale, translation, transformation
+
+        NOTE: Architecture looks like 
+            - inputs: x, v, t
+
+                x --> CONV_X1, MAX_POOL_X1, --> CONV_X1, MAX_POOL_X2 -->
+                       FLATTEN_X --> X_LAYER --> X_OUT
+
+                v --> CONV_V1, MAX_POOL_V1, --> CONV_V1, MAX_POOL_V2 -->
+                       FLATTEN_V --> V_LAYER --> V_OUT
+
+                t --> T_LAYER --> T_OUT
+
+                X_OUT + V_OUT + T_OUT --> H_LAYER --> H_OUT
+
+            - H_OUT is then fed to three separate layers:
+
+                (1.) H_OUT --> (SCALE_LAYER, TANH) * exp(COEFF_SCALE)
+
+                     output: scale
+                
+                (2.) H_OUT --> TRANSLATION_LAYER --> TRANSLATION_OUT
+
+                     output: translation
+
+                (3.) H_OUT --> (TRANSFORMATION_LAYER, TANH) 
+                                * exp(COEFF_TRANSFORMATION)
+
+                     output: transformation
         """
         v, x, t = inputs
 
