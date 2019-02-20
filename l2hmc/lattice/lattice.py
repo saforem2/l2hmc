@@ -276,12 +276,13 @@ class GaugeLattice(object):
 
     def get_energy_function(self, samples=None):
         """Returns function object used for calculating the energy (action)."""
-        if samples is None:
-            def fn(links):
-                return self._total_action(links)
-        else:
-            def fn(samples):
-                return self.total_action(samples)
+        with tf.name_scope('lattice_energy_fn'):
+            if samples is None:
+                def fn(links):
+                    return self._total_action(links)
+            else:
+                def fn(samples):
+                    return self.total_action(samples)
         return fn
 
     def _calc_plaq_observables(self, links):
@@ -343,11 +344,12 @@ class GaugeLattice(object):
                 Sp = 1 - cos(Qp), where Qp is the plaquette operator defined as
                 the sum of the angles (phases) around an elementary plaquette.
         """
-        total_action = np.sum([
-            1. - tf.cos(
-                links[v[0]] + links[v[1]] - links[v[2]] - links[v[3]]
-            ) for v in list(self.plaquettes_dict.values())
-        ])
+        with tf.name_scope('_total_action'):
+            total_action = np.sum([
+                1. - tf.cos(
+                    links[v[0]] + links[v[1]] - links[v[2]] - links[v[3]]
+                ) for v in list(self.plaquettes_dict.values())
+            ])
 
         return total_action
 
@@ -375,9 +377,10 @@ class GaugeLattice(object):
             return np.array([self._total_action(sample) for sample in samples],
                             dtype=np.float32)
 
-        total_actions = []
-        for idx in range(samples.shape[0]):
-            total_actions.append(self._total_action(samples[idx]))
+        with tf.name_scope('total_action'):
+            total_actions = []
+            for idx in range(samples.shape[0]):
+                total_actions.append(self._total_action(samples[idx]))
 
         return total_actions
 
