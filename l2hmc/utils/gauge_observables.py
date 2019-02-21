@@ -256,7 +256,7 @@ def calc_charge_probabilities(charges):
 
 
 # pylint: disable=invalid-name, too-many-locals
-def _calc_observables(samples, params, steps, beta, training, frac=None):
+def _calc_observables(samples, params, steps, beta, training):
     """Calculate lattice observables for each sample in `samples`.
     
     Args:
@@ -276,13 +276,11 @@ def _calc_observables(samples, params, steps, beta, training, frac=None):
 
     lattice = _make_lattice(params)
 
-
     plaq_exact = u1_plaq_exact(beta)
 
     total_actions = []
     avg_plaquettes = []
     top_charges = []
-    #  beta = params['beta_final']
     for idx, sample in enumerate(samples):
         t0 = time.time()
         if sample.shape != lattice.samples.shape:
@@ -290,6 +288,7 @@ def _calc_observables(samples, params, steps, beta, training, frac=None):
         try:
             observables = np.array(lattice.calc_plaq_observables(sample))
         except AttributeError:
+            # pylint:disable=protected-access
             observables = np.array(lattice._calc_plaq_observables(sample))
 
         actions, plaqs, charges = observables
@@ -300,7 +299,7 @@ def _calc_observables(samples, params, steps, beta, training, frac=None):
 
         if idx % 10 == 0:
             if training:
-                str0 = (f"step: {idx} / 100 "
+                str0 = (f"step: {idx} / 500 "
                         f"training steps: {steps} ")
             else:
                 str0 = f"step: {idx} / {steps} "
@@ -312,25 +311,14 @@ def _calc_observables(samples, params, steps, beta, training, frac=None):
                 f"exact plaquette: {plaq_exact:^6.4g} "
                 f"avg plaquette: {np.mean(plaqs):^6.4g} ")
 
-            #  "top charges: ")
             log('\n')
             log('top_charges: ', nl=False)
             log(charges)
             log('\n')
 
-    total_actions = np.array(total_actions)
-    avg_plaquettes = np.array(avg_plaquettes)
-    top_charges = np.array(top_charges)
-
-    num_steps = total_actions.shape[0]
-    if frac is None:
-        therm_steps = 0
-    else:
-        therm_steps = num_steps // frac
-
-    return (total_actions[therm_steps:, :],
-            avg_plaquettes[therm_steps:, :],
-            top_charges[therm_steps:, :])
+    return (np.array(total_actions),
+            np.array(avg_plaquettes),
+            np.array(top_charges))
 
 
 ##############################################################################
@@ -399,14 +387,23 @@ def calc_observables(log_dir, observables_dicts=None, training=False, frac=4):
 
             actions, plaqs, charges = _calc_observables(samples, params,
                                                         step_key, beta_key,
-                                                        training, frac=frac)
+                                                        training)
             actions_dict[step_key, beta_key] = actions
             plaqs_dict[step_key, beta_key] = plaqs
             charges_dict[step_key, beta_key] = charges
 
-            plaq_stats = calc_plaquette_stats(plaqs, beta_key)
-            suscept_stats = calc_susceptibility_stats(charges, beta_key)
-            charges_probs = calc_charge_probabilities(charges)
+            if frac is None:
+                therm_steps = 0
+            else:
+                num_steps = plaqs.shape[0]
+                therm_steps = num_steps // frac
+
+            plaqs_therm = plaqs[therm_steps:, :]
+            charges_therm = charges[therm_steps:, :]
+
+            plaq_stats = calc_plaquette_stats(plaqs_therm, beta_key)
+            suscept_stats = calc_susceptibility_stats(charges_therm, beta_key)
+            charges_probs = calc_charge_probabilities(charges_therm)
 
             susceptibility_stats_dict[step_key, beta_key] = {
                 '  \navg. over all samples < Q >': np.mean(suscept_stats[0]),
@@ -504,14 +501,15 @@ def calc_observables(log_dir, observables_dicts=None, training=False, frac=4):
 
         if training:
             str0 = (f'Topological suscept. stats after {step_key} '
-                    f'training steps. Chain ran for 100 steps at '
+                    f'training steps. Chain ran for 500 steps at '
                     f'beta = {beta}.')
             str1 = (f'Average plaquette. stats after {step_key} '
-                    f'training steps. Chain ran for 100 steps at '
+                    f'training steps. Chain ran for 500 steps at '
                     f'beta = {beta}.')
             str2 = (f'Topological charge probabilities after '
                     f'{step_key} training steps. '
-                    f'Chain ran for 100 steps at beta = {beta}.')
+                    f'Chain ran for 500 steps at beta = {beta}.')
+            therm_str = ''
         else:
             str0 = (f'Topological suscept. stats for '
                     f'{step_key} steps, at beta = {beta}.')
@@ -519,10 +517,13 @@ def calc_observables(log_dir, observables_dicts=None, training=False, frac=4):
                     f'{step_key} steps, at beta = {beta}.')
             str2 = (f'Topological charge probabilities for '
                     f'{step_key} steps, at beta = {beta}.')
+            therm_str = (
+                f'Ignoring first {therm_steps} steps for thermalization.'
+            )
 
-        sep_str0 = (1 + len(str0)) * '-'
-        sep_str1 = (1 + len(str1)) * '-'
-        sep_str2 = (1 + len(str2)) * '-'
+        sep_str0 = (1 + max(len(str0), len(therm_str))) * '-'
+        sep_str1 = (1 + max(len(str1), len(therm_str))) * '-'
+        sep_str2 = (1 + max(len(str2), len(therm_str))) * '-'
 
         log(f"Writing statistics to: {statistics_txt_file}")
 
@@ -531,6 +532,7 @@ def calc_observables(log_dir, observables_dicts=None, training=False, frac=4):
         ################################################################
         log(sep_str0)
         log(str0)
+        log(therm_str)
         log('')
         _ = [log(s) for s in suscept_strings]
         log(sep_str0)
@@ -538,6 +540,7 @@ def calc_observables(log_dir, observables_dicts=None, training=False, frac=4):
 
         write(sep_str0, statistics_txt_file, 'w')
         write(str0, statistics_txt_file, 'a')
+        write(therm_str, statistics_txt_file, 'a')
         write(sep_str0, statistics_txt_file, 'a')
         #  write(sep_str0, statistics_txt_file, 'a')
         _ = [write(s, statistics_txt_file, 'a') for s in suscept_strings]
@@ -549,12 +552,14 @@ def calc_observables(log_dir, observables_dicts=None, training=False, frac=4):
         ################################################################
         log(sep_str1)
         log(str1)
+        log(therm_str)
         log('')
         _ = [log(s) for s in plaq_strings]
         log(sep_str1)
 
         write(sep_str1, statistics_txt_file, 'a')
         write(str1, statistics_txt_file, 'a')
+        write(therm_str, statistics_txt_file, 'a')
         write(sep_str1, statistics_txt_file, 'a')
         _ = [write(s, statistics_txt_file, 'a') for s in plaq_strings]
         #  write(sep_str1, statistics_txt_file, 'a')
@@ -565,12 +570,14 @@ def calc_observables(log_dir, observables_dicts=None, training=False, frac=4):
         ################################################################
         log(sep_str2)
         log(str2)
+        log(therm_str)
         log('')
         _ = [log(s) for s in probs_strings]
         log(sep_str2)
 
         write(sep_str2, statistics_txt_file, 'a')
         write(str2, statistics_txt_file, 'a')
+        write(therm_str, statistics_txt_file, 'a')
         write(sep_str2, statistics_txt_file, 'a')
         _ = [write(s, statistics_txt_file, 'a') for s in probs_strings]
         write(sep_str2, statistics_txt_file, 'a')

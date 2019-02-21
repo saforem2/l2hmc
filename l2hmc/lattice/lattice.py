@@ -299,10 +299,14 @@ class GaugeLattice(object):
         """
         #  if links.shape != self.links.shape:
         #      links = tf.reshape(links, shape=self.links.shape)
-        p = [tuple(i) for i in list(self.plaquettes_dict.values())]
-        plaq_sums = np.array(
-            [links[i[0]] + links[i[1]] - links[i[2]] - links[i[3]] for i in p]
-        )
+        plaq_sums = np.array(links[:, :, 0]
+                             - links[:, :, 1]
+                             - np.roll(links[:, :, 0], shift=-1, axis=1)
+                             + np.roll(links[:, :, 1], shift=-1, axis=0))
+        #  p = [tuple(i) for i in list(self.plaquettes_dict.values())]
+        #  plaq_sums = np.array(
+        #      [links[i[0]] + links[i[1]] - links[i[2]] - links[i[3]] for i in p]
+        #  )
         local_actions = np.cos(plaq_sums)
 
         total_action = np.sum(1. - local_actions)
@@ -345,11 +349,17 @@ class GaugeLattice(object):
                 the sum of the angles (phases) around an elementary plaquette.
         """
         with tf.name_scope('_total_action'):
-            total_action = np.sum([
-                1. - tf.cos(
-                    links[v[0]] + links[v[1]] - links[v[2]] - links[v[3]]
-                ) for v in list(self.plaquettes_dict.values())
-            ])
+            total_action = tf.reduce_sum(
+                1. - tf.cos(links[:, :, 0]
+                            - links[:, :, 1]
+                            - tf.roll(links[:, :, 0], shift=-1, axis=1)
+                            + tf.roll(links[:, :, 1], shift=-1, axis=0))
+            )
+            #  total_action = np.sum([
+            #      1. - tf.cos(
+            #          links[v[0]] + links[v[1]] - links[v[2]] - links[v[3]]
+            #      ) for v in list(self.plaquettes_dict.values())
+            #  ])
 
         return total_action
 

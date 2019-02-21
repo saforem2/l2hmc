@@ -900,9 +900,9 @@ class GaugeModel(object):
                         self.dynamics.eps,
                         self.dynamics.alpha,
                     ])
-                    log(f'dynamics_alpha: {alpha_np:^.3g}')
-                    log(f'dynamics_eps: {eps_np:^.3g}')
-                    log(f'exp(dynamics_alpha): {np.exp(alpha_np):^.3g}')
+                    #  log(f'dynamics_alpha: {alpha_np:^.3g}')
+                    #  log(f'dynamics_eps: {eps_np:^.3g}')
+                    #  log(f'exp(dynamics_alpha): {np.exp(alpha_np):^.3g}')
 
                     if trace:
                         options = tf.RunOptions(
