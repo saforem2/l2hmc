@@ -367,9 +367,12 @@ class GaugeModel(object):
             self.log_dir, self.info_dir, self.figs_dir = dirs
 
         self.eval_dir = os.path.join(self.log_dir, 'eval_info')
+        check_else_make_dir(self.eval_dir)
         self.samples_dir = os.path.join(self.eval_dir, 'samples')
+        check_else_make_dir(self.samples_dir)
 
         self.train_eval_dir = os.path.join(self.eval_dir, 'training')
+        check_else_make_dir(self.train_eval_dir)
         self.train_samples_dir = os.path.join(self.train_eval_dir, 'samples')
 
         self.observables_dir = os.path.join(self.log_dir, 'observables')
@@ -391,16 +394,16 @@ class GaugeModel(object):
             'samples_pkl_file': os.path.join(self.info_dir, 'samples.pkl'),
             'params_pkl_file': os.path.join(self.info_dir, 'parameters.pkl'),
             'actions_out_file': os.path.join(
-                self.train_observables_dir, 'actions_dict_training.pkl'
+                self.train_observables_dir, 'actions_training.pkl'
             ),
             'plaqs_out_file': os.path.join(
-                self.train_observables_dir, 'plaqs_dict_training.pkl'
+                self.train_observables_dir, 'plaqs_training.pkl'
             ),
             'charges_out_file': os.path.join(
-                self.train_observables_dir, 'charges_dict_training.pkl'
+                self.train_observables_dir, 'charges_training.pkl'
             ),
             'tunn_events_out_file': os.path.join(
-                self.train_observables_dir, 'tunn_events_dict_training.pkl'
+                self.train_observables_dir, 'tunn_events_training.pkl'
             ),
         }
 
@@ -1105,7 +1108,15 @@ class GaugeModel(object):
         if beta is None:
             beta = self.beta_final
 
-        log(f"Running sampler for {run_steps:g} steps at beta = {beta}...")
+        if current_step is None:
+            txt_file = f'eval_info_steps_{run_steps}_beta_{beta}.txt'
+            eval_file = os.path.join(self.eval_dir, txt_file)
+        else:
+            txt_file = (f'eval_info_{current_step}_TRAIN_'
+                        f'steps_{run_steps}_beta_{beta}.txt')
+            eval_file = os.path.join(self.train_eval_dir, txt_file)
+
+        log(f"Running sampler for {run_steps} steps at beta = {beta}...")
 
         eps = self.sess.run(self.dynamics.eps)
 
@@ -1118,7 +1129,6 @@ class GaugeModel(object):
         plaqs_dict = {}
         charges_dict = {}
         tun_events_dict = {}
-        eval_strings = []
 
         start_time = time.time()
         for step in range(run_steps):
@@ -1172,7 +1182,13 @@ class GaugeModel(object):
                 log(charges_np)
                 log('\n')
 
-                eval_strings.append(eval_str)
+                write(eval_str, eval_file, 'a')
+                write('accept_prob:', eval_file, 'a', nl=False)
+                write(str(px), eval_file, 'a', nl=True)
+                write('top. charges:', eval_file, 'a', nl=False)
+                write(str(charges_np), eval_file, 'a', nl=True)
+                write('', eval_file, 'a')
+
 
         log(f'\n Time to complete run: {time.time() - start_time} seconds.')
         log(80*'-' + '\n', nl=False)
@@ -1192,47 +1208,40 @@ class GaugeModel(object):
         plaqs_dict = data[2]
         charges_dict = data[3]
         tun_events_dict = data[4]
-        eval_strings = data[5]
 
         files = self._get_run_files(*_args)
 
-        eval_file = files[0]
-        samples_file = files[1]
-        actions_file = files[2]
-        plaqs_file = files[3]
-        charges_file = files[4]
-        tun_events_file = files[5]
-
-        _ = [write(s, eval_file, 'a') for s in eval_strings]
-
-        #  write(eval_str, eval_file, 'a')
-        #  write('accept_prob:', eval_file, 'a', nl=False)
-        #  write(str(px), eval_file, 'a', nl=True)
-        #  write('top. charges:', eval_file, 'a', nl=False)
-        #  write(str(charges_np), eval_file, 'a', nl=True)
-        #  write('', eval_file, 'a')
+        samples_file = files[0]
+        actions_file = files[1]
+        plaqs_file = files[2]
+        charges_file = files[3]
+        tun_events_file = files[4]
 
         def save_data(data, out_file, name=None):
-            out_dir = os.path.join(*out_file.split('/')[:-1])
+            #  out_dir = os.path.join(*out_file.split('/')[:-1])
+            out_dir = os.path.dirname(out_file)
             check_else_make_dir(out_dir)
             try:
                 log(f"Saving {str(name)} to {out_file}.")
                 with open(out_file, 'wb') as f:
                     pickle.dump(data, f)
-            except OSError:
-                log(f'INFO: Unable to save using `pickle.dump`, '
-                    f'using `np.save` instead.')
-                if isinstance(data, list):
-                    data = np.array(data)
-
-                out_file = out_file[:-4] + '.npy'
-                log(f"Saving {str(name)} to {out_file}.")
-                np.save(out_file, data)
+            except FileNotFoundError:
+                import pdb
+                pdb.set_trace()
+            #  except OSError:
+            #      log(f'INFO: Unable to save using `pickle.dump`, '
+            #          f'using `np.save` instead.')
+            #      if isinstance(data, list):
+            #          data = np.array(data)
+            #
+            #      out_file = out_file[:-4] + '.npy'
+            #      log(f"Saving {str(name)} to {out_file}.")
+            #      np.save(out_file, data)
 
         save_data(samples_history, samples_file, name='samples_history')
-        save_data(actions_dict, actions_file, name='actions_dict')
-        save_data(plaqs_dict, plaqs_file, name='plaqs_dict')
-        save_data(charges_dict, charges_file, name='charges_dict')
+        save_data(actions_dict, actions_file, name='actions')
+        save_data(plaqs_dict, plaqs_file, name='plaqs')
+        save_data(charges_dict, charges_file, name='charges')
         save_data(tun_events_dict, tun_events_file, name='tunneling_events')
 
     def _get_run_files(self, run_steps, current_step=None, beta=None):
@@ -1242,17 +1251,15 @@ class GaugeModel(object):
 
         if current_step is None:                     # running AFTER training
             obs_dir = os.path.join(observables_dir,
-                                   f'steps_{run_steps:g}_beta_{beta}')
+                                   f'steps_{run_steps}_beta_{beta}')
             check_else_make_dir(obs_dir)
 
-            txt_file = f'eval_info_steps_{run_steps:g}_beta_{beta}.txt'
-            pkl_file = f'samples_history_steps_{run_steps:g}_beta_{beta}.pkl'
-            actions_file = f'actions_dict_steps_{run_steps:g}_beta_{beta}.pkl'
-            plaqs_file = f'plaqs_dict_steps_{run_steps:g}_beta_{beta}.pkl'
-            charges_file = f'charges_dict_steps_{run_steps:g}_beta_{beta}.pkl'
-            tun_events_file = f'tunn_events_dict_{run_steps:g}_beta_{beta}.pkl'
+            pkl_file = f'samples_history_steps_{run_steps}_beta_{beta}.pkl'
+            actions_file = f'actions_steps_{run_steps}_beta_{beta}.pkl'
+            plaqs_file = f'plaqs_steps_{run_steps}_beta_{beta}.pkl'
+            charges_file = f'charges_steps_{run_steps}_beta_{beta}.pkl'
+            tun_events_file = f'tunn_events_{run_steps}_beta_{beta}.pkl'
 
-            eval_file = os.path.join(self.eval_dir, txt_file)
             samples_file = os.path.join(self.samples_dir, pkl_file)
             actions_file = os.path.join(obs_dir, actions_file)
             plaqs_file = os.path.join(obs_dir, plaqs_file)
@@ -1263,28 +1270,27 @@ class GaugeModel(object):
             obs_dir = os.path.join(observables_dir, 'training')
             check_else_make_dir(obs_dir)
             obs_dir = os.path.join(obs_dir,
-                                   f'{current_step:g}_TRAIN_'
-                                   f'steps_{run_steps:g}_beta_{beta}')
+                                   f'{current_step}_TRAIN_'
+                                   f'steps_{run_steps}_beta_{beta}')
 
-            txt_file = (f'eval_info_{current_step:g}_TRAIN_'
-                        f'steps_{run_steps:g}_beta_{beta}.txt')
             pkl_file = (f'samples_history_{current_step}_TRAIN_'
-                        f'steps_{run_steps:g}_beta_{beta}.pkl')
+                        f'steps_{run_steps}_beta_{beta}.pkl')
 
-            eval_file = os.path.join(self.train_eval_dir, txt_file)
             samples_file = os.path.join(self.train_samples_dir, pkl_file)
 
-            actions_file = f'actions_dict_steps_{run_steps:g}_beta_{beta}.pkl'
-            plaqs_file = f'plaqs_dict_steps_{run_steps:g}_beta_{beta}.pkl'
-            charges_file = f'charges_dict_steps_{run_steps:g}_beta_{beta}.pkl'
-            tun_events_file = f'tunn_events_dict_{run_steps:g}_beta_{beta}.pkl'
+            actions_file = f'actions_steps_{run_steps}_beta_{beta}.pkl'
+            plaqs_file = f'plaqs_steps_{run_steps}_beta_{beta}.pkl'
+            charges_file = f'charges_steps_{run_steps}_beta_{beta}.pkl'
+            tun_events_file = (
+                f'tunn_events_steps_{run_steps}_beta_{beta}.pkl'
+            )
 
             actions_file = os.path.join(obs_dir, actions_file)
             plaqs_file = os.path.join(obs_dir, plaqs_file)
             charges_file = os.path.join(obs_dir, charges_file)
             tun_events_file = os.path.join(obs_dir, tun_events_file)
 
-        files = (eval_file, samples_file, actions_file, plaqs_file,
+        files = (samples_file, actions_file, plaqs_file,
                  charges_file, tun_events_file)
 
         return files
