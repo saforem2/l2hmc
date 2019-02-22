@@ -929,7 +929,7 @@ class GaugeModel(object):
 
                 #  self.actions_dict[key] = actions_np
                 #  self.plaqs_dict[key] = plaqs_np
-                self.charges_arr.extend(charges_np)
+                self.charges_arr.append(charges_np)
 
                 try:
                     #  tunneling_events = np.sum(
@@ -1147,7 +1147,7 @@ class GaugeModel(object):
                 self.charges_op
             ], feed_dict=fd)
 
-            charges_arr.extend(charges_np)
+            charges_arr.append(charges_np)
 
             try:
                 tunneling_events = np.sum(
@@ -1301,35 +1301,35 @@ def main(flags):
     """Main method for creating/training U(1) gauge model from command line."""
     params = PARAMS  # use default parameters if no command line args passed
 
-########################### Lattice parameters ###############################
+# ========================= Lattice parameters ===============================
     params['time_size'] = flags.time_size
     params['space_size'] = flags.space_size
     params['link_type'] = flags.link_type
     params['dim'] = flags.dim
     params['num_samples'] = flags.num_samples
-########################### Leapfrog parameters ##############################
+# ========================= Leapfrog parameters ==============================
     params['num_steps'] = flags.num_steps
     params['eps'] = flags.eps
     params['loss_scale'] = flags.loss_scale
     params['loss_eps'] = 1e-4
-########################### Learning rate parameters #########################
+# ========================= Learning rate parameters =========================
     params['learning_rate_init'] = flags.learning_rate_init
     params['learning_rate_decay_rate'] = flags.learning_rate_decay_rate
     params['learning_rate_decay_steps'] = flags.learning_rate_decay_steps
-########################### Annealing parameters #############################
+# ========================= Annealing parameters =============================
     params['annealing'] = flags.annealing
     #  params['annealing_steps'] = flags.annealing_steps
     #  params['annealing_factor'] = flags.annealing_factor
     params['beta_init'] = flags.beta_init
     params['beta_final'] = flags.beta_final
-########################### Training parameters ##############################
+# ========================= Training parameters ==============================
     params['train_steps'] = flags.train_steps
     params['save_steps'] = flags.save_steps
     params['logging_steps'] = flags.logging_steps
     params['print_steps'] = flags.print_steps
     params['training_samples_steps'] = flags.training_samples_steps
     params['training_samples_length'] = flags.training_samples_length
-########################### Model parameters #################################
+# ========================= Model parameters =================================
     params['network_arch'] = flags.network_arch
     params['hmc'] = flags.hmc
     params['eps_trainable'] = flags.eps_trainable
@@ -1338,11 +1338,11 @@ def main(flags):
     params['clip_grads'] = flags.clip_grads
     params['clip_value'] = flags.clip_value
     params['using_hvd'] = flags.horovod
-##############################################################################
+# ============================================================================
 
-    if flags.beta != flags.beta_init:
-        if flags.annealing:
-            params['beta'] = flags.beta_init
+    #  if flags.beta != flags.beta_init:
+    #      if flags.annealing:
+    #          params['beta'] = flags.beta_init
 
     if flags.hmc:
         params['eps_trainable'] = False
@@ -1369,7 +1369,6 @@ def main(flags):
         config.allow_soft_placement = True
         config.intra_op_parallelism_threads = 62
 
-
     model = GaugeModel(params=params,
                        config=config,
                        sess=None,
@@ -1387,9 +1386,12 @@ def main(flags):
     model.train(flags.train_steps, pre_train=True, trace=False)
 
     try:
-        run_steps_grid = [100, 500, 1000, 2500, 5000, 10000]
-        for steps in run_steps_grid:
-            model.run(steps)
+        #  run_steps_grid = [100, 500, 1000, 2500, 5000, 10000]
+        run_steps_grid = [50000]
+        betas = [model.beta_final - 1, model.beta_final]
+        for beta in betas:
+            for steps in run_steps_grid:
+                model.run(steps, beta=beta)
 
     except (KeyboardInterrupt, SystemExit):
         log("\nKeyboardInterrupt detected! \n")
@@ -1484,7 +1486,8 @@ if __name__ == '__main__':
 
     #  parser.add_argument("--annealing_steps", type=float, default=200,
     #                      required=False, dest="annealing_steps",
-    #                      help=("Number of steps after which to anneal beta."))
+    #                      help=("Number of steps after which to anneal
+    #                      beta."))
     #
     #  parser.add_argument("--annealing_factor", type=float, default=0.97,
     #                      required=False, dest="annealing_factor",
@@ -1552,6 +1555,7 @@ if __name__ == '__main__':
                               "the neural network. Must be one of: "
                               "`'conv3D', 'conv2D', 'generic'`. "
                               "(Default: conv3D)"))
+
     #  parser.add_argument("--conv_net", action="store_true",
     #                      required=False, dest="conv_net",
     #                      help=("Whether or not to use convolutional "
