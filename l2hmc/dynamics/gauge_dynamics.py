@@ -81,14 +81,6 @@ class GaugeDynamics(tf.keras.Model):
 
         self._construct_time()
         self._construct_masks()
-        #  self._init_mask()
-
-        # when performing `tf.reduce_sum` we want to sum over all extra axes.
-        # For example, when using conv_net, the input data will have the
-        # same shape as self.lattice.samples, so we would want to reduce the
-        # sum over the first, second and third axes.
-        #  self.axes = np.arange(1, len(self.samples.shape))
-        #  self.axes = np.arange(1, len(self.lattice.samples.shape))
 
         if self.hmc:
             self.position_fn = lambda inp: [
@@ -108,13 +100,6 @@ class GaugeDynamics(tf.keras.Model):
             else:
                 raise AttributeError("`self._network_arch` must be one of "
                                      "`'conv3D', 'conv2D', 'generic'.`")
-            #  if self.conv_net:
-                #  self._build_conv_nets_3D()
-                #  self._build_conv_nets_2D()
-            #  if self.conv_net2D:
-            #      self._build_conv_nets_2d()
-            #  else:
-            #      self._build_generic_nets()
 
     def _build_conv_nets_3D(self):
         """Build ConvNet3D architecture for position and momentum functions."""
@@ -227,18 +212,12 @@ class GaugeDynamics(tf.keras.Model):
             # Obtain proposed states
             with tf.name_scope('position_post'):
                 position_post = tf.mod(  # mod by 2 pi to enforce U(1) symmetry
-                    #  (forward_mask[:, None, None, None] * position_f
-                    #   + backward_mask[:, None, None, None] * position_b),
                     (forward_mask[:, None] * position_f
                      + backward_mask[:, None] * position_b),
                     2 * np.pi
                 )
 
             with tf.name_scope('momentum_post'):
-                #  momentum_post = (
-                #      forward_mask[:, None, None, None] * momentum_f
-                #      + backward_mask[:, None, None, None] * momentum_b
-                #  )
                 momentum_post = (forward_mask[:, None] * momentum_f
                                  + backward_mask[:, None] * momentum_b)
 
@@ -259,8 +238,6 @@ class GaugeDynamics(tf.keras.Model):
             # Samples after accept / reject step
             with tf.name_scope('position_out'):
                 position_out = (
-                    #  accept_mask[:, None, None, None] * position_post
-                    #  + reject_mask[:, None, None, None] * position
                     accept_mask[:, None] * position_post
                     + reject_mask[:, None] * position
                 )
@@ -302,43 +279,6 @@ class GaugeDynamics(tf.keras.Model):
                 body=body,
                 loop_vars=[position_post, momentum_post, beta, t, j]
             )
-
-            #  t = 0
-            #  t = np.arange(self.num_steps + 1)
-            #  dN = tf.shape(position)[0]
-            #  t = tf.constant(0., dtype=tf.float32)
-            #  t = int(0)
-            #  j = 0.
-            #  j = tf.zeros((dN,))
-
-            #  t = tf.constant(0, dtype=tf.int32)
-            #  j = 0.
-            #  def body(x, v, beta, t, j):
-            #      new_x, new_v, logdet = lf_fn(x, v, beta, t)
-            #      new_t = int(t+1)
-            #      #  new_t = tf.cast(t + 1, dtype=tf.int32)
-            #      return new_x, new_v, new_t, j+logdet
-
-            #  def cond(x, v, beta, t, j):
-            #      return t < self.num_steps
-            #      #  return tf.less(t, self.num_steps)
-            #
-            #  position_post, momentum_post, t, sumlogdet = tf.while_loop(
-            #      cond=cond,
-            #      body=body,
-            #      loop_vars=[position_post, momentum_post, beta, t, j]
-            #  )
-
-            #  Apply augmented leapfrog steps
-            #  with tf.name_scope('lf_fn_for_loop'):
-            #      for i in range(self.num_steps):
-            #          position_post, momentum_post, logdet = lf_fn(
-            #              position_post,
-            #              momentum_post,
-            #              beta,
-            #              i
-            #          )
-            #          sumlogdet += logdet
 
             with tf.name_scope('accept_prob'):
                 accept_prob = self._compute_accept_prob(
@@ -394,7 +334,6 @@ class GaugeDynamics(tf.keras.Model):
 
         # Reversed index/sinusoidal time
         with tf.name_scope('backward_lf'):
-            #  t = self._get_time(self.num_steps - i - 1)
             t = self._format_time(i, tile=tf.shape(position)[0])
 
             mask, mask_inv = self._get_mask(self.num_steps - i - 1)

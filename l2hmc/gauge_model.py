@@ -37,7 +37,7 @@ except ImportError:
 
 import utils.gauge_model_helpers as helpers
 
-from lattice.lattice import GaugeLattice
+from lattice.lattice import GaugeLattice, project_angle, u1_plaq_exact
 from utils.tf_logging import variable_summaries
 #  from utils.dynamics import Dynamics as DynamicsOld
 from network.conv_net import ConvNet2D, ConvNet3D
@@ -236,7 +236,6 @@ class GaugeModel(object):
                  log_dir=None,
                  restore=False):
         """Initialization method."""
-        #  super(GaugeModel, self).__init__()
         np.random.seed(GLOBAL_SEED)
         tf.set_random_seed(GLOBAL_SEED)
         tf.enable_resource_variables()
@@ -247,6 +246,8 @@ class GaugeModel(object):
         self._create_lattice()
         self._create_tensors()
         self._create_dynamics()
+        self._create_metric_fn()
+        self._create_observables_ops()
 
         if restore:
             self._restore_model(log_dir, sess, config)
@@ -318,10 +319,15 @@ class GaugeModel(object):
         if not self.clip_grads:
             self.clip_value = None
 
-        self.training_samples_dict = {}
+        #  self.training_samples_dict = {}
         self.losses_arr = []
         self.accept_prob_arr = []
         self.eps_arr = []
+        self.charges_arr = []
+        self.charges_dict = {}
+        self.actions_dict = {}
+        self.plaqs_dict = {}
+        self.tunn_events_dict = {}
 
         self.data = {
             'step': 1,
@@ -334,6 +340,7 @@ class GaugeModel(object):
             'beta': params.get('beta_init', 2.),
             'train_steps': params.get('train_steps', 20000),
             'learning_rate': params.get('learning_rate_init', 1e-3),
+            'tunneling_events': 0.,
         }
 
         self.condition1 = not self.using_hvd  # condition1: NOT using horovod
@@ -359,25 +366,43 @@ class GaugeModel(object):
 
             self.log_dir, self.info_dir, self.figs_dir = dirs
 
-        self.files = {
-            'parameters_file': os.path.join(self.info_dir, 'parameters.txt'),
-            'run_info_file': os.path.join(self.info_dir, 'run_info.txt'),
-            'data_pkl_file': os.path.join(self.info_dir, 'data.pkl'),
-            'samples_pkl_file': os.path.join(self.info_dir, 'samples.pkl'),
-            'params_pkl_file': os.path.join(self.info_dir, 'parameters.pkl'),
-        }
-
         self.eval_dir = os.path.join(self.log_dir, 'eval_info')
         self.samples_dir = os.path.join(self.eval_dir, 'samples')
 
         self.train_eval_dir = os.path.join(self.eval_dir, 'training')
         self.train_samples_dir = os.path.join(self.train_eval_dir, 'samples')
 
+        self.observables_dir = os.path.join(self.log_dir, 'observables')
+        self.train_observables_dir = os.path.join(
+            self.observables_dir, 'training'
+        )
+
         def make_dirs(dirs):
-            [check_else_make_dir(d) for d in dirs]
+            _ = [check_else_make_dir(d) for d in dirs]
 
         make_dirs([self.eval_dir, self.samples_dir,
-                   self.train_eval_dir, self.train_samples_dir])
+                   self.train_eval_dir, self.train_samples_dir,
+                   self.observables_dir, self.train_observables_dir])
+
+        self.files = {
+            'parameters_file': os.path.join(self.info_dir, 'parameters.txt'),
+            'run_info_file': os.path.join(self.info_dir, 'run_info.txt'),
+            'data_pkl_file': os.path.join(self.info_dir, 'data.pkl'),
+            'samples_pkl_file': os.path.join(self.info_dir, 'samples.pkl'),
+            'params_pkl_file': os.path.join(self.info_dir, 'parameters.pkl'),
+            'actions_out_file': os.path.join(
+                self.train_observables_dir, 'actions_dict_training.pkl'
+            ),
+            'plaqs_out_file': os.path.join(
+                self.train_observables_dir, 'plaqs_dict_training.pkl'
+            ),
+            'charges_out_file': os.path.join(
+                self.train_observables_dir, 'charges_dict_training.pkl'
+            ),
+            'tunn_events_out_file': os.path.join(
+                self.train_observables_dir, 'tunn_events_dict_training.pkl'
+            ),
+        }
 
     def _create_lattice(self):
         with tf.name_scope('lattice'):
@@ -419,7 +444,8 @@ class GaugeModel(object):
                                             dtype=tf.float32)
 
         if not tf.executing_eagerly():
-            self.x = tf.placeholder(tf.float32, (None, self.x_dim), name='x')
+            self.x = tf.placeholder(tf.float32,
+                                    (self.batch_size, self.x_dim), name='x')
             self.beta = tf.placeholder(tf.float32, shape=(), name='beta')
         else:
             self.beta = self.beta_init
@@ -500,15 +526,23 @@ class GaugeModel(object):
             if hvd.rank() != 0:
                 return
 
-        if samples is None:
-            samples = self.samples
-
-        with open(self.files['data_pkl_file'], 'wb') as f:
-            pickle.dump(self.data, f)
-
         if samples is not None:
             with open(self.files['samples_pkl_file'], 'wb') as f:
                 pickle.dump(samples, f)
+
+        #  if samples is None:
+        #      samples = self.samples
+
+        with open(self.files['data_pkl_file'], 'wb') as f:
+            pickle.dump(self.data, f)
+        with open(self.files['actions_out_file'], 'wb') as f:
+            pickle.dump(self.actions_dict, f)
+        with open(self.files['plaqs_out_file'], 'wb') as f:
+            pickle.dump(self.plaqs_dict, f)
+        with open(self.files['charges_out_file'], 'wb') as f:
+            pickle.dump(self.charges_dict, f)
+        with open(self.files['tunn_events_out_file'], 'wb') as f:
+            pickle.dump(self.tunn_events_dict, f)
 
         if not tf.executing_eagerly():
             ckpt_prefix = os.path.join(self.log_dir, 'ckpt')
@@ -623,17 +657,13 @@ class GaugeModel(object):
     def _create_sampler(self):
         """Create operation for generating new samples using dynamics engine.
 
-        This method is to be used when running generic HMC to create operations
-        for dealing with `dynamics.apply_transition` without building
-        unnecessary operations for calculating loss.
+        NOTE: This method is to be used when running generic HMC to create
+            operations for dealing with `dynamics.apply_transition` without
+            building unnecessary operations for calculating loss.
         """
         with tf.name_scope('sampler'):
             inputs = (self.x, self.beta)
             _, _, self.px, self.x_out = self.dynamics(inputs)
-            #  _, _, self.px, self.x_out = self.dynamics.apply_transition(
-            #      self.x,
-            #      self.beta
-            #  )
 
     def build_graph(self, sess=None, config=None):
         """Build graph for TensorFlow."""
@@ -680,7 +710,6 @@ class GaugeModel(object):
             if self.using_hvd:
                 self.optimizer = hvd.DistributedOptimizer(self.optimizer)
 
-        self._create_metric_fn()
         start_time = time.time()
 
         kwargs = {
@@ -739,7 +768,6 @@ class GaugeModel(object):
 
         if self.condition1 or self.condition2:
             ckpt = tf.train.get_checkpoint_state(self.log_dir)
-            #  time_delay = 0.
             if ckpt and ckpt.model_checkpoint_path:
                 log('Restoring previous model from: '
                     f'{ckpt.model_checkpoint_path}')
@@ -751,6 +779,53 @@ class GaugeModel(object):
             self.writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
 
         self.sess.graph.finalize()
+
+    def _create_observables_ops(self):
+        samples = tf.reshape(self.x, shape=(self.batch_size,
+                                            *self.lattice.links.shape))
+        plaq_sums = (samples[:, :, :, 0]
+                     - samples[:, :, :, 1]
+                     - tf.roll(samples[:, :, :, 0], shift=-1, axis=2)
+                     + tf.roll(samples[:, :, :, 1], shift=-1, axis=1))
+
+        local_actions = tf.cos(plaq_sums)
+
+        self.actions_op = tf.reduce_sum(1. - local_actions, axis=(1, 2))
+        self.plaqs_op = (
+            tf.reduce_sum(local_actions, (1, 2)) / self.lattice.num_plaquettes
+        )
+
+        self.charges_op = tf.floor(
+            0.1 + tf.reduce_sum(project_angle(plaq_sums), (1, 2)) / (2 * np.pi)
+        )
+
+    def train_wrapper(self, 
+                      train_steps,
+                      samples_init=None,
+                      beta_init=None,
+                      pre_train=True,
+                      trace=False):
+        builder = tf.profiler.ProfileOptionBuilder
+        opt = builder(builder.time_and_memory()).order_by('micros').build()
+        opt2 = tf.profiler.ProfileOptionBuilder.trainable_variables_parameter()
+
+        # Collect traces of steps 10~20, dump the whole profile (with traces of
+        # step 10~20) at step 20. The dumped profile can be used for further
+        # profiling with command line interface or Web UI.
+        profile_dir = os.path.join(self.log_dir, 'profile_info')
+        check_else_make_dir(profile_dir)
+        with tf.contrib.tfprof.ProfileContext(profile_dir,
+                                              trace_steps=range(10, 20),
+                                              dump_steps=[20]) as pctx:
+          # Run online profiling with 'op' view and 'opt' options at step 15,
+          # 18, 20.
+          pctx.add_auto_profiling('op', opt, [15, 18, 20])
+          # Run online profiling with 'scope' view and 'opt2' options at step
+          # 20.
+          pctx.add_auto_profiling('scope', opt2, [20])
+          # High level API, such as slim, Estimator, etc.
+          self.train(train_steps, samples_init, beta_init, pre_train, trace)
+
 
     # pylint: disable=too-many-statements
     def train(self,
@@ -808,6 +883,7 @@ class GaugeModel(object):
 
         #  annealing_sched = [self.update_beta(i) for i in range(train_steps)]
 
+
         try:
             log(data_header)
             if self.condition1 or self.condition2:
@@ -825,16 +901,55 @@ class GaugeModel(object):
                 fd = {self.x: samples_np,
                       self.beta: beta_np}
 
-                _, loss_np, samples_np, px_np, alpha_np = self.sess.run([
+                #  _, loss_np, samples_np, px_np, alpha_np = self.sess.run([
+                outputs = self.sess.run([
                     self.train_op,
                     self.loss_op,
                     self.x_out,
                     self.px,
-                    self.dynamics.alpha
+                    self.dynamics.alpha,
+                    self.actions_op,
+                    self.plaqs_op,
+                    self.charges_op
                 ], feed_dict=fd)
 
-                if step % 10 == 0:
-                    self.training_samples_dict[(step, beta_np)] = samples_np
+                loss_np = outputs[1]
+                samples_np = outputs[2]
+                px_np = outputs[3]
+                alpha_np = outputs[4]
+                actions_np = outputs[5]
+                plaqs_np = outputs[6]
+                charges_np = outputs[7]
+
+                #  observables = self.sess.run(self.observables_op,
+                #                              feed_dict={self.x: samples_np})
+
+                #  self.actions_dict[key] = actions_np
+                #  self.plaqs_dict[key] = plaqs_np
+                self.charges_arr.extend(charges_np)
+
+                try:
+                    #  tunneling_events = np.sum(
+                    #      np.sqrt((self.charges_arr[-1]
+                    #               - self.charges_arr[-2]) ** 2)
+                    #  )
+                    tunneling_events = np.sum(
+                        np.abs(self.charges_arr[-1] - self.charges_arr[-2])
+                    )
+                except:
+                    tunneling_events = 0
+
+                key = (step, beta_np)
+                self.charges_dict[key] = charges_np
+                self.tunn_events_dict[key] = tunneling_events
+
+                #  log('')
+                #  log(f"avg action: {np.mean(actions_np):^6.4g} ", nl=False)
+                #  log(f"avg plaquette: {np.mean(plaqs_np):^6.4g} ", nl=False)
+                #  log('\n')
+                #  log('top_charges: ', nl=False)
+                #  log(charges_np)
+                #  log('\n')
 
                 if step % self.learning_rate_decay_steps == 0:
                     lr_np = self.sess.run(self.learning_rate)
@@ -852,6 +967,10 @@ class GaugeModel(object):
                     self.data['step_time'] = (
                         time.time() - start_step_time
                     )
+                    self.data['tunneling_events'] = tunneling_events
+                    self.data['action_avg'] = np.mean(actions_np)
+                    self.data['plaq_avg'] = np.mean(plaqs_np)
+
                     self.losses_arr.append(loss_np)
                     #  self.accept_prob_arr.extend(px_np)
                     #  self.eps_arr.append(eps_np)
@@ -882,27 +1001,18 @@ class GaugeModel(object):
                         self._save_model(samples=samples_np, step=step-2)
                         helpers.write_run_data(self.files['run_info_file'],
                                                self.data)
-                        samples_out_file = os.path.join(
-                            training_samples_dir,
-                            f'training_samples_{step}.pkl'
-                        )
-                        log(f"Saving training samples to: {samples_out_file}.")
-                        with open(samples_out_file, 'wb') as f:
-                            pickle.dump(self.training_samples_dict, f)
-                        log('done.')
 
                 if step % self.logging_steps == 0:
                     if self.using_hvd:
                         if hvd.rank() != 0:
                             continue
 
+                    log(data_header)
+
                     alpha_np, eps_np = self.sess.run([
                         self.dynamics.eps,
                         self.dynamics.alpha,
                     ])
-                    #  log(f'dynamics_alpha: {alpha_np:^.3g}')
-                    #  log(f'dynamics_eps: {eps_np:^.3g}')
-                    #  log(f'exp(dynamics_alpha): {np.exp(alpha_np):^.3g}')
 
                     if trace:
                         options = tf.RunOptions(
@@ -914,7 +1024,6 @@ class GaugeModel(object):
                         options = None
                         run_metadata = None
 
-                    #  if self.condition1 or self.condition2:
                     summary_str = self.sess.run(
                         self.summary_op, feed_dict={
                             self.x: samples_np,
@@ -944,7 +1053,7 @@ class GaugeModel(object):
             self.data['step'] = step
             self.data['loss'] = loss_np
             self.data['accept_prob'] = px_np
-            self.data['eps'] = eps_np
+            self.data['eps'] = np.exp(alpha_np)
             self.data['beta'] = beta_np
             self.data['learning_rate'] = lr_np
             self.data['step_time_norm'] = (
@@ -953,6 +1062,8 @@ class GaugeModel(object):
             self.data['step_time'] = (
                 time.time() - start_step_time
             )
+            self.data['tunneling_events'] = tunneling_events
+
             self.losses_arr.append(loss_np)
             #  self.accept_prob_arr.extend(px_np)
             #  self.eps_arr.append(eps_np)
@@ -967,7 +1078,7 @@ class GaugeModel(object):
             self._save_model(samples=samples_np, step=step)
 
     # pylint: disable=inconsistent-return-statements
-    def run(self, run_steps, ret=False, current_step=None, beta=None):
+    def run(self, run_steps, current_step=None, beta=None):
         """Run the simulation to generate samples and calculate observables.
 
         Args:
@@ -994,70 +1105,189 @@ class GaugeModel(object):
         if beta is None:
             beta = self.beta_final
 
+        log(f"Running sampler for {run_steps:g} steps at beta = {beta}...")
+
+        eps = self.sess.run(self.dynamics.eps)
+
         # start with randomly generated samples
         samples = np.random.randn(*(self.batch_size, self.x_dim))
         #  samples = np.random.randn(*self.samples.shape)
         samples_history = []
-
-        log(f"Running sampler for {run_steps} steps at beta = {beta}...")
-
-        if current_step is None:                     # running AFTER training
-            txt_file = f'eval_info_steps_{run_steps}_beta_{beta}.txt'
-            pkl_file = f'samples_history_steps_{run_steps}_beta_{beta}.pkl'
-
-            eval_file = os.path.join(self.eval_dir, txt_file)
-            out_file = os.path.join(self.samples_dir, pkl_file)
-
-        else:                                        # running DURING training
-            txt_file = (f'eval_info_{current_step}_TRAIN_'
-                        f'steps_{run_steps}_beta_{beta}.txt')
-            pkl_file = (f'samples_history_{current_step}_TRAIN_'
-                        f'steps_{run_steps}_beta_{beta}.pkl')
-
-            eval_file = os.path.join(self.train_eval_dir, txt_file)
-            out_file = os.path.join(self.train_samples_dir, pkl_file)
-
-        eps = self.sess.run(self.dynamics.eps)
+        charges_arr = []
+        actions_dict = {}
+        plaqs_dict = {}
+        charges_dict = {}
+        tun_events_dict = {}
+        eval_strings = []
 
         start_time = time.time()
         for step in range(run_steps):
             t0 = time.time()
-            samples, px = self.sess.run(
-                [self.x_out, self.px], feed_dict={self.x: samples,
-                                                  self.beta: beta}
-            )
+
+            fd = {
+                self.x: samples,
+                self.beta: beta
+            }
+
+            samples, px, actions_np, plaqs_np, charges_np = self.sess.run([
+                self.x_out,
+                self.px,
+                self.actions_op,
+                self.plaqs_op,
+                self.charges_op
+            ], feed_dict=fd)
+
+            charges_arr.extend(charges_np)
+
+            try:
+                tunneling_events = np.sum(
+                    np.abs(charges_arr[-1] - charges_arr[-2])
+                )
+
+            except IndexError:
+                tunneling_events = 0
 
             samples_history.append(np.squeeze(samples))
 
+            key = (step, beta)
+            actions_dict[key] = actions_np
+            plaqs_dict[key] = plaqs_np
+            charges_dict[key] = charges_np
+            tun_events_dict[key] = tunneling_events
+
             if step % 10 == 0:
-                tt = (time.time() - t0)# / (norm_factor)
+                tt = (time.time() - t0)  # / (norm_factor)
                 eval_str = (f'step: {step:>6.4g}/{run_steps:<6.4g} '
                             f'beta: {beta:^6.4g} '
-                            f'accept prob (avg): {np.mean(px):^9.4g} '
+                            f'px (avg): {np.mean(px):^6.4g} '
+                            f'actions: {np.mean(actions_np):^6.4g} '
+                            f'plaqs: {np.mean(plaqs_np):^6.4g} '
+                            f'tunn. events: {tunneling_events} '
                             f'step size: {eps:^6.4g} '
-                            f'  time/step: {tt:^6.4g}\n')
+                            f'time/step: {tt:^6.4g}\n')
 
                 log(eval_str)
-                #log('accept prob: ', nl=False)
-                #log(str(px))
-                #log('\n')
+                log('\n')
+                log('top_charges: ', nl=False)
+                log(charges_np)
+                log('\n')
 
-                write(eval_str, eval_file, 'a')
-                write('accept_prob:', eval_file, 'a', nl=False)
-                write(str(px), eval_file, 'a', nl=True)
-                write('', eval_file, 'a')
+                eval_strings.append(eval_str)
 
-        with open(out_file, 'wb') as f:
-            pickle.dump(samples_history, f)
-
-        log(f'\nSamples saved to: {out_file}.')
         log(f'\n Time to complete run: {time.time() - start_time} seconds.')
         log(80*'-' + '\n', nl=False)
 
-        if ret:
-            return samples_history
+        data = (samples_history, actions_dict,
+                plaqs_dict, charges_dict, tun_events_dict, eval_str)
+        _args = (run_steps, current_step, beta)
 
-        del samples_history  # free up some memory
+        self._save_run_info(data, _args)
+
+        del data  # free up some memory
+
+    def _save_run_info(self, data, _args):
+        """Save samples and observables generated from `self.run` call."""
+        samples_history = data[0]
+        actions_dict = data[1]
+        plaqs_dict = data[2]
+        charges_dict = data[3]
+        tun_events_dict = data[4]
+        eval_strings = data[5]
+
+        files = self._get_run_files(*_args)
+
+        eval_file = files[0]
+        samples_file = files[1]
+        actions_file = files[2]
+        plaqs_file = files[3]
+        charges_file = files[4]
+        tun_events_file = files[5]
+
+        _ = [write(s, eval_file, 'a') for s in eval_strings]
+
+        #  write(eval_str, eval_file, 'a')
+        #  write('accept_prob:', eval_file, 'a', nl=False)
+        #  write(str(px), eval_file, 'a', nl=True)
+        #  write('top. charges:', eval_file, 'a', nl=False)
+        #  write(str(charges_np), eval_file, 'a', nl=True)
+        #  write('', eval_file, 'a')
+
+        def save_data(data, out_file, name=None):
+            out_dir = os.path.join(*out_file.split('/')[:-1])
+            check_else_make_dir(out_dir)
+            try:
+                log(f"Saving {str(name)} to {out_file}.")
+                with open(out_file, 'wb') as f:
+                    pickle.dump(data, f)
+            except OSError:
+                log(f'INFO: Unable to save using `pickle.dump`, '
+                    f'using `np.save` instead.')
+                if isinstance(data, list):
+                    data = np.array(data)
+
+                out_file = out_file[:-4] + '.npy'
+                log(f"Saving {str(name)} to {out_file}.")
+                np.save(out_file, data)
+
+        save_data(samples_history, samples_file, name='samples_history')
+        save_data(actions_dict, actions_file, name='actions_dict')
+        save_data(plaqs_dict, plaqs_file, name='plaqs_dict')
+        save_data(charges_dict, charges_file, name='charges_dict')
+        save_data(tun_events_dict, tun_events_file, name='tunneling_events')
+
+    def _get_run_files(self, run_steps, current_step=None, beta=None):
+        """Create dir and files for storing observables from `self.run`."""
+        observables_dir = os.path.join(self.eval_dir, 'observables')
+        check_else_make_dir(observables_dir)
+
+        if current_step is None:                     # running AFTER training
+            obs_dir = os.path.join(observables_dir,
+                                   f'steps_{run_steps:g}_beta_{beta}')
+            check_else_make_dir(obs_dir)
+
+            txt_file = f'eval_info_steps_{run_steps:g}_beta_{beta}.txt'
+            pkl_file = f'samples_history_steps_{run_steps:g}_beta_{beta}.pkl'
+            actions_file = f'actions_dict_steps_{run_steps:g}_beta_{beta}.pkl'
+            plaqs_file = f'plaqs_dict_steps_{run_steps:g}_beta_{beta}.pkl'
+            charges_file = f'charges_dict_steps_{run_steps:g}_beta_{beta}.pkl'
+            tun_events_file = f'tunn_events_dict_{run_steps:g}_beta_{beta}.pkl'
+
+            eval_file = os.path.join(self.eval_dir, txt_file)
+            samples_file = os.path.join(self.samples_dir, pkl_file)
+            actions_file = os.path.join(obs_dir, actions_file)
+            plaqs_file = os.path.join(obs_dir, plaqs_file)
+            charges_file = os.path.join(obs_dir, charges_file)
+            tun_events_file = os.path.join(obs_dir, tun_events_file)
+
+        else:                                        # running DURING training
+            obs_dir = os.path.join(observables_dir, 'training')
+            check_else_make_dir(obs_dir)
+            obs_dir = os.path.join(obs_dir,
+                                   f'{current_step:g}_TRAIN_'
+                                   f'steps_{run_steps:g}_beta_{beta}')
+
+            txt_file = (f'eval_info_{current_step:g}_TRAIN_'
+                        f'steps_{run_steps:g}_beta_{beta}.txt')
+            pkl_file = (f'samples_history_{current_step}_TRAIN_'
+                        f'steps_{run_steps:g}_beta_{beta}.pkl')
+
+            eval_file = os.path.join(self.train_eval_dir, txt_file)
+            samples_file = os.path.join(self.train_samples_dir, pkl_file)
+
+            actions_file = f'actions_dict_steps_{run_steps:g}_beta_{beta}.pkl'
+            plaqs_file = f'plaqs_dict_steps_{run_steps:g}_beta_{beta}.pkl'
+            charges_file = f'charges_dict_steps_{run_steps:g}_beta_{beta}.pkl'
+            tun_events_file = f'tunn_events_dict_{run_steps:g}_beta_{beta}.pkl'
+
+            actions_file = os.path.join(obs_dir, actions_file)
+            plaqs_file = os.path.join(obs_dir, plaqs_file)
+            charges_file = os.path.join(obs_dir, charges_file)
+            tun_events_file = os.path.join(obs_dir, tun_events_file)
+
+        files = (eval_file, samples_file, actions_file, plaqs_file,
+                 charges_file, tun_events_file)
+
+        return files
 
 
 # pylint: disable=too-many-statements
@@ -1162,7 +1392,8 @@ def main(flags):
 
         pdb.set_trace()
 
-###############################################################################
+
+# =============================================================================
 #  * NOTE:
 #      - if action == 'store_true':
 #          The argument is FALSE by default. Passing this flag will cause the
@@ -1170,13 +1401,13 @@ def main(flags):
 #      - if action == 'store_false':
 #          The argument is TRUE by default. Passing this flag will cause the
 #          argument to be ''stored false''.
-###############################################################################
+# =============================================================================
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description=('L2HMC model using U(1) lattice gauge theory for target '
                      'distribution.')
     )
-########################### Lattice parameters ###############################
+# ========================= Lattice parameters ===============================
     parser.add_argument("-s", "--space_size", type=int,
                         default=8, required=False, dest="space_size",
                         help="Spatial extent of lattice. (Default: 8)")
@@ -1194,7 +1425,7 @@ if __name__ == '__main__':
                         help="Dimensionality of lattice (Default: 2)")
 
     parser.add_argument("-N", "--num_samples", type=int,
-                        default=2, required=False, dest="num_samples",
+                        default=10, required=False, dest="num_samples",
                         help=("Number of samples (batch size) to use for "
                               "training. (Default: 2)"))
 
@@ -1203,7 +1434,7 @@ if __name__ == '__main__':
                         help=("Start lattice from randomized initial "
                               "configuration. (Default: False)"))
 
-########################### Leapfrog parameters ##############################
+# ========================= Leapfrog parameters ==============================
 
     parser.add_argument("-n", "--num_steps", type=int,
                         default=5, required=False, dest="num_steps",
@@ -1220,7 +1451,7 @@ if __name__ == '__main__':
                         help=("Scaling factor to be used in loss function. "
                               "(lambda in Eq. 7 of paper). (Default: 0.1)"))
 
-########################### Learning rate parameters ##########################
+# ========================= Learning rate parameters ==========================
 
     parser.add_argument("--learning_rate_init", type=float, default=1e-3,
                         required=False, dest="learning_rate_init",
@@ -1237,7 +1468,7 @@ if __name__ == '__main__':
                         help=("Learning rate decay rate to be used during "
                               "training. (Default: 0.96)"))
 
-########################### Annealing rate parameters ########################
+# ========================= Annealing rate parameters ========================
 
     parser.add_argument("--annealing", action="store_true",
                         required=False, dest="annealing",
@@ -1245,18 +1476,18 @@ if __name__ == '__main__':
                               "to perform simulated annealing during "
                               "training. (Default: False)"))
 
-    parser.add_argument("--annealing_steps", type=float, default=200,
-                        required=False, dest="annealing_steps",
-                        help=("Number of steps after which to anneal beta."))
-
-    parser.add_argument("--annealing_factor", type=float, default=0.97,
-                        required=False, dest="annealing_factor",
-                        help=("Factor by which to anneal beta."))
-
-    parser.add_argument("-b", "--beta", type=float,
-                        required=False, dest="beta",
-                        help=("Beta (inverse coupling constant) used in "
-                              "gauge model. (Default: 8.)"))
+    #  parser.add_argument("--annealing_steps", type=float, default=200,
+    #                      required=False, dest="annealing_steps",
+    #                      help=("Number of steps after which to anneal beta."))
+    #
+    #  parser.add_argument("--annealing_factor", type=float, default=0.97,
+    #                      required=False, dest="annealing_factor",
+    #                      help=("Factor by which to anneal beta."))
+    #
+    #  parser.add_argument("-b", "--beta", type=float,
+    #                      required=False, dest="beta",
+    #                      help=("Beta (inverse coupling constant) used in "
+    #                            "gauge model. (Default: 8.)"))
 
     parser.add_argument("--beta_init", type=float, default=1.,
                         required=False, dest="beta_init",
@@ -1270,7 +1501,7 @@ if __name__ == '__main__':
                               "constant) used in gauge model when annealing. "
                               "(Default: 8.)"))
 
-########################### Training parameters ##############################
+# ========================== Training parameters ==============================
 
     parser.add_argument("--train_steps", type=int, default=1000,
                         required=False, dest="train_steps",
@@ -1294,20 +1525,20 @@ if __name__ == '__main__':
                         help=("Number of steps after which to write logs for "
                               "tensorboard. (Default: 50)"))
 
-    parser.add_argument("--training_samples_steps", type=int, default=500,
+    parser.add_argument("--training_samples_steps", type=int, default=1000,
                         required=False, dest="training_samples_steps",
                         help=("Number of intermittent steps after which "
                               "the sampler is evaluated at `beta_final`. "
                               "This allows us to monitor the performance of "
                               "the sampler during training. (Default: 500)"))
 
-    parser.add_argument("--training_samples_length", type=int, default=100,
+    parser.add_argument("--training_samples_length", type=int, default=500,
                         required=False, dest="training_samples_length",
                         help=("Number of steps to run sampler for when "
                               "evaluating the sampler during training. "
                               "(Default: 100)"))
 
-########################### Model parameters ################################
+# ========================== Model parameters ================================
 
     parser.add_argument('--network_arch', type=str, default='conv3D',
                         required=False, dest='network_arch',

@@ -264,8 +264,8 @@ def annealing_schedule_plot(**kwargs):
     _ = ax.set_xlabel('Training step')
     _ = ax.set_ylabel('Temperature')
     _ = ax.legend(loc='best')
-    print(f"Saving figure to: {figs_dir}annealing_schedule.pdf")
+    print(f"Saving figure to: {figs_dir}annealing_schedule.png")
 
-    plt.savefig(figs_dir + 'annealing_schedule.pdf',
+    plt.savefig(figs_dir + 'annealing_schedule.png',
                 dpi=400, bbox_inches='tight')
     return fig, ax

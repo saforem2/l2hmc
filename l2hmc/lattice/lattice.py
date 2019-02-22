@@ -277,15 +277,15 @@ class GaugeLattice(object):
     def get_energy_function(self, samples=None):
         """Returns function object used for calculating the energy (action)."""
         with tf.name_scope('lattice_energy_fn'):
-            if samples is None:
-                def fn(links):
-                    return self._total_action(links)
-            else:
-                def fn(samples):
-                    return self.total_action(samples)
+            #  if samples is None:
+            #      def fn(links):
+            #          return self._total_action(links)
+            #  else:
+            def fn(samples):
+                return self.total_action(samples)
         return fn
 
-    def _calc_plaq_observables(self, links):
+    def calc_plaq_observables(self, samples):
         """Computes plaquette observables for an individual lattice of links.
 
         Args:
@@ -297,44 +297,47 @@ class GaugeLattice(object):
                 plaquette).
             topological_charge: Topological charge of `links`.
         """
-        #  if links.shape != self.links.shape:
-        #      links = tf.reshape(links, shape=self.links.shape)
-        plaq_sums = np.array(links[:, :, 0]
-                             - links[:, :, 1]
-                             - np.roll(links[:, :, 0], shift=-1, axis=1)
-                             + np.roll(links[:, :, 1], shift=-1, axis=0))
-        #  p = [tuple(i) for i in list(self.plaquettes_dict.values())]
-        #  plaq_sums = np.array(
-        #      [links[i[0]] + links[i[1]] - links[i[2]] - links[i[3]] for i in p]
-        #  )
-        local_actions = np.cos(plaq_sums)
+        if samples.shape != self.samples.shape:
+            samples = tf.reshape(samples, shape=self.samples.shape)
 
-        total_action = np.sum(1. - local_actions)
-        avg_plaq = np.sum(local_actions) / self.num_plaquettes
-        topological_charge = np.sum(project_angle(plaq_sums)) / (2 * np.pi)
+        plaq_sums = (samples[:, :, :, 0]
+                     - samples[:, :, :, 1]
+                     - tf.roll(samples[:, :, :, 0], shift=-1, axis=2)
+                     + tf.roll(samples[:, :, :, 1], shift=-1, axis=1))
 
-        return [total_action, avg_plaq, int(topological_charge)]
+        local_actions = tf.cos(plaq_sums)
 
-    def calc_plaq_observables(self, samples):
-        """Calculate plaquette observables for each sample in `samples.`
+        total_action = tf.reduce_sum(1. - local_actions, axis=(1, 2))
+        avg_plaq = tf.reduce_sum(local_actions, (1, 2)) / self.num_plaquettes
+        topological_charge = tf.floor(
+            0.1 + tf.reduce_sum(project_angle(plaq_sums), (1, 2)) / (2 * np.pi)
+        )
 
-        Args:
-            samples: Array (a `batch`) of samples of link configurations.
-            beta: Inverse coupling constant.
-        """
-        if tf.executing_eagerly():
-            return np.array([
-                self._calc_plaq_observables(sample) for sample in samples
-            ]).reshape((-1, 3)).T
+        return total_action, avg_plaq, topological_charge
 
-        plaq_observables = []
-        for idx in range(samples.shape[0]):
-            observables = self._calc_plaq_observables(samples[idx])
-            plaq_observables.extend(observables)
+    #  def calc_plaq_observables(self, samples):
+    #      """Calculate plaquette observables for each sample in `samples.`
+    #
+    #      Args:
+    #          samples: Array (a `batch`) of samples of link configurations.
+    #          beta: Inverse coupling constant.
+    #      """
+    #      #  if samples.shape != self.samples.shape:
+    #      #      samples = np.reshape(samples, self.samples.shape)
+    #      if tf.executing_eagerly():
+    #          return np.array([
+    #              self._calc_plaq_observables(sample) for sample in samples
+    #          ]).reshape((-1, 3)).T
+    #
+    #      plaq_observables = []
+    #      for idx in range(samples.shape[0]):
+    #          observables = self._calc_plaq_observables(samples[idx])
+    #          plaq_observables.extend(observables)
+    #
+    #      #  np.array(plaq_observables).reshape((-1, 3)).T
+    #      return tf.transpose(tf.reshape(plaq_observables, shape=(-1, 3)))
 
-        return np.array(plaq_observables).reshape((-1, 3)).T
-
-    def _total_action(self, links):
+    def total_action(self, samples):
         """Computes the total action of an individual lattice by summing the
         internal energy of each plaquette over all plaquettes.
 
@@ -348,51 +351,58 @@ class GaugeLattice(object):
                 Sp = 1 - cos(Qp), where Qp is the plaquette operator defined as
                 the sum of the angles (phases) around an elementary plaquette.
         """
-        with tf.name_scope('_total_action'):
-            total_action = tf.reduce_sum(
-                1. - tf.cos(links[:, :, 0]
-                            - links[:, :, 1]
-                            - tf.roll(links[:, :, 0], shift=-1, axis=1)
-                            + tf.roll(links[:, :, 1], shift=-1, axis=0))
-            )
-            #  total_action = np.sum([
-            #      1. - tf.cos(
-            #          links[v[0]] + links[v[1]] - links[v[2]] - links[v[3]]
-            #      ) for v in list(self.plaquettes_dict.values())
-            #  ])
+        if samples.shape != self.samples.shape:
+            samples = tf.reshape(samples, shape=self.samples.shape)
+
+        total_action = tf.reduce_sum(
+            (1. - tf.cos(samples[:, :, :, 0] - samples[:, :, :, 1]
+                         - tf.roll(samples[:, :, :, 0], shift=-1, axis=2)
+                         + tf.roll(samples[:, :, :, 1], shift=-1, axis=1))),
+            axis=(1, 2),
+            name='total_action'
+        )
 
         return total_action
 
-    def total_action(self, samples):
-        """Return the total action (sum over all plaquettes) for each sample in
-        samples, at inverse coupling strength `self.beta`. 
-
-        Args:
-            samples (array-like):
-                Array of `links` arrays, each one representing the links of
-                an individual lattice.  NOTE: If samples is None, only a
-                single `GaugeLattice` was instantiated during the __init__
-                method, so this will return the total action of that single
-                lattice.
-        Returns:
-            _ (float or list of floats): 
-                If samples is None, returns action of instantiated lattice
-                as a float. Otherwise, returns list containing the action
-                of each sample in samples.
-        """
-        if samples.shape != self.samples.shape:
-            samples = tf.reshape(samples, self.samples.shape)
-
-        if tf.executing_eagerly():
-            return np.array([self._total_action(sample) for sample in samples],
-                            dtype=np.float32)
-
-        with tf.name_scope('total_action'):
-            total_actions = []
-            for idx in range(samples.shape[0]):
-                total_actions.append(self._total_action(samples[idx]))
-
-        return total_actions
+    #  def _total_action_old(self, links):
+    #      total_action = np.sum([
+    #          1. - tf.cos(
+    #              links[v[0]] + links[v[1]] - links[v[2]] - links[v[3]]
+    #          ) for v in list(self.plaquettes_dict.values())
+    #      ])
+    #
+    #      return total_action
+    #
+    #  def total_action_old(self, samples):
+    #      """Return the total action (sum over all plaquettes) for each sample in
+    #      samples, at inverse coupling strength `self.beta`.
+    #
+    #      Args:
+    #          samples (array-like):
+    #              Array of `links` arrays, each one representing the links of
+    #              an individual lattice.  NOTE: If samples is None, only a
+    #              single `GaugeLattice` was instantiated during the __init__
+    #              method, so this will return the total action of that single
+    #              lattice.
+    #      Returns:
+    #          _ (float or list of floats):
+    #              If samples is None, returns action of instantiated lattice
+    #              as a float. Otherwise, returns list containing the action
+    #              of each sample in samples.
+    #      """
+    #      if samples.shape != self.samples.shape:
+    #          samples = tf.reshape(samples, self.samples.shape)
+    #
+    #      if tf.executing_eagerly():
+    #          return np.array([self._total_action_old(sample) for sample in samples],
+    #                          dtype=np.float32)
+    #
+    #      with tf.name_scope('total_action'):
+    #          total_actions = []
+    #          for idx in range(samples.shape[0]):
+    #              total_actions.append(self._total_action_old(samples[idx]))
+    #
+    #      return total_actions
 
     def _action_operator_SUN(self, plaq):
         """Operator used in calculating the action for SU(N) gauge model."""
