@@ -18,20 +18,20 @@ import pandas as pd
 import tensorflow as tf
 import matplotlib.pyplot as plt
 
-
 try:
     import horovod.tensorflow as hvd
     HAS_HOROVOD = True
 except ImportError:
     HAS_HOROVOD = False
 
+from astropy.stats import jackknife_resampling, jackknife_stats
+from scipy.optimize import curve_fit
+from pandas.plotting import autocorrelation_plot
+from scipy.stats import sem
 from .autocorr import (acl_spectrum, autocorr, autocorr_fast, autocorr_func_1d,
                        AutocorrError, calc_ESS, integrated_time)
 from .plot_helper import plot_multiple_lines
 from .gauge_model_helpers import log, write
-from astropy.stats import jackknife_resampling, jackknife_stats
-from scipy.optimize import curve_fit
-from pandas.plotting import autocorrelation_plot
 
 COLORS = ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9']
 MARKERS = ['o', 's', 'x', 'v', 'h', '^', 'p', '<', 'd', '>', 'o']
@@ -75,7 +75,7 @@ def jackknife(x, fn):
     """Jackknife estimate of the estimator fn."""
     n = len(x)
     idx = np.arange(n)
-    return np.sum(fn(x[idx!=i]) for i in range(n)) / float(n)
+    return np.sum(fn(x[idx != i]) for i in range(n)) / float(n)
 
 
 def jackknife_var(x, fn):
@@ -84,7 +84,7 @@ def jackknife_var(x, fn):
     idx = np.arange(n)
     j_est = jackknife(x, fn)
     j_var = (n - 1) / (n + 0.) * np.sum(
-        (fn(x[idx!=i]) - j_est)**2 for i in range(n)
+        (fn(x[idx != i]) - j_est)**2 for i in range(n)
     )
     return j_var
 
@@ -125,7 +125,11 @@ def calc_plaquette_stats(plaquettes, beta):
     stderr_arr = []
     conf_interval_arr = []
 
-    plaq_mean_arr = list(np.mean(plaquettes, axis=0))
+    #  plaq_mean_arr = list(np.mean(plaquettes, axis=0))
+
+    #  averages = np.mean(plaquettes)
+    #  stderr = sem(plaquettes)
+    #  stats = (averages, stderr)
 
     for idx, p in enumerate(plaquettes.T):
         estimate, bias, stderr, conf_interval = jackknife_stats(p,
@@ -779,7 +783,7 @@ def plot_top_charges(log_dir, charges_dict, training=False):
             #  check_else_make_dir(out_dir)
             out_file = os.path.join(
                 figs_dir_dict[key],
-                f'topological_charge_history_sample_{idx}.pdf'
+                f'topological_charge_history_sample_{idx}.png'
             )
             log(f"Saving figure to {out_file}.")
             if not os.path.isfile(out_file):
@@ -825,7 +829,7 @@ def plot_top_charges_counts(log_dir, charges_dict, training=False):
             #  check_else_make_dir(out_dir)
             out_file = os.path.join(
                 figs_dir_dict[key],
-                f'topological_charge_counts_sample_{idx}.pdf'
+                f'topological_charge_counts_sample_{idx}.png'
             )
             log(f"Saving figure to {out_file}.")
             if not os.path.isfile(out_file):
@@ -958,11 +962,11 @@ def make_multiple_lines_plots(beta, observables, **kwargs):
 
     else:
         charges_file = os.path.join(figs_dir,
-                                    'topological_charge_vs_step.pdf')
+                                    'topological_charge_vs_step.png')
         plaquettes_file = os.path.join(figs_dir,
-                                       'average_plaquette_vs_step.pdf')
+                                       'average_plaquette_vs_step.png')
         actions_file = os.path.join(figs_dir,
-                                    'average_action_vs_step.pdf')
+                                    'average_action_vs_step.png')
 
     ###########################################################################
     # Topological charge
@@ -1155,7 +1159,7 @@ def make_samples_acl_spectrum_plot(samples, out_file=None):
     ax.set_ylabel('Autocorrelation (avg. over links)', fontsize=14)
 
     if out_file:
-        #  out_file = os.path.join(figs_dir, 'links_autocorrelation_vs_step.pdf')
+        #  out_file = os.path.join(figs_dir, 'links_autocorrelation_vs_step.png')
         log(f"Saving figure to: {out_file}.")
         plt.savefig(out_file, dpi=400, bbox_inches='tight')
 
