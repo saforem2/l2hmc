@@ -740,6 +740,11 @@ class GaugeModel(object):
         log(sep_str)
         #  log(80 * '-' + '\n', nl=False)
 
+        self.sess.run(tf.global_variables_initializer())
+
+        if self.using_hvd:
+            self.sess.run(hvd.broadcast_global_variables(0))
+
         if self.condition1 or self.condition2:
             write(sep_str, self.files['run_info_file'], 'a')
             write(s, self.files['run_info_file'], 'a')
@@ -763,11 +768,6 @@ class GaugeModel(object):
         """Set up training for the model."""
         if self.condition1 or self.condition2:
             self.saver = tf.train.Saver(max_to_keep=3)
-
-        self.sess.run(tf.global_variables_initializer())
-
-        if self.using_hvd:
-            self.sess.run(hvd.broadcast_global_variables(0))
 
         if self.condition1 or self.condition2:
             ckpt = tf.train.get_checkpoint_state(self.log_dir)
@@ -880,12 +880,6 @@ class GaugeModel(object):
 
         self.data['learning_rate'] = self.sess.run(self.learning_rate)
         lr_np = self.data['learning_rate']
-
-        training_samples_dir = os.path.join(self.log_dir, 'training_samples')
-        check_else_make_dir(training_samples_dir)
-
-        #  annealing_sched = [self.update_beta(i) for i in range(train_steps)]
-
 
         try:
             log(data_header)
