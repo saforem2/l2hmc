@@ -22,6 +22,10 @@ from network.generic_net import GenericNet
 from lattice.lattice import GaugeLattice
 
 
+# pylint:disable=invalid-name
+def _exp(x, name=None):
+    return tf.check_numerics(tf.exp(x), f'{name} is NaN')
+
 
 class GaugeDynamics(tf.keras.Model):
     """Dynamics engine of naive L2HMC sampler."""
@@ -69,7 +73,7 @@ class GaugeDynamics(tf.keras.Model):
             self.alpha = tf.log(tf.constant(kwargs.get('eps', 0.1),
                                             dtype=tf.float32))
 
-        self.eps = tf.exp(self.alpha, name='eps')
+        self.eps = _exp(self.alpha, name='eps')
 
         #  with tf.name_scope('eps'):
         #      self.eps = tf.Variable(
@@ -384,9 +388,9 @@ class GaugeDynamics(tf.keras.Model):
                 transformed *= self.eps
             with tf.name_scope('momentum'):
                 momentum = (
-                    momentum * tf.exp(scale, name='vf_scale')
+                    momentum * _exp(scale, name='vf_scale')
                     - 0.5 * self.eps * (
-                        tf.exp(transformed, name='vf_transformed')
+                        _exp(transformed, name='vf_transformed')
                         * grad - translation
                     )
                 )
@@ -411,8 +415,10 @@ class GaugeDynamics(tf.keras.Model):
             with tf.name_scope('position'):
                 position = (
                     mask * position + mask_inv * (
-                        position * tf.exp(scale) + self.eps * (
-                            tf.exp(transformed) * momentum + translation
+                        position * _exp(scale, 'xf_scale')
+                        + self.eps * (
+                            _exp(transformed, 'xf_transformed')
+                            * momentum + translation
                         )
                     )
                 )
@@ -439,9 +445,10 @@ class GaugeDynamics(tf.keras.Model):
                 transformed *= self.eps
             with tf.name_scope('momentum'):
                 momentum = (
-                    tf.exp(scale) * (
+                    _exp(scale, 'vb_scale') * (
                         momentum + 0.5 * self.eps * (
-                            tf.exp(transformed) * grad - translation
+                            _exp(transformed, 'vb_transformed')
+                            * grad - translation
                         )
                     )
                 )
@@ -466,9 +473,10 @@ class GaugeDynamics(tf.keras.Model):
 
             with tf.name_scope('position'):
                 position = (
-                    mask * position + mask_inv * tf.exp(scale) * (
+                    mask * position + mask_inv * _exp(scale, 'xb_scale') * (
                         position - self.eps * (
-                            tf.exp(transformed) * momentum + translation
+                            _exp(transformed, 'xb_transformed')
+                            * momentum + translation
                         )
                     )
                 )
@@ -488,9 +496,9 @@ class GaugeDynamics(tf.keras.Model):
                                              beta)
 
             with tf.name_scope('prob'):
-                prob = tf.exp(tf.minimum(
+                prob = _exp(tf.minimum(
                     (old_hamil - new_hamil + sumlogdet), 0.
-                ))
+                ), 'accept_prob')
 
         # Ensure numerical stability as well as correct gradients
         return tf.where(tf.is_finite(prob), prob, tf.zeros_like(prob))
