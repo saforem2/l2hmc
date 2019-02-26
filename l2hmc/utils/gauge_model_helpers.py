@@ -205,8 +205,8 @@ def write_run_parameters(file_path, parameters):
 
 def data_header():
     """Create formatted (header) string containing labels for printing data."""
-    h_str = ("{:^12s}{:^9s}{:^9s}{:^9s}{:^9s}"
-             "{:^9s}{:^9s}{:^9s}{:^9s}{:^9s}")
+    h_str = ("{:^12s}{:^10s}{:^10s}{:^10s}{:^10s}"
+             "{:^10s}{:^10s}{:^10s}{:^10s}{:^10s}")
     h_strf = h_str.format("STEP", "LOSS", "t/STEP", "ACCEPT %",
                           "EPS", "BETA", "ACTION", "PLAQ", "dQ", "LR")
     dash0 = (len(h_strf) + 1) * '-'
@@ -220,15 +220,15 @@ def format_run_data(data):
     """Create formatted string containing relevant information from `data`."""
     data_str = (
         f"{data['step']:>5g}/{data['train_steps']:<6g} "
-        f"{data['loss']:^8.4g} "
-        f"{data['step_time']:^8.4g} "
-        f"{np.mean(data['accept_prob']):^8.4g} "
-        f"{data['eps']:^8.4g} "
-        f"{data.get('beta', -1.):^8.4g} "
-        f"{data.get('action_avg', 0.):^8.4g} "
-        f"{data.get('plaq_avg', 0.):^8.4g} "
-        f"{data.get('tunneling_events', 0.):^8.4g} "
-        f"{data['learning_rate']:^8.4g}"
+        f"{data['loss']:^9.4g} "
+        f"{data['step_time']:^9.4g} "
+        f"{np.mean(data['accept_prob']):^9.4g} "
+        f"{data['eps']:^9.4g} "
+        f"{data.get('beta', -1.):^9.4g} "
+        f"{data.get('action_avg', 0.):^9.4g} "
+        f"{data.get('plaq_avg', 0.):^9.4g} "
+        f"{data.get('tunneling_events', 0.):^9.4g} "
+        f"{data['learning_rate']:^9.4g}"
     )
 
     return data_str
