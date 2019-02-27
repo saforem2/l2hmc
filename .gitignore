@@ -1,6 +1,7 @@
 *.pyc
 tags
 logs/
+*logs*
 log_mog_tf_extras/*
 MNIST_data/
 gpu*
