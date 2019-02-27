@@ -2,6 +2,7 @@
 tags
 logs/
 *logs*
+*old*
 log_mog_tf_extras/*
 MNIST_data/
 gpu*
