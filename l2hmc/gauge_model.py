@@ -781,19 +781,8 @@ class GaugeModel(object):
 
         if sess is None:
             self.sess = tf.Session(config=self.config)
-            #  self.sess = tf_debug.TensorBoardDebugWrapperSession(
-            #      self.sess, 'localhost:6064',
-            #      send_traceback_and_source_code=False
-            #  )
-            #  self.sess = tf_debug.LocalCLIDebugWrapperSession(self.sess)
         else:
             self.sess = sess
-
-        # if running generic HMC, all we need is the sampler
-        if self.hmc:
-            self._create_sampler()
-            self.sess.run(tf.global_variables_initializer())
-            return
 
         with tf.name_scope('global_step'):
             self.global_step = tf.train.get_or_create_global_step()
@@ -828,6 +817,12 @@ class GaugeModel(object):
                 self.plaqs_op = self.calc_avg_plaqs(self.x)
             with tf.name_scope('top_charges'):
                 self.charges_op = self.calc_top_charges(self.x)
+
+        # if running generic HMC, all we need is the sampler
+        if self.hmc:
+            self._create_sampler()
+            self.sess.run(tf.global_variables_initializer())
+            return
 
         with tf.name_scope('loss'):
             output = self._calc_loss_and_grads(x=self.x, beta=self.beta)
@@ -1333,12 +1328,13 @@ class GaugeModel(object):
         #  tun_events_keys = np.array(list(self.tunn_events_dict.keys()))
         tun_events_vals = np.array(list(self.tunn_events_dict.values()))
         _, ax = plt.subplots()
-        ax.plot(tun_events_vals, marker='.', fillstyle='none', ls='')
+        ax.plot(tun_events_vals, marker='.', fillstyle='none', ls='',
+                label=f'total across {self.num_samples} samples')
         ax.set_xlabel('Training step', fontsize=14)
         ax.set_ylabel('Number of events', fontsize=14)
-        title_str = (f'Number of tunneling events vs. '
-                     f'training step for {self.num_samples} samples')
-        ax.set_title(title_str, fontsize=16)
+        #  title_str = (f'Number of tunneling events vs. '
+        #               f'training step for {self.num_samples} samples')
+        #  ax.set_title(title_str, fontsize=16)
         out_file = os.path.join(self.figs_dir,
                                 'tunneling_events_vs_training_step.png')
         print(f"Saving figure to: {out_file}.")
@@ -1415,10 +1411,10 @@ class GaugeModel(object):
             figs_dir = os.path.join(self.figs_dir, 'training')
             check_else_make_dir(figs_dir)
             out_dirname = f'{current_step}_TRAIN_{run_steps}_steps_beta_{beta}'
-            title_str_key = 'training'
+            title_str_key = 'train'
         else:                         # i.e. sampler evaluated AFTER training
             figs_dir = self.figs_dir
-            title_str_key = 'evaluation'
+            title_str_key = 'eval'
             out_dirname = f'{run_steps}_steps_beta_{beta}'
 
         out_dir = os.path.join(figs_dir, out_dirname)
@@ -1449,7 +1445,8 @@ class GaugeModel(object):
         out_dir, key = self._get_plot_dir(charges_arr, beta, current_step)
 
         title_str = (r"$\beta = $"
-                     f"{beta}, {num_steps} {key} steps")
+                     f"{beta}, {num_steps} {key} steps, "
+                     f"{self.num_samples} samples")
         actions_plt_file = os.path.join(out_dir, 'total_actions_vs_step.png')
         plaqs_plt_file = os.path.join(out_dir, 'avg_plaquettes_vs_step.png')
         charges_plt_file = os.path.join(out_dir, 'top_charges_vs_step.png')
@@ -2020,17 +2017,18 @@ def main(FLAGS):
 
     log(f"Training began at: {time.ctime()}")
 
-    if FLAGS.profiler:
-        model.train_profiler(FLAGS.train_steps, pre_train=True, trace=True)
-    else:
-        model.train(FLAGS.train_steps, pre_train=True, trace=False)
+    if not FLAGS.hmc:
+        if FLAGS.profiler:
+            model.train_profiler(FLAGS.train_steps, pre_train=True, trace=True)
+        else:
+            model.train(FLAGS.train_steps, pre_train=True, trace=False)
 
     try:
         #  run_steps_grid = [100, 500, 1000, 2500, 5000, 10000]
         run_steps_grid = [20000, 50000]
         betas = [model.beta_final - 1, model.beta_final]
-        for beta in betas:
-            for steps in run_steps_grid:
+        for steps in run_steps_grid:
+            for beta in betas:
                 model.run(steps, beta=beta)
 
     except (KeyboardInterrupt, SystemExit):
@@ -2294,7 +2292,8 @@ if __name__ == '__main__':
                               "tf.ConfigProto.intra_op_parallelism_threads"))
 
     if sys.argv[1].startswith('@'):
-        args = parser.parse_args( shlex.split(open(sys.argv[1][1:]).read()) )
+        args = parser.parse_args(shlex.split(open(sys.argv[1][1:]).read(),
+                                             comments=True))
     else:
         args = parser.parse_args()
 
