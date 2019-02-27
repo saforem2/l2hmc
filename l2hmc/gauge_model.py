@@ -44,7 +44,8 @@ except ImportError:
     HAS_MATPLOTLIB = False
 
 
-import utils.gauge_model_helpers as helpers
+#  import utils.gauge_model_helpers as helpers
+import utils.file_io as io
 
 from tensorflow.python.client import timeline
 from scipy.stats import sem
@@ -117,46 +118,6 @@ PARAMS = {
     'clip_grads': False,
     'clip_value': 10.,
 }
-
-
-def write(s, f, mode='a', nl=True):
-    """Write string `s` to file `f` if and only if hvd.rank() == 0."""
-    try:
-        if HAS_HOROVOD and hvd.rank() != 0:
-            return
-        with open(f, mode) as ff:
-            ff.write(s + '\n' if nl else '')
-    except NameError:
-        with open(f, mode) as ff:
-            ff.write(s + '\n' if nl else '')
-
-
-def log(s, nl=True):
-    """Print string `s` to stdout if and only if hvd.rank() == 0."""
-    try:
-        if HAS_HOROVOD and hvd.rank() != 0:
-            return
-        print(s, end='\n' if nl else '')
-    except NameError:
-        print(s, end='\n' if nl else '')
-
-
-def check_else_make_dir(d):
-    """If directory `d` doesn't exist, it is created."""
-    if not os.path.isdir(d):
-        log(f"Creating directory: {d}")
-        #  print(f"Creating directory: {d}.")
-        os.makedirs(d)
-
-
-def save_params_to_pkl_file(params, out_dir):
-    """Save `params` dictionary to `parameters.pkl` in `out_dir.`"""
-    check_else_make_dir(out_dir)
-    params_file = os.path.join(out_dir, 'parameters.pkl')
-    #  print(f"Saving params to: {params_file}.")
-    log(f"Saving params to: {params_file}.")
-    with open(params_file, 'wb') as f:
-        pickle.dump(params, f)
 
 
 def tf_accept(x, _x, px):
@@ -283,20 +244,6 @@ class GaugeModel(object):
             'lr': self.lr_init
         }
 
-        #  self.data = {
-        #      'step': 1,
-        #      'loss': 0.,
-        #      'step_time': 0.,
-        #      'accept_prob': 0.,
-        #      'samples': [],
-        #      'eps': params.get('eps', 0.),
-        #      'beta_init': params.get('beta_init', 2.),
-        #      'beta': params.get('beta_init', 2.),
-        #      'train_steps': params.get('train_steps', 20000),
-        #      'learning_rate': params.get('lr_init', 1e-3),
-        #      'tunneling_events': 0.,
-        #  }
-
         self.condition1 = not self.using_hvd  # condition1: NOT using horovod
         self.condition2 = False               # condition2: Initially False
         # If we're using horovod, we have     --------------------------------
@@ -314,9 +261,9 @@ class GaugeModel(object):
 
         if self.condition1 or self.condition2:  # DEFINED IN: _create_attrs
             if log_dir is None:
-                dirs = helpers.create_log_dir('gauge_logs_graph')
+                dirs = io.create_log_dir('gauge_logs_graph')
             else:
-                dirs = helpers.check_log_dir(log_dir)
+                dirs = io.check_log_dir(log_dir)
 
             self.log_dir, self.info_dir, self.figs_dir = dirs
 
@@ -329,7 +276,7 @@ class GaugeModel(object):
         self.ckpt_file = os.path.join(self.log_dir, 'gauge_model.ckpt')
 
         def make_dirs(dirs):
-            _ = [check_else_make_dir(d) for d in dirs]
+            _ = [io.check_else_make_dir(d) for d in dirs]
 
         make_dirs([self.eval_dir, self.samples_dir,
                    self.train_eval_dir, self.train_samples_dir,
@@ -419,7 +366,8 @@ class GaugeModel(object):
                 return -1
 
         if self.hmc:
-            log(f"ERROR: self.hmc: {self.hmc}. No model to restore. Exiting.")
+            io.log(f"ERROR: self.hmc: {self.hmc}. "
+                   "No model to restore. Exiting.")
             sys.exit(1)
 
         assert os.path.isdir(log_dir), (f"log_dir: {log_dir} does not exist.")
@@ -465,10 +413,10 @@ class GaugeModel(object):
 
         ckpt = tf.train.get_checkpoint_state(self.log_dir)
         if ckpt and ckpt.model_checkpoint_path:
-            log('Restoring previous model from: '
-                f'{ckpt.model_checkpoint_path}')
+            io.log('Restoring previous model from: '
+                   f'{ckpt.model_checkpoint_path}')
             self.saver.restore(self.sess, ckpt.model_checkpoint_path)
-            log('Model restored.\n', nl=False)
+            io.log('Model restored.\n', nl=False)
             self.global_step = tf.train.get_global_step()
             initial_step = self.sess.run(self.global_step)
             return initial_step
@@ -504,7 +452,7 @@ class GaugeModel(object):
         #      pickle.dump(self.tunn_events_dict, f)
         if not tf.executing_eagerly():
             #  ckpt_prefix = os.path.join(self.log_dir, 'ckpt')
-            log(f'Saving checkpoint to: {self.ckpt_file}')
+            io.log(f'Saving checkpoint to: {self.ckpt_file}')
             self.saver.save(self.sess,
                             self.ckpt_file,
                             global_step=self._current_state['step'])
@@ -513,7 +461,7 @@ class GaugeModel(object):
             saved_path = self.checkpoint.save(
                 file_prefix=os.path.join(self.log_dir, 'ckpt')
             )
-            log(f"\n Saved checkpoint to: {saved_path}")
+            io.log(f"\n Saved checkpoint to: {saved_path}")
 
         if not self.hmc:
             if tf.executing_eagerly():
@@ -534,7 +482,7 @@ class GaugeModel(object):
 
         if _print:
             for key, val in self.params.items():
-                log(f'{key}: {val}')
+                io.log(f'{key}: {val}')
 
         s0 = 'Parameters'
         sep_str = 80 * '-'
@@ -542,10 +490,10 @@ class GaugeModel(object):
         for key, val in self.params.items():
             strings.append(f'{key}: {val}')
 
-        write(s0, self.files['parameters_file'], 'w')
-        write(sep_str, self.files['parameters_file'], 'a')
-        _ = [write(s, self.files['parameters_file'], 'a') for s in strings]
-        write(sep_str, self.files['parameters_file'], 'a')
+        io.write(s0, self.files['parameters_file'], 'w')
+        io.write(sep_str, self.files['parameters_file'], 'a')
+        _ = [io.write(s, self.files['parameters_file'], 'a') for s in strings]
+        io.write(sep_str, self.files['parameters_file'], 'a')
 
     def _create_summaries(self):
         """Create summary objects for logging in TensorBoard."""
@@ -682,7 +630,7 @@ class GaugeModel(object):
             x_out: Output samples obtained after Metropolis-Hastings
                 accept/reject step.
         """
-        log("    Creating loss...")
+        io.log("    Creating loss...")
         t0 = time.time()
         eps = 1e-4
         with tf.name_scope('x_update'):
@@ -716,7 +664,7 @@ class GaugeModel(object):
                                   axis=0, name='loss')
 
         t_diff = time.time() - t0
-        log(f"    done. took: {t_diff:4.3g} s.")
+        io.log(f"    done. took: {t_diff:4.3g} s.")
 
         return loss, x_out, px
 
@@ -735,7 +683,7 @@ class GaugeModel(object):
             accept_prob: Acceptance probabilities used in Metropolis-Hastings
                 accept/reject step.
         """
-        log(f"  Creating gradient operations...")
+        io.log(f"  Creating gradient operations...")
         t0 = time.time()
 
         if tf.executing_eagerly():
@@ -749,9 +697,12 @@ class GaugeModel(object):
                 grads = tf.gradients(loss, self.dynamics.trainable_variables)
                 if self.clip_grads:
                     grads, _ = tf.clip_by_global_norm(grads, self.clip_value)
+                    #  grads = tf.check_numerics(
+                    #      grads, 'check_numerics caught bad gradients'
+                    #  )
 
         t_diff = time.time() - t0
-        log(f"  done. took: {t_diff:4.3g} s")
+        io.log(f"  done. took: {t_diff:4.3g} s")
 
         return loss, grads, x_out, accept_prob
 
@@ -771,8 +722,8 @@ class GaugeModel(object):
         """Build graph for TensorFlow."""
         sep_str = 80 * '-'
         s = f"Building graph... (started at: {time.ctime()})"
-        log(sep_str)
-        log(s)
+        io.log(sep_str)
+        io.log(s)
 
         if config is None:
             self.config = tf.ConfigProto()
@@ -835,13 +786,13 @@ class GaugeModel(object):
             )
 
         if self.summaries:
-            log("  Creating summaries...")
+            io.log("  Creating summaries...")
             t0 = time.time()
             self._create_summaries()
             t_diff = time.time() - t0
-            log(f'  done. took: {t_diff:4.3g} s to create.')
-            log(f'done. took: {time.time() - start_time:4.3g} s to create.')
-            log(sep_str)
+            io.log(f'  done. took: {t_diff:4.3g} s to create.')
+            io.log(f'done. took: {time.time() - start_time:4.3g} s to create.')
+            io.log(sep_str)
         else:
             t_diff = 0.
             #  log(80 * '-' + '\n', nl=False)
@@ -852,14 +803,14 @@ class GaugeModel(object):
             self.sess.run(hvd.broadcast_global_variables(0))
 
         if self.condition1 or self.condition2:
-            write(sep_str, self.files['run_info_file'], 'a')
-            write(s, self.files['run_info_file'], 'a')
+            io.write(sep_str, self.files['run_info_file'], 'a')
+            io.write(s, self.files['run_info_file'], 'a')
             dt = time.time() - start_time
             s0 = f'Summaries took: {t_diff:4.3g} s to build.\n'
             s1 = f'Graph took: {dt:4.3g} s to build.\n'
-            write(s0, self.files['run_info_file'], 'a')
-            write(s1, self.files['run_info_file'], 'a')
-            write(sep_str, self.files['run_info_file'], 'a')
+            io.write(s0, self.files['run_info_file'], 'a')
+            io.write(s1, self.files['run_info_file'], 'a')
+            io.write(sep_str, self.files['run_info_file'], 'a')
 
     def update_beta(self, step):
         """Returns new beta to follow annealing schedule."""
@@ -878,10 +829,10 @@ class GaugeModel(object):
         if self.condition1 or self.condition2:
             ckpt = tf.train.get_checkpoint_state(self.log_dir)
             if ckpt and ckpt.model_checkpoint_path:
-                log('Restoring previous model from: '
-                    f'{ckpt.model_checkpoint_path}')
+                io.log('Restoring previous model from: '
+                       f'{ckpt.model_checkpoint_path}')
                 self.saver.restore(self.sess, ckpt.model_checkpoint_path)
-                log('Model restored.\n', nl=False)
+                io.log('Model restored.\n', nl=False)
                 self.global_step = tf.train.get_global_step()
                 #  initial_step = self.sess.run(self.global_step)
 
@@ -912,7 +863,7 @@ class GaugeModel(object):
         # step 10~20) at step 20. The dumped profile can be used for further
         # profiling with command line interface or Web UI.
         profile_dir = os.path.join(self.log_dir, 'profile_info')
-        check_else_make_dir(profile_dir)
+        io.check_else_make_dir(profile_dir)
         with tf.contrib.tfprof.ProfileContext(profile_dir,
                                               trace_steps=range(10, 20),
                                               dump_steps=[20]) as pctx:
@@ -995,8 +946,8 @@ class GaugeModel(object):
                     f"{lr_np:^9.4g}")                    # learning rate
 
         try:
-            log(self.train_header)
-            write(self.train_header, self.files['run_info_file'], 'a')
+            io.log(self.train_header)
+            io.write(self.train_header, self.files['run_info_file'], 'a')
 
             for step in range(initial_step, train_steps):
                 start_step_time = time.time()
@@ -1065,8 +1016,8 @@ class GaugeModel(object):
                                 f"{tunneling_events:^9.4g} "
                                 f"{lr_np:^9.4g}")
 
-                    log(data_str)
-                    write(data_str, self.files['run_info_file'], 'a')
+                    io.log(data_str)
+                    io.write(data_str, self.files['run_info_file'], 'a')
 
                     #  self.data['step'] = step
                     #  self.data['loss'] = loss_np
@@ -1102,13 +1053,13 @@ class GaugeModel(object):
                 if (step + 1) % self.training_samples_steps == 0:
                     if self.condition1 or self.condition2:
                         t0 = time.time()
-                        log(80 * '-')
+                        io.log(80 * '-')
                         self.run(self.training_samples_length,
                                  current_step=step+1,
                                  beta=self.beta_final)
-                        log(f"  done. took: {time.time() - t0}.")
-                        log(80 * '-')
-                        log(self.train_header)
+                        io.log(f"  done. took: {time.time() - t0}.")
+                        io.log(80 * '-')
+                        io.log(self.train_header)
 
                 if step % self.save_steps == 0:
                     if self.condition1 or self.condition2:
@@ -1121,7 +1072,7 @@ class GaugeModel(object):
                         if hvd.rank() != 0:
                             continue
 
-                    log(self.train_header)
+                    io.log(self.train_header)
 
                     if trace:
                         # This saves the timeline to a chrome trace format:
@@ -1134,7 +1085,7 @@ class GaugeModel(object):
                         chrome_tr = fetched_tl.generate_chrome_trace_format()
                         profile_dir = os.path.join(self.log_dir,
                                                    'profile_info')
-                        check_else_make_dir(profile_dir)
+                        io.check_else_make_dir(profile_dir)
                         tl_file = os.path.join(profile_dir,
                                                f'timeline_{step}.json')
                         with open(tl_file, 'w') as f:
@@ -1160,17 +1111,17 @@ class GaugeModel(object):
                     self.writer.flush()
 
             train_time = time.time() - start_time
-            log("Training complete!")
-            log(f"Time to complete training: {train_time:.3g}.")
+            io.log("Training complete!")
+            io.log(f"Time to complete training: {train_time:.3g}.")
             step = self.sess.run(self.global_step)
             self._save_model(samples=samples_np)
             self._plot_tun_events()
 
         except (KeyboardInterrupt, SystemExit):
-            log("\nKeyboardInterrupt detected! \n", nl=False)
-            log("Saving current state and exiting.\n", nl=False)
-            log(data_str)
-            write(data_str, self.files['run_info_file'], 'a')
+            io.log("\nKeyboardInterrupt detected! \n", nl=False)
+            io.log("Saving current state and exiting.\n", nl=False)
+            io.log(data_str)
+            io.write(data_str, self.files['run_info_file'], 'a')
             self._save_model(samples=samples_np)
             self._plot_tun_events()
 
@@ -1215,7 +1166,7 @@ class GaugeModel(object):
                         f'steps_{run_steps}_beta_{beta}.txt')
             eval_file = os.path.join(self.train_eval_dir, txt_file)
 
-        log(f"Running sampler for {run_steps} steps at beta = {beta}...")
+        io.log(f"Running sampler for {run_steps} steps at beta = {beta}...")
 
         header = ("{:^12s}{:^10s}{:^10s}{:^10s}"
                   "{:^10s}{:^10s}{:^10s}{:^10s}{:^10s}")
@@ -1225,8 +1176,8 @@ class GaugeModel(object):
         dash0 = (len(header) + 1) * '='
         dash1 = (len(header) + 1) * '-'
         header_str = dash0 + '\n' + header + '\n' + dash1
-        log(header_str)
-        write(header_str, eval_file, 'a')
+        io.log(header_str)
+        io.write(header_str, eval_file, 'a')
 
         eps = self.sess.run(self.dynamics.eps)
 
@@ -1288,21 +1239,21 @@ class GaugeModel(object):
                             f'{plaq_exact:^9.4g} '
                             f'{int(tunneling_events):^9.4g}')
 
-                log(eval_str)
+                io.log(eval_str)
                 #  log('\n')
                 #  log('top_charges: ', nl=False)
                 #  log(charges_np)
                 #  log('\n')
 
-                write(eval_str, eval_file, 'a')
-                #  write('accept_prob:', eval_file, 'a', nl=False)
-                #  write(str(px), eval_file, 'a', nl=True)
-                write('top. charges:', eval_file, 'a', nl=False)
-                write(str(charges_np), eval_file, 'a', nl=True)
-                write('', eval_file, 'a')
+                io.write(eval_str, eval_file, 'a')
+                #  io.write('accept_prob:', eval_file, 'a', nl=False)
+                #  io.write(str(px), eval_file, 'a', nl=True)
+                io.write('top. charges:', eval_file, 'a', nl=False)
+                io.write(str(charges_np), eval_file, 'a', nl=True)
+                io.write('', eval_file, 'a')
 
             if step % 100 == 0:
-                log(header_str)
+                io.log(header_str)
 
         observables = (actions_dict, plaqs_dict, charges_dict, tun_events_dict)
         stats = self.calc_observables_stats(observables, therm_frac)
@@ -1314,8 +1265,8 @@ class GaugeModel(object):
             self._plot_observables(observables, beta, current_step)
             self._plot_top_charges(charges_arr, beta, current_step)
             self._plot_top_charges_counts(charges_arr, beta, current_step)
-        log(f'\n Time to complete run: {time.time() - start_time} seconds.')
-        log(80*'-' + '\n', nl=False)
+        io.log(f'\n Time to complete run: {time.time() - start_time} seconds.')
+        io.log(80*'-' + '\n', nl=False)
         #  if current_step is None:
         #      self._plot_observables(observables, beta, )
         #  else:
@@ -1409,7 +1360,7 @@ class GaugeModel(object):
 
         if current_step is not None:  # i.e. sampler evaluated DURING training
             figs_dir = os.path.join(self.figs_dir, 'training')
-            check_else_make_dir(figs_dir)
+            io.check_else_make_dir(figs_dir)
             out_dirname = f'{current_step}_TRAIN_{run_steps}_steps_beta_{beta}'
             title_str_key = 'train'
         else:                         # i.e. sampler evaluated AFTER training
@@ -1418,7 +1369,7 @@ class GaugeModel(object):
             out_dirname = f'{run_steps}_steps_beta_{beta}'
 
         out_dir = os.path.join(figs_dir, out_dirname)
-        check_else_make_dir(out_dir)
+        io.check_else_make_dir(out_dir)
 
         return out_dir, title_str_key
 
@@ -1427,7 +1378,7 @@ class GaugeModel(object):
         if not HAS_MATPLOTLIB:
             return -1
 
-        log("Plotting observables...")
+        io.log("Plotting observables...")
         #  samples_history = observables[0]
         actions_dict = observables[0]
         plaqs_dict = observables[1]
@@ -1498,9 +1449,9 @@ class GaugeModel(object):
         ax.set_xlabel('Steps', fontsize=14)
         ax.set_ylabel('Number of tunneling events', fontsize=14)
         ax.set_title(title_str, fontsize=16)
-        log(f"Saving figure to: {tun_events_plt_file}")
+        io.log(f"Saving figure to: {tun_events_plt_file}")
         plt.savefig(tun_events_plt_file, dpi=400, bbox_inches='tight')
-        log('done.')
+        io.log('done.')
 
         return 1
 
@@ -1509,17 +1460,16 @@ class GaugeModel(object):
         if not HAS_MATPLOTLIB:
             return -1
 
-        log("Plotting topological charge vs. step for each sample...")
+        io.log("Plotting topological charge vs. step for each sample...")
 
         out_dir, key = self._get_plot_dir(charges, beta, current_step)
-        check_else_make_dir(out_dir)
+        io.check_else_make_dir(out_dir)
         out_dir = os.path.join(out_dir, 'top_charge_plots')
-        check_else_make_dir(out_dir)
+        io.check_else_make_dir(out_dir)
 
         run_steps = charges.shape[0]
         title_str = (r"$\beta = $"
                      f"{beta}, {run_steps} {key} steps")
-
 
         t0 = time.time()
         # if we have more than 10 samples per batch, only plot first 10
@@ -1536,9 +1486,9 @@ class GaugeModel(object):
             _ = ax.set_ylabel('Topological charge', fontsize=14)
             _ = ax.set_title(title_str, fontsize=16)
             out_file = os.path.join(out_dir, f'top_charge_vs_step_{idx}.png')
-            log(f"  Saving top. charge plot to {out_file}.")
+            io.log(f"  Saving top. charge plot to {out_file}.")
             plt.savefig(out_file, dpi=400, bbox_inches='tight')
-        log(f'done. took: {time.time() - t0:.4g}')
+        io.log(f'done. took: {time.time() - t0:.4g}')
         plt.close('all')
 
     def _plot_top_charges_counts(self, charges, beta, current_step=None):
@@ -1546,11 +1496,11 @@ class GaugeModel(object):
         if not HAS_MATPLOTLIB:
             return -1
 
-        log("Plotting top. charge frequency. vs top. charge values")
+        io.log("Plotting top. charge frequency. vs top. charge values")
         out_dir, key = self._get_plot_dir(charges, beta, current_step)
-        check_else_make_dir(out_dir)
+        io.check_else_make_dir(out_dir)
         out_dir = os.path.join(out_dir, 'top_charge_frequency')
-        check_else_make_dir(out_dir)
+        io.check_else_make_dir(out_dir)
 
         run_steps = charges.shape[0]
         title_str = (r"$\beta = $"
@@ -1572,7 +1522,7 @@ class GaugeModel(object):
             _ = ax.set_title(title_str, fontsize=16)
             out_file = os.path.join(out_dir,
                                     f'top_charge_frequency_vs_val_{idx}.png')
-            log(f'Saving figure to: {out_file}.')
+            io.log(f'Saving figure to: {out_file}.')
             _ = plt.savefig(out_file, dpi=400, bbox_inches='tight')
             plt.close('all')
 
@@ -1590,7 +1540,7 @@ class GaugeModel(object):
         _ = ax.set_title(title_str, fontsize=16)
         out_file = os.path.join(out_dir,
                                 f'TOP_CHARGE_FREQUENCY_VS_VAL_TOTAL.png')
-        log(f'Saving figure to: {out_file}.')
+        io.log(f'Saving figure to: {out_file}.')
         _ = plt.savefig(out_file, dpi=400, bbox_inches='tight')
         plt.close('all')
 
@@ -1639,10 +1589,11 @@ class GaugeModel(object):
 
         def save_data(data, out_file, name=None):
             out_dir = os.path.dirname(out_file)
-            check_else_make_dir(out_dir)
+            io.check_else_make_dir(out_dir)
             try:
                 if out_file.endswith('pkl'):
-                    log(f"Saving {str(name)} to {out_file} using `pkl.dump`.")
+                    io.log(f"Saving {str(name)} to {out_file} "
+                           "using `pkl.dump`.")
                     with open(out_file, 'wb') as f:
                         pickle.dump(data, f)
                 if out_file.endswith('.json'):
@@ -1654,7 +1605,8 @@ class GaugeModel(object):
                 #      with open(out_file, 'w') as f:
                 #          json.dump(data, f)
                 if out_file.endswith('.npy'):
-                    log(f"Saving {str(name)} to {out_file} using `np.save`.")
+                    io.log(f"Saving {str(name)} to {out_file} "
+                           f"using `np.save`.")
                     np.save(out_file, np.array(data))
             except:
                 import pdb
@@ -1783,92 +1735,94 @@ class GaugeModel(object):
         sep_str2 = (1 + max(len(str2), len(therm_str))) * '-'
         sep_str3 = (1 + max(len(str3), len(therm_str))) * '-'
 
-        log(f"Writing statistics to: {statistics_txt_file}")
+        io.log(f"Writing statistics to: {statistics_txt_file}")
 
         ################################################################
         # Topological charge / susceptibility statistics
         ################################################################
-        log(sep_str0)
-        log(str0)
-        log(therm_str)
-        log('')
-        _ = [log(s) for s in suscept_strings]
-        log(sep_str0)
-        log('')
+        io.log(sep_str0)
+        io.log(str0)
+        io.log(therm_str)
+        io.log('')
+        _ = [io.log(s) for s in suscept_strings]
+        io.log(sep_str0)
+        io.log('')
 
-        write(sep_str0, statistics_txt_file, 'w')
-        write(str0, statistics_txt_file, 'a')
-        write(therm_str, statistics_txt_file, 'a')
-        write(sep_str0, statistics_txt_file, 'a')
+        io.write(sep_str0, statistics_txt_file, 'w')
+        io.write(str0, statistics_txt_file, 'a')
+        io.write(therm_str, statistics_txt_file, 'a')
+        io.write(sep_str0, statistics_txt_file, 'a')
         #  write(sep_str0, statistics_txt_file, 'a')
-        _ = [write(s, statistics_txt_file, 'a') for s in suscept_strings]
-        #  write(sep_str0, statistics_txt_file, 'a')
-        write('\n', statistics_txt_file, 'a')
+        _ = [io.write(s, statistics_txt_file, 'a') for s in suscept_strings]
+        #  io.write(sep_str0, statistics_txt_file, 'a')
+        io.write('\n', statistics_txt_file, 'a')
 
         ################################################################
         # Total action statistics
         ################################################################
-        log(sep_str1)
-        log(str1)
-        log(therm_str)
-        log('')
-        _ = [log(s) for s in plaqs_strings]
-        log(sep_str1)
+        io.log(sep_str1)
+        io.log(str1)
+        io.log(therm_str)
+        io.log('')
+        _ = [io.log(s) for s in plaqs_strings]
+        io.log(sep_str1)
 
-        write(sep_str1, statistics_txt_file, 'a')
-        write(str1, statistics_txt_file, 'a')
-        write(therm_str, statistics_txt_file, 'a')
-        write(sep_str1, statistics_txt_file, 'a')
-        _ = [write(s, statistics_txt_file, 'a') for s in plaqs_strings]
+        io.write(sep_str1, statistics_txt_file, 'a')
+        io.write(str1, statistics_txt_file, 'a')
+        io.write(therm_str, statistics_txt_file, 'a')
+        io.write(sep_str1, statistics_txt_file, 'a')
+        _ = [io.write(s, statistics_txt_file, 'a') for s in actions_strings]
         #  write(sep_str1, statistics_txt_file, 'a')
 
         ################################################################
         # Average plaquette statistics
         ################################################################
-        log(sep_str2)
-        log(str2)
-        log(therm_str)
-        log('')
-        _ = [log(s) for s in plaqs_strings]
-        log(sep_str2)
+        io.log(sep_str2)
+        io.log(str2)
+        io.log(therm_str)
+        io.log('')
+        _ = [io.log(s) for s in plaqs_strings]
+        io.log(sep_str2)
 
-        write(sep_str2, statistics_txt_file, 'a')
-        write(str2, statistics_txt_file, 'a')
-        write(therm_str, statistics_txt_file, 'a')
-        write(sep_str2, statistics_txt_file, 'a')
-        _ = [write(s, statistics_txt_file, 'a') for s in plaqs_strings]
-        #  write(sep_str1, statistics_txt_file, 'a')
-        write('\n', statistics_txt_file, 'a')
-        write('\n', statistics_txt_file, 'a')
+        io.write(sep_str2, statistics_txt_file, 'a')
+        io.write(str2, statistics_txt_file, 'a')
+        io.write(therm_str, statistics_txt_file, 'a')
+        io.write(sep_str2, statistics_txt_file, 'a')
+        _ = [io.write(s, statistics_txt_file, 'a') for s in plaqs_strings]
+        #  io.write(sep_str1, statistics_txt_file, 'a')
+        io.write('\n', statistics_txt_file, 'a')
+        io.write('\n', statistics_txt_file, 'a')
 
         ################################################################
         # Topological charge probability statistics
         ################################################################
-        log(sep_str3)
-        log(str3)
-        log(therm_str)
-        log('')
-        _ = [log(s) for s in charge_probs_strings]
-        log(sep_str3)
+        io.log(sep_str3)
+        io.log(str3)
+        io.log(therm_str)
+        io.log('')
+        _ = [io.log(s) for s in charge_probs_strings]
+        io.log(sep_str3)
 
-        write(sep_str3, statistics_txt_file, 'a')
-        write(str2, statistics_txt_file, 'a')
-        write(therm_str, statistics_txt_file, 'a')
-        write(sep_str3, statistics_txt_file, 'a')
-        _ = [write(s, statistics_txt_file, 'a') for s in charge_probs_strings]
-        write(sep_str3, statistics_txt_file, 'a')
+        io.write(sep_str3, statistics_txt_file, 'a')
+        io.write(str2, statistics_txt_file, 'a')
+        io.write(therm_str, statistics_txt_file, 'a')
+        io.write(sep_str3, statistics_txt_file, 'a')
+        _ = [
+            io.write(s, statistics_txt_file, 'a') for s in charge_probs_strings
+        ]
+        io.write(sep_str3, statistics_txt_file, 'a')
 
     def _get_run_files(self, *_args):
         """Create dir and files for storing observables from `self.run`."""
         run_steps, current_step, beta, _ = _args
 
         observables_dir = os.path.join(self.eval_dir, 'observables')
-        check_else_make_dir(observables_dir)
+        io.check_else_make_dir(observables_dir)
 
         if current_step is None:                     # running AFTER training
             obs_dir = os.path.join(observables_dir,
                                    f'steps_{run_steps}_beta_{beta}')
-            check_else_make_dir(obs_dir)
+            io.check_else_make_dir(obs_dir)
 
             npy_file = f'samples_history_steps_{run_steps}_beta_{beta}.npy'
             json_file = f'samples_history_steps_{run_steps}_beta_{beta}.json'
@@ -1877,7 +1831,7 @@ class GaugeModel(object):
 
         else:                                        # running DURING training
             obs_dir = os.path.join(observables_dir, 'training')
-            check_else_make_dir(obs_dir)
+            io.check_else_make_dir(obs_dir)
             obs_dir = os.path.join(obs_dir,
                                    f'{current_step}_TRAIN_'
                                    f'steps_{run_steps}_beta_{beta}')
@@ -1932,51 +1886,9 @@ class GaugeModel(object):
 def main(FLAGS):
     """Main method for creating/training U(1) gauge model from command line."""
     params = PARAMS  # use default parameters if no command line args passed
-# ========================= Lattice parameters ===============================
-    params['time_size'] = FLAGS.time_size
-    params['space_size'] = FLAGS.space_size
-    params['link_type'] = FLAGS.link_type
-    params['dim'] = FLAGS.dim
-    params['num_samples'] = FLAGS.num_samples
-# ========================= Leapfrog parameters ==============================
-    params['num_steps'] = FLAGS.num_steps
-    params['eps'] = FLAGS.eps
-    params['loss_scale'] = FLAGS.loss_scale
-    params['loss_eps'] = 1e-4
-# ========================= Learning rate parameters =========================
-    params['lr_init'] = FLAGS.lr_init
-    params['lr_decay_rate'] = FLAGS.lr_decay_rate
-    params['lr_decay_steps'] = FLAGS.lr_decay_steps
-# ========================= Annealing parameters =============================
-    params['annealing'] = FLAGS.annealing
-    #  params['annealing_steps'] = FLAGS.annealing_steps
-    #  params['annealing_factor'] = FLAGS.annealing_factor
-    params['beta_init'] = FLAGS.beta_init
-    params['beta_final'] = FLAGS.beta_final
-# ========================= Training parameters ==============================
-    params['train_steps'] = FLAGS.train_steps
-    params['save_steps'] = FLAGS.save_steps
-    params['logging_steps'] = FLAGS.logging_steps
-    params['print_steps'] = FLAGS.print_steps
-    params['training_samples_steps'] = FLAGS.training_samples_steps
-    params['training_samples_length'] = FLAGS.training_samples_length
-# ========================= Model parameters =================================
-    params['network_arch'] = FLAGS.network_arch
-    params['hmc'] = FLAGS.hmc
-    params['eps_trainable'] = FLAGS.eps_trainable
-    params['metric'] = FLAGS.metric
-    params['aux'] = FLAGS.aux
-    params['plaq_loss'] = FLAGS.plaq_loss
-    params['summaries'] = FLAGS.summaries
-    params['plaq_loss'] = FLAGS.plaq_loss
-    params['clip_grads'] = FLAGS.clip_grads
-    params['clip_value'] = FLAGS.clip_value
-    params['using_hvd'] = FLAGS.horovod
-# ============================================================================
 
-    #  if FLAGS.beta != FLAGS.beta_init:
-    #      if FLAGS.annealing:
-    #          params['beta'] = FLAGS.beta_init
+    for key, val in FLAGS.__dict__.items():
+        params[key] = val
 
     if FLAGS.hmc:
         params['eps_trainable'] = False
@@ -1996,7 +1908,7 @@ def main(FLAGS):
         params['data_format'] = 'channels_last'
 
     if FLAGS.theta:
-        log("Training on Theta @ ALCF...")
+        io.log("Training on Theta @ ALCF...")
         params['data_format'] = 'channels_first'
         os.environ["KMP_BLOCKTIME"] = str(0)
         os.environ["KMP_AFFINITY"] = "granularity=fine,verbose,compact,1,0"
@@ -2011,11 +1923,11 @@ def main(FLAGS):
 
     if FLAGS.horovod:
         if hvd.rank() == 0:
-            save_params_to_pkl_file(params, model.info_dir)
+            io.save_params_to_pkl_file(params, model.info_dir)
 
-        log('Number of CPUs: %d' % hvd.size())
+        io.log('Number of CPUs: %d' % hvd.size())
 
-    log(f"Training began at: {time.ctime()}")
+    io.log(f"Training began at: {time.ctime()}")
 
     if not FLAGS.hmc:
         if FLAGS.profiler:
@@ -2032,7 +1944,7 @@ def main(FLAGS):
                 model.run(steps, beta=beta)
 
     except (KeyboardInterrupt, SystemExit):
-        log("\nKeyboardInterrupt detected! \n")
+        io.log("\nKeyboardInterrupt detected! \n")
         import pdb
         pdb.set_trace()
 
@@ -2243,10 +2155,10 @@ if __name__ == '__main__':
                               "argument. If `--clip_value` is not passed, "
                               "it defaults to 100."))
 
-    parser.add_argument("--clip_value", type=int, default=100,
+    parser.add_argument("--clip_value", type=float, default=1.,
                         required=False, dest="clip_value",
                         help=("Clip value, used for clipping value of "
-                              "gradients by global norm. (Default: 100)"))
+                              "gradients by global norm. (Default: 1.)"))
 
     parser.add_argument("--log_dir", type=str, default=None,
                         required=False, dest="log_dir",
@@ -2254,7 +2166,7 @@ if __name__ == '__main__':
                               "If this argument is not passed, a new "
                               "directory will be created. (Default: None)"))
 
-    parser.add_argument("--restore",action="store_true",
+    parser.add_argument("--restore", action="store_true",
                         required=False, dest="restore",
                         help=("Restore model from previous run. "
                               "If this argument is passed, a `log_dir` "
