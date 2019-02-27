@@ -105,6 +105,7 @@ def plot_multiple_lines(x_data, y_data, x_label, y_label, **kwargs):
     out_file = kwargs.get('out_file', None)
     markers = kwargs.get('markers', False)
     lines = kwargs.get('lines', True)
+    alpha = kwargs.get('alpha', 0.9)
     legend = kwargs.get('legend', False)
     title = kwargs.get('title', None)
     ret = kwargs.get('ret', False)
@@ -122,7 +123,7 @@ def plot_multiple_lines(x_data, y_data, x_label, y_label, **kwargs):
         if not lines:
             ls = ''
         _ = ax.plot(x_data, row, label=f'sample {idx}', fillstyle=fillstyle,
-                    marker=marker, ls=ls)
+                    marker=marker, ls=ls, alpha=alpha)
 
     _ = ax.plot(
         x_data, y_data.mean(axis=0), color='k', label='average', alpha=0.75,

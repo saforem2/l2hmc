@@ -1,6 +1,8 @@
 *.pyc
 tags
 logs/
+*logs*
+*old*
 log_mog_tf_extras/*
 MNIST_data/
 gpu*
@@ -23,11 +25,9 @@ l2hmc/global
 l2hmc/lattice/lattice_ising.py
 l2hmc/lattice/old/
 l2hmc/models/
-l2hmc/notebooks/Untitled.ipynb
 run_2_20_380/
 tf_eager_log/
 timing_logs/
-<<<<<<< HEAD
 backups/
 cprofile_out.txt
 gauge_logs/
@@ -48,6 +48,10 @@ l2hmc/notebooks/using_tf_datasets.ipynb
 gauge_logs_graph_separated/
 l2hmc/notebooks/eager_execution.ipynb
 l2hmc/notebooks/graph_execution.ipynb
+<<<<<<< HEAD
 *old*
 *logs*
 *Untitled*
+=======
+l2hmc/notebooks/*Untitled*
+>>>>>>> topological_loss

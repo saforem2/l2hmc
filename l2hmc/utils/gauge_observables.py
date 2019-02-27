@@ -643,18 +643,24 @@ def find_samples(log_dir, training=False):
 
     beta_key_idx = -1
 
+    def check_extension(filename):
+        return filename.endswith('.pkl') or filename.endswith('.npy')
+
+
     samples_files = [
         os.path.join(samples_dir, i) for i in os.listdir(samples_dir)
-        if 'samples_history' in i and i.endswith('.pkl')
+        if 'samples_history' in i and check_extension(i)
     ]
 
+    ext_length = -4  # length of filename extension, i.e. '.npy'
     step_keys = [
-        int(i.split('/')[-1].split('_')[step_key_idx].rstrip('.pkl'))
+        #  int(i.split('/')[-1].split('_')[step_key_idx].rstrip('.pkl'))
+        int(i.split('/')[-1].split('_')[step_key_idx][:ext_length])
         for i in samples_files
     ]
 
     beta_keys = [
-        float(i.split('/')[-1].split('_')[beta_key_idx].rstrip('.pkl'))
+        float(i.split('/')[-1].split('_')[beta_key_idx][:ext_length])
         for i in samples_files
     ]
 

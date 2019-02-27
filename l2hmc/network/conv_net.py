@@ -53,7 +53,6 @@ def create_periodic_padding(samples, filter_size):
     return np.array(x, dtype=np.float32).reshape(*original_size)
 
 
-
 # pylint:disable=too-many-arguments, too-many-instance-attributes
 class ConvNet3D(tf.keras.Model):
     """Conv. neural net with different initialization scale based on input."""
