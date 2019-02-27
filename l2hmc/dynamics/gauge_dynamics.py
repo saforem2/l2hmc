@@ -62,26 +62,26 @@ class GaugeDynamics(tf.keras.Model):
             if key != 'eps':  # want to use self.eps as tf.Variable
                 setattr(self, key, val)
 
-        if not self.hmc:
-            self.alpha = tf.get_variable(
-                'alpha',
-                initializer=tf.log(tf.constant(kwargs.get('eps', 0.1))),
-                trainable=self.eps_trainable,
-                dtype=tf.float32
-            )
-        else:
-            self.alpha = tf.log(tf.constant(kwargs.get('eps', 0.1),
-                                            dtype=tf.float32))
-
-        self.eps = _exp(self.alpha, name='eps')
-
-        #  with tf.name_scope('eps'):
-        #      self.eps = tf.Variable(
-        #          initial_value=kwargs.get('eps', 0.1),
-        #          name='eps',
-        #          dtype=tf.float32,
-        #          trainable=self.eps_trainable
+        #  if not self.hmc:
+        #      self.alpha = tf.get_variable(
+        #          'alpha',
+        #          initializer=tf.log(tf.constant(kwargs.get('eps', 0.1))),
+        #          trainable=self.eps_trainable,
+        #          dtype=tf.float32
         #      )
+        #  else:
+        #      self.alpha = tf.log(tf.constant(kwargs.get('eps', 0.1),
+        #                                      dtype=tf.float32))
+
+        #  self.eps = _exp(self.alpha, name='eps')
+
+        with tf.name_scope('eps'):
+            self.eps = tf.Variable(
+                initial_value=kwargs.get('eps', 0.1),
+                name='eps',
+                dtype=tf.float32,
+                trainable=self.eps_trainable
+            )
 
         self._construct_time()
         self._construct_masks()
