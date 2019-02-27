@@ -35,7 +35,6 @@ gauge_logs_eager/
 gauge_logs_graph/
 l2hmc/notebooks/u1_keras_model_with_dataset.ipynb
 new_mog_logs/
-=======
 gauge_logs/
 gauge_logs_eager/
 backups/
@@ -43,10 +42,12 @@ gauge_logs_graph/
 new_mog_logs/
 l2hmc/notebooks/u1_keras_model_with_dataset.ipynb
 cprofile_out.txt
->>>>>>> U1_gauge
 gauge_logs_by_size/
 l2hmc/gauge_model_graph/*
 l2hmc/notebooks/using_tf_datasets.ipynb
 gauge_logs_graph_separated/
 l2hmc/notebooks/eager_execution.ipynb
 l2hmc/notebooks/graph_execution.ipynb
+*old*
+*logs*
+*Untitled*
