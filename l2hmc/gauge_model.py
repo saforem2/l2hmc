@@ -1264,32 +1264,11 @@ class GaugeModel(object):
         if plot:
             self._plot_observables(observables, beta, current_step)
             self._plot_top_charges(charges_arr, beta, current_step)
-            self._plot_top_charges_counts(charges_arr, beta, current_step)
+            self._plot_top_charge_probs(charges_arr, beta, current_step)
         io.log(f'\n Time to complete run: {time.time() - start_time} seconds.')
         io.log(80*'-' + '\n', nl=False)
-        #  if current_step is None:
-        #      self._plot_observables(observables, beta, )
-        #  else:
-        #      self._plot_observables(observables, beta, training=True)
 
         return observables, stats
-
-    def _plot_tun_events(self):
-        """Plot num. of tunneling events vs. training step after training."""
-        #  tun_events_keys = np.array(list(self.tunn_events_dict.keys()))
-        tun_events_vals = np.array(list(self.tunn_events_dict.values()))
-        _, ax = plt.subplots()
-        ax.plot(tun_events_vals, marker='.', fillstyle='none', ls='',
-                label=f'total across {self.num_samples} samples')
-        ax.set_xlabel('Training step', fontsize=14)
-        ax.set_ylabel('Number of events', fontsize=14)
-        #  title_str = (f'Number of tunneling events vs. '
-        #               f'training step for {self.num_samples} samples')
-        #  ax.set_title(title_str, fontsize=16)
-        out_file = os.path.join(self.figs_dir,
-                                'tunneling_events_vs_training_step.png')
-        print(f"Saving figure to: {out_file}.")
-        plt.savefig(out_file, dpi=400, bbox_inches='tight')
 
     # pylint:disable=no-self-use
     def calc_observables_stats(self, observables, therm_frac=10):
@@ -1353,25 +1332,6 @@ class GaugeModel(object):
                  suscept_stats, charge_probabilities)
 
         return stats
-
-    def _get_plot_dir(self, charges, beta, current_step=None):
-        """Returns directory where plots of observables are to be saved."""
-        run_steps = charges.shape[0]
-
-        if current_step is not None:  # i.e. sampler evaluated DURING training
-            figs_dir = os.path.join(self.figs_dir, 'training')
-            io.check_else_make_dir(figs_dir)
-            out_dirname = f'{current_step}_TRAIN_{run_steps}_steps_beta_{beta}'
-            title_str_key = 'train'
-        else:                         # i.e. sampler evaluated AFTER training
-            figs_dir = self.figs_dir
-            title_str_key = 'eval'
-            out_dirname = f'{run_steps}_steps_beta_{beta}'
-
-        out_dir = os.path.join(figs_dir, out_dirname)
-        io.check_else_make_dir(out_dir)
-
-        return out_dir, title_str_key
 
     def _plot_observables(self, observables, beta, current_step=None):
         """Plot observables stored in `observables`."""
@@ -1455,6 +1415,23 @@ class GaugeModel(object):
 
         return 1
 
+    def _plot_tun_events(self):
+        """Plot num. of tunneling events vs. training step after training."""
+        #  tun_events_keys = np.array(list(self.tunn_events_dict.keys()))
+        tun_events_vals = np.array(list(self.tunn_events_dict.values()))
+        _, ax = plt.subplots()
+        ax.plot(tun_events_vals, marker='.', fillstyle='none', ls='',
+                label=f'total across {self.num_samples} samples')
+        ax.set_xlabel('Training step', fontsize=14)
+        ax.set_ylabel('Number of events', fontsize=14)
+        #  title_str = (f'Number of tunneling events vs. '
+        #               f'training step for {self.num_samples} samples')
+        #  ax.set_title(title_str, fontsize=16)
+        out_file = os.path.join(self.figs_dir,
+                                'tunneling_events_vs_training_step.png')
+        print(f"Saving figure to: {out_file}.")
+        plt.savefig(out_file, dpi=400, bbox_inches='tight')
+
     def _plot_top_charges(self, charges, beta, current_step=None):
         """Plot top. charge history using samples generated from `self.run`."""
         if not HAS_MATPLOTLIB:
@@ -1491,15 +1468,15 @@ class GaugeModel(object):
         io.log(f'done. took: {time.time() - t0:.4g}')
         plt.close('all')
 
-    def _plot_top_charges_counts(self, charges, beta, current_step=None):
+    def _plot_top_charge_probs(self, charges, beta, current_step=None):
         """Create scatter plot of frequency of topological charge values."""
         if not HAS_MATPLOTLIB:
             return -1
 
-        io.log("Plotting top. charge frequency. vs top. charge values")
+        io.log("Plotting top. charge probability vs. value")
         out_dir, key = self._get_plot_dir(charges, beta, current_step)
         io.check_else_make_dir(out_dir)
-        out_dir = os.path.join(out_dir, 'top_charge_frequency')
+        out_dir = os.path.join(out_dir, 'top_charge_probs')
         io.check_else_make_dir(out_dir)
 
         run_steps = charges.shape[0]
@@ -1509,40 +1486,61 @@ class GaugeModel(object):
         # if we have more than 10 samples per batch, only plot first 10
         for idx in range(min(self.num_samples, 10)):
             counts = Counter(charges[:, idx])
+            total_counts = np.sum(list(counts.values()))
             _, ax = plt.subplots()
             ax.plot(list(counts.keys()),
-                    list(counts.values()),
+                    list(counts.values() / total_counts),
                     marker=MARKERS[idx],
                     color=COLORS[idx],
                     ls='',
                     label=f'sample {idx}')
             _ = ax.legend(loc='best')
             _ = ax.set_xlabel('Topological charge', fontsize=14)
-            _ = ax.set_xlabel('Number of occurences', fontsize=14)
+            _ = ax.set_ylabel('Probability', fontsize=14)
             _ = ax.set_title(title_str, fontsize=16)
             out_file = os.path.join(out_dir,
-                                    f'top_charge_frequency_vs_val_{idx}.png')
+                                    f'top_charge_prob_vs_val_{idx}.png')
             io.log(f'Saving figure to: {out_file}.')
             _ = plt.savefig(out_file, dpi=400, bbox_inches='tight')
             plt.close('all')
 
-        total_counts = Counter(list(charges.flatten()))
+        all_counts = Counter(list(charges.flatten()))
+        total_counts = np.sum(list(counts.values()))
         _, ax = plt.subplots()
-        ax.plot(list(total_counts.keys()),
-                list(total_counts.values()),
+        ax.plot(list(all_counts.keys()),
+                list(all_counts.values() / total_counts),
                 marker='o',
                 color='C0',
                 ls='',
                 label=f'total across {self.num_samples} samples')
         _ = ax.legend(loc='best')
         _ = ax.set_xlabel('Topological charge', fontsize=14)
-        _ = ax.set_xlabel('Number of occurences', fontsize=14)
-        _ = ax.set_title(title_str, fontsize=16)
+        _ = ax.set_ylabel('Probability', fontsize=14)
+        #  _ = ax.set_title(title_str, fontsize=16)
         out_file = os.path.join(out_dir,
                                 f'TOP_CHARGE_FREQUENCY_VS_VAL_TOTAL.png')
         io.log(f'Saving figure to: {out_file}.')
         _ = plt.savefig(out_file, dpi=400, bbox_inches='tight')
         plt.close('all')
+
+    def _get_plot_dir(self, charges, beta, current_step=None):
+        """Returns directory where plots of observables are to be saved."""
+        run_steps = charges.shape[0]
+
+        if current_step is not None:  # i.e. sampler evaluated DURING training
+            figs_dir = os.path.join(self.figs_dir, 'training')
+            io.check_else_make_dir(figs_dir)
+            out_dirname = f'{current_step}_TRAIN_{run_steps}_steps_beta_{beta}'
+            title_str_key = 'train'
+        else:                         # i.e. sampler evaluated AFTER training
+            figs_dir = self.figs_dir
+            title_str_key = 'eval'
+            out_dirname = f'{run_steps}_steps_beta_{beta}'
+
+        out_dir = os.path.join(figs_dir, out_dirname)
+        io.check_else_make_dir(out_dir)
+
+        return out_dir, title_str_key
 
     def _save_run_info(self, samples, observables, stats, _args):
         """Save samples and observables generated from `self.run` call."""
@@ -1596,14 +1594,6 @@ class GaugeModel(object):
                            "using `pkl.dump`.")
                     with open(out_file, 'wb') as f:
                         pickle.dump(data, f)
-                if out_file.endswith('.json'):
-                    print("Skipping .json file (for now).")
-                #      if isinstance(data, np.ndarray):
-                #          data = data.tolist()
-                #      log(f"Saving {str(name)} to {out_file} using
-                #      `json.dump`.")
-                #      with open(out_file, 'w') as f:
-                #          json.dump(data, f)
                 if out_file.endswith('.npy'):
                     io.log(f"Saving {str(name)} to {out_file} "
                            f"using `np.save`.")
@@ -1627,27 +1617,40 @@ class GaugeModel(object):
         save_data(suscept_stats, suscept_stats_file, name='suscept_stats')
         save_data(charge_probs, charge_probs_file, name='charge_probs')
 
-        _est_key = '  \nestimate +/- stderr'
-        suscept_stats_strings = {
-            '  \navg. over all samples < Q >': np.mean(charges_arr),
-            '  \navg. over all samples < Q^2 >': np.mean(charges_squared_arr),
-            _est_key: {},
-            #  '  \ntopological susceptibility (avg)': suscept_stats[0],
-            #  '  \ntopological susceptibility (err)': suscept_stats[1]
-        }
+        actions_avg = np.mean(actions_arr)
+        actions_err = sem(actions_arr)
 
-        plaqs_stats_strings = {
-            '  \navg. over all samples < plaq >': np.mean(plaqs_arr),
-            _est_key: {},
-            #  '  \navg. plaquette (avg) < plaq >': plaqs_stats[0],
-            #  '  \navg. plaquette (err)': plaqs_stats[1]
+        plaqs_avg = np.mean(plaqs_arr)
+        plaqs_err = sem(plaqs_arr)
+
+        q_avg = np.mean(charges_arr)
+        q_err = sem(charges_arr)
+
+        q2_avg = np.mean(charges_squared_arr)
+        q2_err = sem(charges_squared_arr)
+
+        _est_key = '  \nestimate +/- stderr'
+
+        ns = self.num_samples
+        suscept_k1 = f'  \navg. over all {ns} samples < Q >'
+        suscept_k2 = f'  \navg. over all {ns} samples < Q^2 >'
+        actions_k1 = f'  \navg. over all {ns} samples < action >'
+        plaqs_k1 = f'  \navg. over all {ns} samples < plaq >'
+
+        suscept_stats_strings = {
+            suscept_k1: f'{q_avg:.4g} +/- {q_err:.4g}',
+            suscept_k2: f'{q2_avg:.4g} +/- {q2_err:.4g}\n',
+            _est_key: {}
         }
 
         actions_stats_strings = {
-            '  \navg. over all samples < action >': np.mean(actions_arr),
-            _est_key: {},
-            #  '  \navg. actions (avg) < action >': actions_stats[0],
-            #  '  \navg. actions (err)': actions_stats[1]
+            actions_k1: f'{actions_avg:.4g} +/- {actions_err:.4g}\n',
+            _est_key: {}
+
+        }
+        plaqs_stats_strings = {
+            plaqs_k1: f'{plaqs_avg:.4g} +/- {plaqs_err:.4g}\n',
+            _est_key: {}
         }
 
         def format_stats(avgs, errs):
@@ -1673,31 +1676,15 @@ class GaugeModel(object):
             for k1, v1 in d.items():
                 if isinstance(v1, dict):
                     for k2, v2 in v1.items():
-                        all_strings.append(f'{k2}: {v2}\n')
+                        all_strings.append(f'{k2} {v2}')
                 else:
-                    all_strings.append(f'{k1}:\n    {v1}')
+                    all_strings.append(f'{k1}: {v1}\n')
 
             return all_strings
 
         actions_strings = accumulate_strings(actions_stats_strings)
         plaqs_strings = accumulate_strings(plaqs_stats_strings)
         suscept_strings = accumulate_strings(suscept_stats_strings)
-
-        #  actions_strings = []
-        #  for k, v in actions_stats_strings.items():
-        #      if isinstance(v, dict):
-        #          for _k, _v in v.items():
-        #              actions_strings.append(f'{_k}:\n    {_v}')
-        #      else:
-        #          actions_strings.append(f'{k}:\n    {v}')
-        #
-        #  plaqs_strings = []
-        #  for k, v in plaqs_stats_strings.items():
-        #      plaqs_strings.append(f'{k}:\n    {v}')
-        #
-        #  suscept_strings = []
-        #  for k, v in suscept_stats_strings.items():
-        #      suscept_strings.append(f'{k}:\n    {v}')
 
         charge_probs_strings = []
         for k, v in charge_probs.items():
