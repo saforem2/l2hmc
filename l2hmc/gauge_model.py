@@ -30,9 +30,7 @@ import tensorflow as tf
 
 try:
     import horovod.tensorflow as hvd
-
     HAS_HOROVOD = True
-    hvd.init()
 
 except ImportError:
     HAS_HOROVOD = False
@@ -53,10 +51,11 @@ from collections import Counter, OrderedDict
 from tensorflow.python import debug as tf_debug
 from lattice.lattice import GaugeLattice, project_angle, u1_plaq_exact
 from utils.tf_logging import variable_summaries
-from utils.plot_helper import plot_multiple_lines
-#  from utils.dynamics import Dynamics as DynamicsOld
-from network.conv_net import ConvNet2D, ConvNet3D
 
+if HAS_MATPLOTLIB:
+    from utils.plot_helper import plot_multiple_lines
+
+from network.conv_net import ConvNet2D, ConvNet3D
 from dynamics.gauge_dynamics import GaugeDynamics
 
 tfe = tf.contrib.eager
@@ -1261,7 +1260,7 @@ class GaugeModel(object):
         _args = (run_steps, current_step, beta, therm_frac)
 
         self._save_run_info(samples_history, observables, stats, _args)
-        if plot:
+        if plot and HAS_MATPLOTLIB:
             self._plot_observables(observables, beta, current_step)
             self._plot_top_charges(charges_arr, beta, current_step)
             self._plot_top_charge_probs(charges_arr, beta, current_step)
@@ -1872,6 +1871,9 @@ class GaugeModel(object):
 # pylint: disable=too-many-statements
 def main(FLAGS):
     """Main method for creating/training U(1) gauge model from command line."""
+    if HAS_HOROVOD and FLAGS.horovod:
+        hvd.init()
+
     params = PARAMS  # use default parameters if no command line args passed
 
     for key, val in FLAGS.__dict__.items():
@@ -1898,9 +1900,16 @@ def main(FLAGS):
         io.log("Training on Theta @ ALCF...")
         params['data_format'] = 'channels_first'
         os.environ["KMP_BLOCKTIME"] = str(0)
-        os.environ["KMP_AFFINITY"] = "granularity=fine,verbose,compact,1,0"
+        #  os.environ["KMP_AFFINITY"] = "granularity=fine,verbose,compact,1,0"
+        # NOTE: KMP affinity taken care of by passing -cc depth to aprun call
+        OMP_NUM_THREADS = 62
         config.allow_soft_placement = True
-        config.intra_op_parallelism_threads = 62
+        config.intra_op_parallelism_threads = OMP_NUM_THREADS
+        config.inter_op_parallelism_threads = 1
+
+    if HAS_HOROVOD and FLAGS.horovod:
+        params['lr_init'] *= hvd.size()
+
 
     model = GaugeModel(params=params,
                        config=config,

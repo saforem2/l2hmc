@@ -5,7 +5,6 @@ Author: Sam Foreman (github: @saforem2)
 Last modified: 2/14/2019
 """
 # pylint: disable=invalid-name
-import os
 import numpy as np
 try:
     import matplotlib.pyplot as plt
@@ -14,14 +13,15 @@ except ImportError:
     HAS_MATPLOTLIB = False
 
 
-plt.rcParams['xtick.direction'] = 'in'
-plt.rcParams['ytick.direction'] = 'in'
-plt.rcParams['xtick.major.pad'] = 3.5
-plt.rcParams['xtick.major.size'] = 3.5
-plt.rcParams['xtick.major.width'] = 0.8
-plt.rcParams['xtick.minor.pad'] = 3.4
-plt.rcParams['xtick.minor.size'] = 2.0
-plt.rcParams['xtick.minor.width'] = 0.6
+if HAS_MATPLOTLIB:
+    plt.rcParams['xtick.direction'] = 'in'
+    plt.rcParams['ytick.direction'] = 'in'
+    plt.rcParams['xtick.major.pad'] = 3.5
+    plt.rcParams['xtick.major.size'] = 3.5
+    plt.rcParams['xtick.major.width'] = 0.8
+    plt.rcParams['xtick.minor.pad'] = 3.4
+    plt.rcParams['xtick.minor.size'] = 2.0
+    plt.rcParams['xtick.minor.width'] = 0.6
 
 COLORS = 10 * ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9']
 MARKERS = 10 * ['o', 's', 'x', 'v', 'h', '^', 'p', '<', 'd', '>', 'o']
@@ -38,6 +38,9 @@ def plot_broken_xaxis(x_data,
                       xlim2=None, 
                       legend=True, 
                       out_file=None):
+    if not HAS_MATPLOTLIB:
+        return -1
+
     fig, (ax, ax2) = plt.subplots(1, 2, sharey=True, facecolor='w')
     # plot the same data on both axes
     for idx in range(y_data.shape[1]):
@@ -102,6 +105,9 @@ def plot_broken_xaxis(x_data,
 
 def plot_multiple_lines(x_data, y_data, x_label, y_label, **kwargs):
     """Plot multiple lines along with their average."""
+    if not HAS_MATPLOTLIB:
+        return -1
+
     out_file = kwargs.get('out_file', None)
     markers = kwargs.get('markers', False)
     lines = kwargs.get('lines', True)
@@ -141,13 +147,16 @@ def plot_multiple_lines(x_data, y_data, x_label, y_label, **kwargs):
 
     if ret:
         return fig, ax
-    else:
-        return 0
+
+    return 1
 
 
 # pylint: disable=too-many-statements,too-many-locals
 def errorbar_plot(x_data, y_data, y_errors, out_file=None, **kwargs):
     """Create a single errorbar plot."""
+    if not HAS_MATPLOTLIB:
+        return -1
+
     x = np.array(x_data)
     y = np.array(y_data)
     y_err = np.array(y_errors)
@@ -230,6 +239,9 @@ def errorbar_plot(x_data, y_data, y_errors, out_file=None, **kwargs):
 # pylint: disable=too-many-statements,too-many-locals
 def annealing_schedule_plot(**kwargs):
     """Plot annealing schedule."""
+    if not HAS_MATPLOTLIB:
+        return -1
+
     train_steps = kwargs.get('num_training_steps')
     temp_init = kwargs.get('temp_init')
     annealing_factor = kwargs.get('annealing_factor')
@@ -244,7 +256,7 @@ def annealing_schedule_plot(**kwargs):
     max_steps_arr = max(steps_arr)
     num_steps = max(train_steps, max_steps_arr)
 
-    #steps = np.arange(num_steps)
+    #  steps = np.arange(num_steps)
     temps = []
     steps = []
     temp = temp_init
