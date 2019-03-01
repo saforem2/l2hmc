@@ -283,15 +283,14 @@ class GaugeModel(object):
                 return
 
         #  if self.condition1 or self.condition2:  # DEFINED IN: _create_attrs
-        #      if log_dir is None:
-        #          dirs = io.create_log_dir('gauge_logs_graph')
-        #      else:
-        #          dirs = io.check_log_dir(log_dir)
-        #
-        #      log_dir, info_dir, figs_dir = dirs
-        #      self.log_dir, self.info_dir, self.figs_dir = dirs
-        dirs = self._create_log_dirs(log_dir)
+        if log_dir is None:
+            dirs = io.create_log_dir('gauge_logs_graph')
+        else:
+            dirs = io.check_log_dir(log_dir)
+
         self.log_dir, self.info_dir, self.figs_dir = dirs
+        #  dirs = self._create_log_dirs(log_dir)
+        #  self.log_dir, self.info_dir, self.figs_dir = dirs
 
         self.eval_dir = os.path.join(self.log_dir, 'eval_info')
         self.samples_dir = os.path.join(self.eval_dir, 'samples')
@@ -301,8 +300,8 @@ class GaugeModel(object):
         self.train_obs_dir = os.path.join(self.obs_dir, 'training')
         self.ckpt_file = os.path.join(self.log_dir, 'gauge_model.ckpt')
 
-        dirs =  [self.eval_dir, self.samples_dir, self.train_eval_dir,
-                 self.train_samples_dir, self.obs_dir, self.train_obs_dir]
+        dirs = [self.eval_dir, self.samples_dir, self.train_eval_dir,
+                self.train_samples_dir, self.obs_dir, self.train_obs_dir]
 
         self._make_dirs(dirs)
 
