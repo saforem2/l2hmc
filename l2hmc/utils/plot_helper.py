@@ -13,16 +13,6 @@ except ImportError:
     HAS_MATPLOTLIB = False
 
 
-if HAS_MATPLOTLIB:
-    plt.rcParams['xtick.direction'] = 'in'
-    plt.rcParams['ytick.direction'] = 'in'
-    plt.rcParams['xtick.major.pad'] = 3.5
-    plt.rcParams['xtick.major.size'] = 3.5
-    plt.rcParams['xtick.major.width'] = 0.8
-    plt.rcParams['xtick.minor.pad'] = 3.4
-    plt.rcParams['xtick.minor.size'] = 2.0
-    plt.rcParams['xtick.minor.width'] = 0.6
-
 COLORS = 10 * ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9']
 MARKERS = 10 * ['o', 's', 'x', 'v', 'h', '^', 'p', '<', 'd', '>', 'o']
 LINESTYLES = 10 * ['-', '--', ':', '-.', '-', '--', ':', '-.', '-', '--']

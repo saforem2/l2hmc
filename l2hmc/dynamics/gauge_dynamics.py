@@ -305,30 +305,27 @@ class GaugeDynamics(tf.keras.Model):
             mask, mask_inv = self._get_mask(i)
             sumlogdet = 0.
 
-            with tf.name_scope('update_momentum_forward'):
-                momentum, logdet = self._update_momentum_forward(position,
-                                                                 momentum,
-                                                                 beta, t)
-                sumlogdet += logdet
+            momentum, logdet = self._update_momentum_forward(position,
+                                                             momentum,
+                                                             beta, t)
+            sumlogdet += logdet
 
-            with tf.name_scope('update_position_forward'):
-                position, logdet = self._update_position_forward(position,
-                                                                 momentum,
-                                                                 t, mask,
-                                                                 mask_inv)
-                sumlogdet += logdet
+            position, logdet = self._update_position_forward(position,
+                                                             momentum,
+                                                             t, mask,
+                                                             mask_inv)
+            sumlogdet += logdet
 
-                position, logdet = self._update_position_forward(position,
-                                                                 momentum,
-                                                                 t, mask_inv,
-                                                                 mask)
-                sumlogdet += logdet
+            position, logdet = self._update_position_forward(position,
+                                                             momentum,
+                                                             t, mask_inv,
+                                                             mask)
+            sumlogdet += logdet
 
-            with tf.name_scope('update_momentum_forward'):
-                momentum, logdet = self._update_momentum_forward(position,
-                                                                 momentum,
-                                                                 beta, t)
-                sumlogdet += logdet
+            momentum, logdet = self._update_momentum_forward(position,
+                                                             momentum,
+                                                             beta, t)
+            sumlogdet += logdet
 
         return position, momentum, sumlogdet
 
@@ -343,30 +340,27 @@ class GaugeDynamics(tf.keras.Model):
             mask, mask_inv = self._get_mask(self.num_steps - i - 1)
             sumlogdet = 0.
 
-            with tf.name_scope('upate_momentum_backward'):
-                momentum, logdet = self._update_momentum_backward(position,
-                                                                  momentum,
-                                                                  beta, t)
-                sumlogdet += logdet
+            momentum, logdet = self._update_momentum_backward(position,
+                                                              momentum,
+                                                              beta, t)
+            sumlogdet += logdet
 
-            with tf.name_scope('update_position_backward'):
-                position, logdet = self._update_position_backward(position,
-                                                                  momentum,
-                                                                  t, mask_inv,
-                                                                  mask)
-                sumlogdet += logdet
+            position, logdet = self._update_position_backward(position,
+                                                              momentum,
+                                                              t, mask_inv,
+                                                              mask)
+            sumlogdet += logdet
 
-                position, logdet = self._update_position_backward(position,
-                                                                  momentum,
-                                                                  t, mask,
-                                                                  mask_inv)
-                sumlogdet += logdet
+            position, logdet = self._update_position_backward(position,
+                                                              momentum,
+                                                              t, mask,
+                                                              mask_inv)
+            sumlogdet += logdet
 
-            with tf.name_scope('update_momentum_backward'):
-                momentum, logdet = self._update_momentum_backward(position,
-                                                                  momentum,
-                                                                  beta, t)
-                sumlogdet += logdet
+            momentum, logdet = self._update_momentum_backward(position,
+                                                              momentum,
+                                                              beta, t)
+            sumlogdet += logdet
 
         return position, momentum, sumlogdet
 
@@ -387,13 +381,10 @@ class GaugeDynamics(tf.keras.Model):
             with tf.name_scope('transformed'):
                 transformed *= self.eps
             with tf.name_scope('momentum'):
-                momentum = (
-                    momentum * _exp(scale, name='vf_scale')
-                    - 0.5 * self.eps * (
-                        _exp(transformed, name='vf_transformed')
-                        * grad - translation
-                    )
-                )
+                momentum = (momentum * _exp(scale, name='vf_scale')
+                            - 0.5 * self.eps
+                            * (_exp(transformed, name='vf_transformed')
+                               * grad - translation))
 
         #  return momentum, tf.reduce_sum(scale, axis=self.axes)
         return momentum, tf.reduce_sum(scale, axis=1)
@@ -413,17 +404,11 @@ class GaugeDynamics(tf.keras.Model):
                 transformed *= self.eps
 
             with tf.name_scope('position'):
-                position = (
-                    mask * position + mask_inv * (
-                        position * _exp(scale, 'xf_scale')
-                        + self.eps * (
-                            _exp(transformed, 'xf_transformed')
-                            * momentum + translation
-                        )
-                    )
-                )
+                position = (mask * position + mask_inv
+                            * (position * _exp(scale, 'xf_scale') + self.eps
+                               * (_exp(transformed, 'xf_transformed')
+                                  * momentum + translation)))
 
-        #  return position, tf.reduce_sum(mask_inv * scale, axis=self.axes)
         return position, tf.reduce_sum(mask_inv * scale, axis=1)
 
     # pylint:disable=invalid-name
@@ -444,16 +429,11 @@ class GaugeDynamics(tf.keras.Model):
             with tf.name_scope('transformed'):
                 transformed *= self.eps
             with tf.name_scope('momentum'):
-                momentum = (
-                    _exp(scale, 'vb_scale') * (
-                        momentum + 0.5 * self.eps * (
-                            _exp(transformed, 'vb_transformed')
-                            * grad - translation
-                        )
-                    )
-                )
+                momentum = (_exp(scale, 'vb_scale')
+                            * (momentum + 0.5 * self.eps
+                             * (_exp(transformed, 'vb_transformed')
+                                * grad - translation)))
 
-        #  return momentum, tf.reduce_sum(scale, axis=self.axes)
         return momentum, tf.reduce_sum(scale, axis=1)
 
     # pylint:disable=invalid-name
@@ -472,16 +452,12 @@ class GaugeDynamics(tf.keras.Model):
                 transformed *= self.eps
 
             with tf.name_scope('position'):
-                position = (
-                    mask * position + mask_inv * _exp(scale, 'xb_scale') * (
-                        position - self.eps * (
-                            _exp(transformed, 'xb_transformed')
-                            * momentum + translation
-                        )
-                    )
-                )
+                position = (mask * position + mask_inv
+                            * _exp(scale, 'xb_scale')
+                            * (position - self.eps
+                               * (_exp(transformed, 'xb_transformed')
+                                  * momentum + translation)))
 
-        #  return position, tf.reduce_sum(mask_inv * scale, axis=self.axes)
         return position, tf.reduce_sum(mask_inv * scale, axis=1)
 
     def _compute_accept_prob(self, position, momentum, position_post,

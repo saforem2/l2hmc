@@ -45,6 +45,7 @@ except ImportError:
 #  import utils.gauge_model_helpers as helpers
 import utils.file_io as io
 
+from tensorflow.core.protobuf import rewriter_config_pb2 
 from tensorflow.python.client import timeline
 from scipy.stats import sem
 from collections import Counter, OrderedDict
@@ -252,19 +253,44 @@ class GaugeModel(object):
             if hvd.rank() == 0:               # AND rank == 0:
                 self.condition2 = True        # condition2: True
 
-    def _create_dir_structure(self, log_dir):
-        """Create self.files and directory structure."""
+    def _create_log_dirs(self, log_dir):
+        """Create root log_dir, run_info_dir, figs_dir."""
+        if self.using_hvd:
+            if hvd.rank() != 0:
+                return
+        if log_dir is None:
+            dirs = io.create_log_dir('gauge_logs_graph')
+        else:
+            dirs = io.check_log_dir(log_dir)
+
+        return dirs
+
+    def _make_dirs(self, dirs):
+        """Make directories if and only if hvd.rank == 0."""
         if self.using_hvd:
             if hvd.rank() != 0:
                 return
 
-        if self.condition1 or self.condition2:  # DEFINED IN: _create_attrs
-            if log_dir is None:
-                dirs = io.create_log_dir('gauge_logs_graph')
-            else:
-                dirs = io.check_log_dir(log_dir)
+        _ = [io.check_else_make_dir(d) for d in dirs]
 
-            self.log_dir, self.info_dir, self.figs_dir = dirs
+        return
+
+    def _create_dir_structure(self, log_dir):
+        """Create self.files and directory structure."""
+        #  if self.using_hvd:
+        #      if hvd.rank() != 0:
+        #          return
+
+        #  if self.condition1 or self.condition2:  # DEFINED IN: _create_attrs
+        #      if log_dir is None:
+        #          dirs = io.create_log_dir('gauge_logs_graph')
+        #      else:
+        #          dirs = io.check_log_dir(log_dir)
+        #
+        #      log_dir, info_dir, figs_dir = dirs
+        #      self.log_dir, self.info_dir, self.figs_dir = dirs
+        dirs = self._create_log_dirs(log_dir)
+        self.log_dir, self.info_dir, self.figs_dir = dirs
 
         self.eval_dir = os.path.join(self.log_dir, 'eval_info')
         self.samples_dir = os.path.join(self.eval_dir, 'samples')
@@ -274,13 +300,15 @@ class GaugeModel(object):
         self.train_obs_dir = os.path.join(self.obs_dir, 'training')
         self.ckpt_file = os.path.join(self.log_dir, 'gauge_model.ckpt')
 
-        def make_dirs(dirs):
-            _ = [io.check_else_make_dir(d) for d in dirs]
+        dirs =  [self.eval_dir, self.samples_dir, self.train_eval_dir,
+                 self.train_samples_dir, self.obs_dir, self.train_obs_dir]
 
-        make_dirs([self.eval_dir, self.samples_dir,
-                   self.train_eval_dir, self.train_samples_dir,
-                   self.obs_dir, self.train_obs_dir])
+        self._make_dirs(dirs)
 
+        #  make_dirs([self.eval_dir, self.samples_dir,
+        #             self.train_eval_dir, self.train_samples_dir,
+        #             self.obs_dir, self.train_obs_dir])
+        #
         self.files = {
             'parameters_file': os.path.join(self.info_dir, 'parameters.txt'),
             'run_info_file': os.path.join(self.info_dir, 'run_info.txt'),
@@ -635,7 +663,7 @@ class GaugeModel(object):
         with tf.name_scope('x_update'):
             x_, _, px, x_out = self.dynamics.apply_transition(x, beta)
         with tf.name_scope('z_update'):
-            z = tf.random_normal(tf.shape(x))  # Auxiliary variable
+            z = tf.random_normal(tf.shape(x), name='z')  # Auxiliary variable
             z_, _, pz, _ = self.dynamics.apply_transition(z, beta)
 
         if self.plaq_loss:
@@ -726,6 +754,8 @@ class GaugeModel(object):
 
         if config is None:
             self.config = tf.ConfigProto()
+            #  off = rewriter_config_pb2.RewriterConfig.OFF
+            #  self.config.graph_options.rewrite_options.arithmetic_optimization = off
         else:
             self.config = config
 
@@ -739,14 +769,16 @@ class GaugeModel(object):
             self.global_step.assign(1)
 
         with tf.name_scope('learning_rate'):
-            self.lr = tf.train.exponential_decay(
-                self.lr_init,
-                self.global_step,
-                self.lr_decay_steps,
-                self.lr_decay_rate,
-                staircase=True,
-                name='learning_rate'
-            )
+            self.lr = tf.placeholder(tf.float32, shape=[],
+                                     name='learning_rate')
+            #  self.lr = tf.train.exponential_decay(
+            #      self.lr_init,
+            #      self.global_step,
+            #      self.lr_decay_steps,
+            #      self.lr_decay_rate,
+            #      staircase=True,
+            #      name='learning_rate'
+            #  )
 
         with tf.name_scope('optimizer'):
             self.optimizer = tf.train.AdamOptimizer(
@@ -845,7 +877,7 @@ class GaugeModel(object):
         dash1 = (len(h_strf) + 1) * '-'
         self.train_header = dash0 + '\n' + h_strf + '\n' + dash1
 
-        self.sess.graph.finalize()
+        #  self.sess.graph.finalize()
 
     def train_profiler(self, 
                        train_steps,
@@ -924,8 +956,8 @@ class GaugeModel(object):
 
         initial_step = self._current_state['step']
 
-        self._current_state['lr'] = self.sess.run(self.lr)
-        lr_np = self._current_state['lr']
+        #  self._current_state['lr'] = self.sess.run(self.lr)
+        lr_np = np.float32(self._current_state['lr'])
 
         if hasattr(self.dynamics, 'alpha'):
             eps_op = self.dynamics.alpha
@@ -955,52 +987,66 @@ class GaugeModel(object):
                 beta_np = self.update_beta(step)
 
                 fd = {self.x: samples_np,
-                      self.beta: beta_np}
-
-                outputs = self.sess.run([
-                    self.train_op,         # apply gradients
-                    self.loss_op,          # calculate loss
-                    self.x_out,            # accept / reject proposed samples
-                    self.px,               # calculate accept. prob
-                    eps_op,                # evaluate current step size
-                    self.actions_op,       # calculate avg. actions
-                    self.plaqs_op,         # calculate avg. plaquettes
-                    self.charges_op,       # calculate top. charges
-                    self.lr,               # evaluate learning rate
-                ], feed_dict=fd)
-
-                loss_np = outputs[1]
-                samples_np = outputs[2]
-                px_np = outputs[3]
-                eps_np = outputs[4]
-                actions_np = outputs[5]
-                plaqs_np = outputs[6]
-                charges_np = outputs[7]
-                lr_np = outputs[8]
-
-                self.charges_arr.append(charges_np)
+                      self.beta: beta_np,
+                      self.lr: lr_np}
 
                 try:
-                    tunneling_events = np.sum(
-                        np.abs(self.charges_arr[-1] - self.charges_arr[-2])
+                    outputs = self.sess.run([
+                        self.train_op,         # apply gradients
+                        self.loss_op,          # calculate loss
+                        self.x_out,            # get new samples
+                        self.px,               # calculate accept. prob
+                        eps_op,                # evaluate current step size
+                        self.actions_op,       # calculate avg. actions
+                        self.plaqs_op,         # calculate avg. plaquettes
+                        self.charges_op,       # calculate top. charges
+                        #  self.lr,               # evaluate learning rate
+                    ], feed_dict=fd)
+
+                    loss_np = outputs[1]
+                    samples_np = outputs[2]
+                    px_np = outputs[3]
+                    eps_np = outputs[4]
+                    actions_np = outputs[5]
+                    plaqs_np = outputs[6]
+                    charges_np = outputs[7]
+                    #  lr_np = outputs[8]
+
+                    self.charges_arr.append(charges_np)
+                    try:
+                        tunneling_events = np.sum(
+                            np.abs(self.charges_arr[-1] - self.charges_arr[-2])
+                        )
+                    except:  # pylint: disable=bare-except
+                        tunneling_events = 0
+
+                    self._current_state['step'] = step
+                    self._current_state['beta'] = beta_np
+                    self._current_state['lr'] = lr_np
+
+                    key = (step, beta_np)
+                    self.charges_dict[key] = charges_np
+                    self.tunn_events_dict[key] = tunneling_events
+
+                    self.train_data_dict['loss'][key] = loss_np
+                    self.train_data_dict['actions'][key] = actions_np
+                    self.train_data_dict['plaqs'][key] = plaqs_np
+                    self.train_data_dict['charges'][key] = charges_np
+                    self.train_data_dict['tun_events'][key] = tunneling_events
+                    self.train_data_dict['accept_prob'][key] = px_np
+
+                except:  # pylint:disable=bare-except
+                    io.log("Ran into Inf value...")
+                    io.log("Resetting samples and decreasing "
+                           f"learning rate by 1/2 from: {lr_np} to {lr_np/2}.")
+                    samples_np = np.reshape(
+                        np.array(self.lattice.samples, dtype=np.float32),
+                        (self.num_samples, self.x_dim)
                     )
-                except:
-                    tunneling_events = 0
+                    lr_np = np.float32(lr_np / 2)
 
-                self._current_state['step'] = step
-                self._current_state['beta'] = beta_np
-                self._current_state['lr'] = lr_np
-
-                key = (step, beta_np)
-                self.charges_dict[key] = charges_np
-                self.tunn_events_dict[key] = tunneling_events
-
-                self.train_data_dict['loss'][key] = loss_np
-                self.train_data_dict['actions'][key] = actions_np
-                self.train_data_dict['plaqs'][key] = plaqs_np
-                self.train_data_dict['charges'][key] = charges_np
-                self.train_data_dict['tun_events'][key] = tunneling_events
-                self.train_data_dict['accept_prob'][key] = px_np
+                if step % self.lr_decay_steps == 0:
+                    lr_np *= self.lr_decay_rate
 
                 if step % self.print_steps == 0:
                     data_str = (f"{step:>5g}/{self.train_steps:<6g} "
@@ -1063,6 +1109,7 @@ class GaugeModel(object):
                 if step % self.save_steps == 0:
                     if self.condition1 or self.condition2:
                         self._save_model(samples=samples_np)
+                        self._plot_tun_events()
                         #  helpers.write_run_data(self.files['run_info_file'],
                         #                         self.data)
 
@@ -1098,7 +1145,8 @@ class GaugeModel(object):
                         summary_str = self.sess.run(
                             self.summary_op, feed_dict={
                                 self.x: samples_np,
-                                self.beta: beta_np
+                                self.beta: beta_np,
+                                self.lr: lr_np
                             }, options=options, run_metadata=run_metadata
                         )
                         self.writer.add_summary(summary_str,
@@ -1197,7 +1245,7 @@ class GaugeModel(object):
 
             fd = {
                 self.x: samples,
-                self.beta: beta
+                self.beta: beta,
             }
 
             samples, px, actions_np, plaqs_np, charges_np = self.sess.run([
@@ -1260,7 +1308,7 @@ class GaugeModel(object):
         _args = (run_steps, current_step, beta, therm_frac)
 
         self._save_run_info(samples_history, observables, stats, _args)
-        if plot and HAS_MATPLOTLIB:
+        if self._plot and HAS_MATPLOTLIB:
             self._plot_observables(observables, beta, current_step)
             self._plot_top_charges(charges_arr, beta, current_step)
             self._plot_top_charge_probs(charges_arr, beta, current_step)
@@ -1488,7 +1536,7 @@ class GaugeModel(object):
             total_counts = np.sum(list(counts.values()))
             _, ax = plt.subplots()
             ax.plot(list(counts.keys()),
-                    list(counts.values() / total_counts),
+                    np.array(list(counts.values()) / total_counts),
                     marker=MARKERS[idx],
                     color=COLORS[idx],
                     ls='',
@@ -1507,7 +1555,7 @@ class GaugeModel(object):
         total_counts = np.sum(list(counts.values()))
         _, ax = plt.subplots()
         ax.plot(list(all_counts.keys()),
-                list(all_counts.values() / total_counts),
+                np.array(list(all_counts.values()) / total_counts),
                 marker='o',
                 color='C0',
                 ls='',
@@ -1617,16 +1665,16 @@ class GaugeModel(object):
         save_data(charge_probs, charge_probs_file, name='charge_probs')
 
         actions_avg = np.mean(actions_arr)
-        actions_err = sem(actions_arr)
+        actions_err = sem(actions_arr, axis=None)
 
         plaqs_avg = np.mean(plaqs_arr)
-        plaqs_err = sem(plaqs_arr)
+        plaqs_err = sem(plaqs_arr, axis=None)
 
         q_avg = np.mean(charges_arr)
-        q_err = sem(charges_arr)
+        q_err = sem(charges_arr, axis=None)
 
         q2_avg = np.mean(charges_squared_arr)
-        q2_err = sem(charges_squared_arr)
+        q2_err = sem(charges_squared_arr, axis=None)
 
         _est_key = '  \nestimate +/- stderr'
 
@@ -1653,7 +1701,7 @@ class GaugeModel(object):
         }
 
         def format_stats(avgs, errs):
-            return [f'avg: {a:.4g} +/- {e:.6}' for (a, e) in zip(avgs, errs)]
+            return [f'avg: {a:.6g} +/- {e:.6}' for (a, e) in zip(avgs, errs)]
 
         keys = [f'sample {idx}' for idx in range(len(suscept_stats[0]))]
 
@@ -1883,6 +1931,8 @@ def main(FLAGS):
         params['eps_trainable'] = False
 
     config = tf.ConfigProto()
+    #  off = rewriter_config_pb2.RewriterConfig.OFF
+    #  config.graph_options.rewrite_options.arithmetic_optimization = off
 
     if FLAGS.gpu:
         print("Using gpu for training.")
@@ -1896,7 +1946,9 @@ def main(FLAGS):
     else:
         params['data_format'] = 'channels_last'
 
+    params['_plot'] = True
     if FLAGS.theta:
+        params['_plot'] = False
         io.log("Training on Theta @ ALCF...")
         params['data_format'] = 'channels_first'
         os.environ["KMP_BLOCKTIME"] = str(0)
@@ -1909,7 +1961,6 @@ def main(FLAGS):
 
     if HAS_HOROVOD and FLAGS.horovod:
         params['lr_init'] *= hvd.size()
-
 
     model = GaugeModel(params=params,
                        config=config,
