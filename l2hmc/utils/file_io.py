@@ -79,12 +79,7 @@ def _create_log_dir(base_name):
 
 def create_log_dir(base_name):
     """Create directory for storing information about experiment."""
-    try:
-        if HAS_HOROVOD and hvd.rank() != 0:
-            return -1
-        dirs = _create_log_dir(base_name)
-    except NameError:
-        dirs = _create_log_dir(base_name)
+    dirs = _create_log_dir(base_name)
 
     return dirs
 
@@ -107,12 +102,7 @@ def _check_log_dir(log_dir):
 
 def check_log_dir(log_dir):
     """Check that log_dir and subdirectories `run_info`, `figures` exist."""
-    try:
-        if HAS_HOROVOD and hvd.rank() != 0:
-            return -1
-        dirs = _check_log_dir(log_dir)
-    except NameError:
-        dirs = _check_log_dir(log_dir)
+    dirs = _check_log_dir(log_dir)
     return dirs
 
 
@@ -138,12 +128,7 @@ def _get_run_num(log_dir):
 
 def get_run_num(log_dir):
     """Determine the next sequential number to use for new run directory."""
-    try:
-        if HAS_HOROVOD and hvd.rank() != 0:
-            return -1
-        run_num = _get_run_num(log_dir)
-    except NameError:
-        run_num = _get_run_num(log_dir)
+    run_num = _get_run_num(log_dir)
 
     return run_num
 
@@ -166,10 +151,10 @@ def _make_run_dir(log_dir):
 
 def make_run_dir(log_dir):
     """Create directory for new run called `run_num` where `num` is unique."""
-    try:
-        if HAS_HOROVOD and hvd.rank() != 0:
-            return
-        run_dir = _make_run_dir(log_dir)
-    except NameError:
-        run_dir = _make_run_dir(log_dir)
+    #  try:
+    #      if HAS_HOROVOD and hvd.rank() != 0:
+    #          return
+    #      run_dir = _make_run_dir(log_dir)
+    #  except NameError:
+    run_dir = _make_run_dir(log_dir)
     return run_dir
