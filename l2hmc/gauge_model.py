@@ -45,7 +45,7 @@ except ImportError:
 #  import utils.gauge_model_helpers as helpers
 import utils.file_io as io
 
-from tensorflow.core.protobuf import rewriter_config_pb2 
+from tensorflow.core.protobuf import rewriter_config_pb2
 from tensorflow.python.client import timeline
 from scipy.stats import sem
 from collections import Counter, OrderedDict
@@ -257,7 +257,8 @@ class GaugeModel(object):
         """Create root log_dir, run_info_dir, figs_dir."""
         if self.using_hvd:
             if hvd.rank() != 0:
-                return
+                return -1
+
         if log_dir is None:
             dirs = io.create_log_dir('gauge_logs_graph')
         else:
@@ -277,9 +278,9 @@ class GaugeModel(object):
 
     def _create_dir_structure(self, log_dir):
         """Create self.files and directory structure."""
-        #  if self.using_hvd:
-        #      if hvd.rank() != 0:
-        #          return
+        if self.using_hvd:
+            if hvd.rank() != 0:
+                return
 
         #  if self.condition1 or self.condition2:  # DEFINED IN: _create_attrs
         #      if log_dir is None:
@@ -1036,14 +1037,15 @@ class GaugeModel(object):
                     self.train_data_dict['accept_prob'][key] = px_np
 
                 except:  # pylint:disable=bare-except
+                    lr_new = np.float32(lr_np * self.lr_decay_rate)
                     io.log("Ran into Inf value...")
                     io.log("Resetting samples and decreasing "
-                           f"learning rate by 1/2 from: {lr_np} to {lr_np/2}.")
+                           f"learning rate from: {lr_np} to {lr_new}.")
                     samples_np = np.reshape(
                         np.array(self.lattice.samples, dtype=np.float32),
                         (self.num_samples, self.x_dim)
                     )
-                    lr_np = np.float32(lr_np / 2)
+                    #  lr_np = np.float32(lr_np / 2)
 
                 if step % self.lr_decay_steps == 0:
                     lr_np *= self.lr_decay_rate
@@ -1155,7 +1157,8 @@ class GaugeModel(object):
                             tag = f'metadata_step_{step}'
                             self.writer.add_run_metadata(run_metadata, tag=tag,
                                                          global_step=step)
-                    self.writer.flush()
+                    if self.condition1 or self.condition1:
+                        self.writer.flush()
 
             train_time = time.time() - start_time
             io.log("Training complete!")
@@ -1177,8 +1180,7 @@ class GaugeModel(object):
             run_steps,
             current_step=None,
             beta=None,
-            therm_frac=10,
-            plot=True):
+            therm_frac=10):
         """Run the simulation to generate samples and calculate observables.
 
         Args:
