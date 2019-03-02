@@ -18,13 +18,21 @@ import tensorflow as tf
 
 from network.conv_net import ConvNet2D, ConvNet3D
 from network.generic_net import GenericNet
-
 from lattice.lattice import GaugeLattice
-
 
 # pylint:disable=invalid-name
 def _exp(x, name=None):
     return tf.check_numerics(tf.exp(x), f'{name} is NaN')
+
+
+def flatten_tensor(tensor):
+    """Flattens tensor along axes 1:, since axis=0 indexes sample in batch.
+
+    Example: for a tensor of shape [b, x, y, t] -->
+        returns a tensor of shape [b, x * y * t]
+    """
+    batch_size = tensor.shape[0]
+    return tf.reshape(tensor, shape=(batch_size, -1))
 
 
 class GaugeDynamics(tf.keras.Model):
@@ -271,6 +279,7 @@ class GaugeDynamics(tf.keras.Model):
             dN = tf.shape(position)[0]
             j = tf.zeros((dN,))
 
+            # Apply augmented leapfrog steps
             def body(x, v, beta, t, j):
                 new_x, new_v, logdet = lf_fn(x, v, beta, t)
                 return new_x, new_v, beta, t+1, j+logdet
@@ -331,11 +340,11 @@ class GaugeDynamics(tf.keras.Model):
 
     def _backward_lf(self, position, momentum, beta, i):
         """One backward augmented leapfrog step."""
-        # pylint: disable=invalid-name
 
         # Reversed index/sinusoidal time
         with tf.name_scope('backward_lf'):
-            t = self._format_time(i, tile=tf.shape(position)[0])
+            t = self._format_time(self.num_steps - i - 1,
+                                  tile=tf.shape(position)[0])
 
             mask, mask_inv = self._get_mask(self.num_steps - i - 1)
             sumlogdet = 0.
@@ -494,49 +503,34 @@ class GaugeDynamics(tf.keras.Model):
         return self.ts[i]
 
     def _format_time(self, t, tile=1):
-        trig_t = tf.squeeze([
-            tf.cos(2 * np.pi * t / self.num_steps),
-            tf.sin(2 * np.pi * t / self.num_steps),
-        ])
+        """Format time as [cos(..), sin(...)]."""
+        with tf.name_scope('format_time'):
+            trig_t = tf.squeeze([
+                tf.cos(2 * np.pi * t / self.num_steps),
+                tf.sin(2 * np.pi * t / self.num_steps),
+            ])
 
         return tf.tile(tf.expand_dims(trig_t, 0), (tile, 1))
 
     def _construct_masks(self):
+        """Construct masks to determine which indices to update."""
         mask_per_step = []
 
-        for t in range(self.num_steps):
-            idx = npr.permutation(np.arange(self.x_dim))[:self.x_dim // 2]
-            mask = np.zeros((self.x_dim,))
-            mask[idx] = 1
-            #  mask = tf.reshape(mask, shape=self.lattice.links.shape)
-            mask_per_step.append(mask)
+        with tf.name_scope('construct_masks'):
+            for t in range(self.num_steps):
+                idx = npr.permutation(np.arange(self.x_dim))[:self.x_dim // 2]
+                mask = np.zeros((self.x_dim,))
+                mask[idx] = 1
+                #  mask = tf.reshape(mask, shape=self.lattice.links.shape)
+                mask_per_step.append(mask)
 
-        self.masks = tf.constant(np.stack(mask_per_step), dtype=tf.float32)
+            self.masks = tf.constant(np.stack(mask_per_step), dtype=tf.float32)
 
     def _get_mask(self, step):
-        m = tf.gather(self.masks, tf.cast(step, dtype=tf.int32))
+        with tf.name_scope('get_mask'):
+            m = tf.gather(self.masks, tf.cast(step, dtype=tf.int32))
 
         return m, 1. - m
-
-    #  def _construct_masks(self):
-    #      """Construct different binary masks for different time steps."""
-    #      self.masks = []
-    #      with tf.name_scope('construct_masks'):
-    #          for _ in range(self.num_steps):
-    #              #  Need to use npr here because tf would generate different
-    #              #  random values across different `sess.run`
-    #              idx = npr.permutation(np.arange(self.x_dim))[:self.x_dim // 2]
-    #              mask = np.zeros((self.x_dim,))
-    #              mask[idx] = 1.
-    #              mask = tf.constant(mask, dtype=tf.float32)
-    #              #  if conv_net:
-    #              #  mask = tf.reshape(mask, shape=self.lattice.links.shape)
-    #              self.masks.append(mask[None, :])
-    #
-    #  def _get_mask(self, i):
-    #      """Get binary masks for i-th augmented leapfrog step."""
-    #      m = self.masks[i]
-    #      return m, 1. - m
 
     def potential_energy(self, position, beta):
         """Compute potential energy using `self.potential` and beta."""
@@ -574,11 +568,3 @@ class GaugeDynamics(tf.keras.Model):
                                     position)[0]
         return grad
 
-    def flatten_tensor(self, tensor):
-        """Flattens tensor along axes 1:, since axis=0 indexes sample in batch.
-
-        Example: for a tensor of shape [b, x, y, t] -->
-            returns a tensor of shape [b, x * y * t]
-        """
-        batch_size = tensor.shape[0]
-        return tf.reshape(tensor, shape=(batch_size, -1))

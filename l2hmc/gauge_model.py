@@ -13,23 +13,24 @@ to a U(1) lattice gauge theory model.
 -----------------------------------------------------------------------------
 ==============================================================================
 """
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
+from __future__ import absolute_import, division, print_function
+
 # pylint: disable=no-member, too-many-arguments, invalid-name
 import os
 import sys
-import time
-import pickle
 import json
-import argparse
+import time
 import shlex
+import pickle
+import argparse
 
 import numpy as np
+
 import tensorflow as tf
 
 try:
     import horovod.tensorflow as hvd
+
     HAS_HOROVOD = True
 
 except ImportError:
@@ -37,6 +38,7 @@ except ImportError:
 
 try:
     import matplotlib.pyplot as plt
+
     HAS_MATPLOTLIB = True
 except ImportError:
     HAS_MATPLOTLIB = False
@@ -45,19 +47,19 @@ except ImportError:
 #  import utils.gauge_model_helpers as helpers
 import utils.file_io as io
 
-from tensorflow.core.protobuf import rewriter_config_pb2
-from tensorflow.python.client import timeline
-from scipy.stats import sem
 from collections import Counter, OrderedDict
-from tensorflow.python import debug as tf_debug
 from lattice.lattice import GaugeLattice, project_angle, u1_plaq_exact
 from utils.tf_logging import variable_summaries
+from dynamics.gauge_dynamics import GaugeDynamics
+
+from scipy.stats import sem
+from tensorflow.python import debug as tf_debug
+from tensorflow.python.client import timeline
+from tensorflow.core.protobuf import rewriter_config_pb2
 
 if HAS_MATPLOTLIB:
     from utils.plot_helper import plot_multiple_lines
 
-from network.conv_net import ConvNet2D, ConvNet3D
-from dynamics.gauge_dynamics import GaugeDynamics
 
 tfe = tf.contrib.eager
 tf.logging.set_verbosity(tf.logging.INFO)
@@ -967,7 +969,7 @@ class GaugeModel(object):
         data_str = (f"{0:>5g}/{self.train_steps:<6g} "   # step / train_steps
                     f"{0.:^9.4g} "                       # loss
                     f"{0.:^9.4g} "                       # time / step
-                    f"{0.:^9.4g}"                        # accept prob
+                    f"{0.:^9.4g} "                       # accept prob
                     f"{self.eps:^9.4g} "                 # initial eps
                     f"{self.beta_init:^9.4g} "           # initial beta
                     f"{0.:^9.4g} "                       # avg. action
@@ -990,61 +992,61 @@ class GaugeModel(object):
                       self.beta: beta_np,
                       self.lr: lr_np}
 
+                #  try:
+                outputs = self.sess.run([
+                    self.train_op,         # apply gradients
+                    self.loss_op,          # calculate loss
+                    self.x_out,            # get new samples
+                    self.px,               # calculate accept. prob
+                    eps_op,                # evaluate current step size
+                    self.actions_op,       # calculate avg. actions
+                    self.plaqs_op,         # calculate avg. plaquettes
+                    self.charges_op,       # calculate top. charges
+                    #  self.lr,               # evaluate learning rate
+                ], feed_dict=fd)
+
+                loss_np = outputs[1]
+                samples_np = outputs[2]
+                px_np = outputs[3]
+                eps_np = outputs[4]
+                actions_np = outputs[5]
+                plaqs_np = outputs[6]
+                charges_np = outputs[7]
+                #  lr_np = outputs[8]
+
+                self.charges_arr.append(charges_np)
                 try:
-                    outputs = self.sess.run([
-                        self.train_op,         # apply gradients
-                        self.loss_op,          # calculate loss
-                        self.x_out,            # get new samples
-                        self.px,               # calculate accept. prob
-                        eps_op,                # evaluate current step size
-                        self.actions_op,       # calculate avg. actions
-                        self.plaqs_op,         # calculate avg. plaquettes
-                        self.charges_op,       # calculate top. charges
-                        #  self.lr,               # evaluate learning rate
-                    ], feed_dict=fd)
-
-                    loss_np = outputs[1]
-                    samples_np = outputs[2]
-                    px_np = outputs[3]
-                    eps_np = outputs[4]
-                    actions_np = outputs[5]
-                    plaqs_np = outputs[6]
-                    charges_np = outputs[7]
-                    #  lr_np = outputs[8]
-
-                    self.charges_arr.append(charges_np)
-                    try:
-                        tunneling_events = np.sum(
-                            np.abs(self.charges_arr[-1] - self.charges_arr[-2])
-                        )
-                    except:  # pylint: disable=bare-except
-                        tunneling_events = 0
-
-                    self._current_state['step'] = step
-                    self._current_state['beta'] = beta_np
-                    self._current_state['lr'] = lr_np
-
-                    key = (step, beta_np)
-                    self.charges_dict[key] = charges_np
-                    self.tunn_events_dict[key] = tunneling_events
-
-                    self.train_data_dict['loss'][key] = loss_np
-                    self.train_data_dict['actions'][key] = actions_np
-                    self.train_data_dict['plaqs'][key] = plaqs_np
-                    self.train_data_dict['charges'][key] = charges_np
-                    self.train_data_dict['tun_events'][key] = tunneling_events
-                    self.train_data_dict['accept_prob'][key] = px_np
-
-                except:  # pylint:disable=bare-except
-                    lr_new = np.float32(lr_np * self.lr_decay_rate)
-                    io.log("Ran into Inf value...")
-                    io.log("Resetting samples and decreasing "
-                           f"learning rate from: {lr_np} to {lr_new}.")
-                    samples_np = np.reshape(
-                        np.array(self.lattice.samples, dtype=np.float32),
-                        (self.num_samples, self.x_dim)
+                    tunneling_events = np.sum(
+                        np.abs(self.charges_arr[-1] - self.charges_arr[-2])
                     )
-                    #  lr_np = np.float32(lr_np / 2)
+                except:  # pylint: disable=bare-except
+                    tunneling_events = 0
+
+                self._current_state['step'] = step
+                self._current_state['beta'] = beta_np
+                self._current_state['lr'] = lr_np
+
+                key = (step, beta_np)
+                self.charges_dict[key] = charges_np
+                self.tunn_events_dict[key] = tunneling_events
+
+                self.train_data_dict['loss'][key] = loss_np
+                self.train_data_dict['actions'][key] = actions_np
+                self.train_data_dict['plaqs'][key] = plaqs_np
+                self.train_data_dict['charges'][key] = charges_np
+                self.train_data_dict['tun_events'][key] = tunneling_events
+                self.train_data_dict['accept_prob'][key] = px_np
+
+                #  except:  # pylint:disable=bare-except
+                #      lr_new = np.float32(lr_np * self.lr_decay_rate)
+                #      io.log("Ran into Inf value...")
+                #      io.log("Resetting samples and decreasing "
+                #             f"learning rate from: {lr_np} to {lr_new}.")
+                #      samples_np = np.reshape(
+                #          np.array(self.lattice.samples, dtype=np.float32),
+                #          (self.num_samples, self.x_dim)
+                #      )
+                #      #  lr_np = np.float32(lr_np / 2)
 
                 if step % self.lr_decay_steps == 0:
                     lr_np *= self.lr_decay_rate
@@ -1218,9 +1220,8 @@ class GaugeModel(object):
 
         header = ("{:^12s}{:^10s}{:^10s}{:^10s}"
                   "{:^10s}{:^10s}{:^10s}{:^10s}{:^10s}")
-        header = header.format("STEP", "t/STEP", "ACCEPT %",
-                               "EPS", "BETA", "ACTIONS",
-                               "PLAQS", "PLAQ EXACT", "dQ")
+        header = header.format("STEP", "t/STEP", "ACCEPT %", "EPS", "BETA",
+                               "ACTIONS", "PLAQS", "PLAQ INF", "dQ")
         dash0 = (len(header) + 1) * '='
         dash1 = (len(header) + 1) * '-'
         header_str = dash0 + '\n' + header + '\n' + dash1
@@ -1648,6 +1649,7 @@ class GaugeModel(object):
                     np.save(out_file, np.array(data))
             except:
                 import pdb
+
                 pdb.set_trace()
                 #  raise IOError(f'Unable to save {name} to {out_file}.')
 
@@ -1921,6 +1923,7 @@ class GaugeModel(object):
 def main(FLAGS):
     """Main method for creating/training U(1) gauge model from command line."""
     if HAS_HOROVOD and FLAGS.horovod:
+        io.log("INFO: USING HOROVOD")
         hvd.init()
 
     params = PARAMS  # use default parameters if no command line args passed
@@ -1993,7 +1996,9 @@ def main(FLAGS):
 
     except (KeyboardInterrupt, SystemExit):
         io.log("\nKeyboardInterrupt detected! \n")
+
         import pdb
+
         pdb.set_trace()
 
 
