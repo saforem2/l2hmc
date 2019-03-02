@@ -369,6 +369,11 @@ class GaugeModel(object):
                                           potential_fn=self.potential_fn,
                                           **kwargs)
 
+        #  with tf.name_scope('hmc_dynamics'):
+        #      self.hmc_dynamics = GaugeDynamics(lattice=self.lattice,
+        #                                        potential_fn=self.potential_fn,
+        #                                        **kwargs)
+
     def _create_tensors(self):
         """Initialize tensors (and placeholders if executing in graph mode)."""
         self.batch_size = self.lattice.samples.shape[0]
@@ -1469,7 +1474,7 @@ class GaugeModel(object):
         #  tun_events_keys = np.array(list(self.tunn_events_dict.keys()))
         tun_events_vals = np.array(list(self.tunn_events_dict.values()))
         _, ax = plt.subplots()
-        ax.plot(tun_events_vals, marker='.', fillstyle='none', ls='',
+        ax.plot(tun_events_vals, marker='o', ls='', alpha=0.6,
                 label=f'total across {self.num_samples} samples')
         ax.set_xlabel('Training step', fontsize=14)
         ax.set_ylabel('Number of events', fontsize=14)
