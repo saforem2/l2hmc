@@ -46,14 +46,6 @@ def log(s, nl=True):
         print(s, end='\n' if nl else '')
 
 
-def check_else_make_dir(d):
-    """If directory `d` doesn't exist, it is created."""
-    if not os.path.isdir(d):
-        log(f"Creating directory: {d}")
-        #  print(f"Creating directory: {d}.")
-        os.makedirs(d)
-
-
 def save_params_to_pkl_file(params, out_dir):
     """Save `params` dictionary to `parameters.pkl` in `out_dir.`"""
     check_else_make_dir(out_dir)
@@ -62,6 +54,16 @@ def save_params_to_pkl_file(params, out_dir):
     log(f"Saving params to: {params_file}.")
     with open(params_file, 'wb') as f:
         pickle.dump(params, f)
+
+
+def check_else_make_dir(d):
+    """If directory `d` doesn't exist, it is created."""
+    if not os.path.isdir(d):
+        log(f"Creating directory: {d}")
+        #  print(f"Creating directory: {d}.")
+        os.makedirs(d)
+    else:
+        log(f"Directory {d} already exists.")
 
 
 def _create_log_dir(base_name):
@@ -107,8 +109,9 @@ def check_log_dir(log_dir):
 
 
 def _get_run_num(log_dir):
-    if not os.path.isdir(log_dir):
-        os.makedirs(log_dir)
+    #  if not os.path.isdir(log_dir):
+    #      os.makedirs(log_dir)
+    check_else_make_dir(log_dir)
 
     contents = os.listdir(log_dir)
     if contents in ([], ['.DS_Store']):
