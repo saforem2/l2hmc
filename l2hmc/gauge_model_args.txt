@@ -5,19 +5,19 @@
 --space_size 8                      # spatial extent of lattice
 --link_type 'U1'                    # gauge group, one of 'SU2', 'SU3', 'U1'
 --dim 2                             # dimensionality of lattice
---num_samples 50                    # number of samples per batch
---num_steps 5                       # number of leapfrog steps in MD update
---eps 0.25                          # step size in leapfrog integrator
+--num_samples 128                   # number of samples per batch
+--num_steps 10                      # number of leapfrog steps in MD update
+--eps 0.1                           # step size in leapfrog integrator
 --lr_init 0.001                     # initial value of learning rate
---lr_decay_steps 1000               # steps after which lr is decayed by lr_decay_rate
---lr_decay_rate 0.96                # factor by which lr is decayed by after lr_decay_steps
+--lr_decay_steps 5000               # steps after which lr is decayed by lr_decay_rate
+--lr_decay_rate 0.98                # factor by which lr is decayed by after lr_decay_steps
 --annealing                         # when passed, will anneal beta during training
 --beta_init 2.                      # initial value of beta used in annealing schedule
 --beta_final 4.                     # final value of beta used in annealing schedule
---train_steps 20000                 # number of training steps
---save_steps 1000                   # number of steps after which to save model checkpoint
+--train_steps 25000                 # number of training steps
+--save_steps 5000                   # number of steps after which to save model checkpoint
 --print_steps 1                     # number of steps after which to display information during training
---training_samples_steps 1000       # number of steps after which the sampler is evaluated at beta_final to monitor performance during training
+--training_samples_steps 5000       # number of steps after which the sampler is evaluated at beta_final to monitor performance during training
 --training_samples_length 500       # number of steps the sampler is evaluated for when run during training
 --network_arch 'conv3D'             # string specifying network architecture to use, one of 'conv3D', 'conv2D', 'generic'
 --metric 'cos_diff'                 # metric to use for measuring difference between samples, one of 'l1', 'l2', 'cos2', 'cos', 'cos_diff'
@@ -25,3 +25,5 @@
 --plaq_loss                         # whether or not to use the plaquette difference term in the loss function
 --summaries                         # flag that when passed will create summary objects viewable in tensorflow
 --eps_trainable                     # flag that when passed allows the step size `eps` to be a trainable parameter
+--clip_grads                        # flag that when passed will clip gradients by global norm
+--clip_val 1.                       # global norm cutoff value for gradient clipping 

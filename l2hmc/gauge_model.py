@@ -776,16 +776,16 @@ class GaugeModel(object):
             self.global_step.assign(1)
 
         with tf.name_scope('learning_rate'):
-            self.lr = tf.placeholder(tf.float32, shape=[],
-                                     name='learning_rate')
-            #  self.lr = tf.train.exponential_decay(
-            #      self.lr_init,
-            #      self.global_step,
-            #      self.lr_decay_steps,
-            #      self.lr_decay_rate,
-            #      staircase=True,
-            #      name='learning_rate'
-            #  )
+            #  self.lr = tf.placeholder(tf.float32, shape=[],
+            #                           name='learning_rate')
+            self.lr = tf.train.exponential_decay(
+                self.lr_init,
+                self.global_step,
+                self.lr_decay_steps,
+                self.lr_decay_rate,
+                staircase=True,
+                name='learning_rate'
+            )
 
         with tf.name_scope('optimizer'):
             self.optimizer = tf.train.AdamOptimizer(
@@ -1424,7 +1424,7 @@ class GaugeModel(object):
             'out_file': actions_plt_file,
             'markers': False,
             'lines': True,
-            'alpha': 0.8,
+            'alpha': 0.6,
             'title': title_str,
             'legend': False,
             'ret': False,
@@ -1510,7 +1510,8 @@ class GaugeModel(object):
                         marker=MARKERS[idx],
                         color=COLORS[idx],
                         ls='',
-                        fillstyle='none',
+                        #  fillstyle='none',
+                        alpha=0.6,
                         label=f'sample {idx}')
             _ = ax.legend(loc='best')
             _ = ax.set_xlabel('Step', fontsize=14)
@@ -1562,10 +1563,12 @@ class GaugeModel(object):
         total_counts = np.sum(list(counts.values()))
         _, ax = plt.subplots()
         ax.plot(list(all_counts.keys()),
-                np.array(list(all_counts.values()) / total_counts),
+                np.array(list(all_counts.values()) / (total_counts *
+                                                      self.num_samples)),
                 marker='o',
                 color='C0',
                 ls='',
+                alpha=0.6,
                 label=f'total across {self.num_samples} samples')
         _ = ax.legend(loc='best')
         _ = ax.set_xlabel('Topological charge', fontsize=14)
