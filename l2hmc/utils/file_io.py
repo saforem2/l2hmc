@@ -59,9 +59,16 @@ def save_params_to_pkl_file(params, out_dir):
 def check_else_make_dir(d):
     """If directory `d` doesn't exist, it is created."""
     if not os.path.isdir(d):
-        log(f"Creating directory: {d}")
-        #  print(f"Creating directory: {d}.")
-        os.makedirs(d)
+        try:
+            log(f"Creating directory: {d}")
+            #  print(f"Creating directory: {d}.")
+            os.makedirs(d)
+        except OSError as e:
+            pass
+            #  if e.errno == errno.EEXIST and os.path.isdir(d):
+            #      pass
+            #  else:
+            #      raise
     else:
         log(f"Directory {d} already exists.")
 

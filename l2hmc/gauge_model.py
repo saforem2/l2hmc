@@ -257,6 +257,7 @@ class GaugeModel(object):
 
     def _create_log_dir(self, root_dir='gauge_logs_graph'):
         root_log_dir = os.path.join('..', root_dir)
+        io.check_else_make_dir(root_log_dir)
         run_dirs = [i for i in os.listdir(root_log_dir) if 'DS_Store' not in i]
         run_nums = [int(i.split('_')[-1]) for i in run_dirs]
         run_num = sorted(run_nums)[-1] + 1
@@ -279,22 +280,22 @@ class GaugeModel(object):
         #          return
 
         #  if self.condition1 or self.condition2:  # DEFINED IN: _create_attrs
-        #  if log_dir is None:
-        #      dirs = io.create_log_dir('gauge_logs_graph')
-        #  else:
-        #      dirs = io.check_log_dir(log_dir)
+        if log_dir is None:
+            dirs = io.create_log_dir('gauge_logs_graph')
+        else:
+            dirs = io.check_log_dir(log_dir)
 
-        #  self.log_dir, self.info_dir, self.figs_dir = dirs
+        self.log_dir, self.info_dir, self.figs_dir = dirs
         #  dirs = self._create_log_dirs(log_dir)
         #  self.log_dir, self.info_dir, self.figs_dir = dirs
-        if log_dir is None:
-            self.log_dir = self._create_log_dir()
-        else:
-            self.log_dir = log_dir
-            io.check_else_make_dir(self.log_dir)
+        #  if log_dir is None:
+        #      self.log_dir = self._create_log_dir()
+        #  else:
+        #      self.log_dir = log_dir
+        #      io.check_else_make_dir(self.log_dir)
 
-        self.info_dir = os.path.join(self.log_dir, 'run_info')
-        self.figs_dir = os.path.join(self.log_dir, 'figures')
+        #  self.info_dir = os.path.join(self.log_dir, 'run_info')
+        #  self.figs_dir = os.path.join(self.log_dir, 'figures')
         self.eval_dir = os.path.join(self.log_dir, 'eval_info')
         self.samples_dir = os.path.join(self.eval_dir, 'samples')
         self.train_eval_dir = os.path.join(self.eval_dir, 'training')
