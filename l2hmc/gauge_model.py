@@ -119,6 +119,9 @@ PARAMS = {
     'clip_value': 10.,
 }
 
+##############################################################################
+#                       Helper functions
+##############################################################################
 def create_log_dir(root_dir='gauge_logs_graph'):
     root_log_dir = os.path.join(os.path.split(ROOT_DIR)[0], root_dir)
     io.check_else_make_dir(root_log_dir)
@@ -1976,8 +1979,8 @@ def main(FLAGS):
         config.intra_op_parallelism_threads = OMP_NUM_THREADS
         config.inter_op_parallelism_threads = 1
 
-    if HAS_HOROVOD and FLAGS.horovod:
-        params['lr_init'] *= hvd.size()
+    #  if HAS_HOROVOD and FLAGS.horovod:
+    #      params['lr_init'] *= hvd.size()
 
     model = GaugeModel(params=params,
                        config=config,
