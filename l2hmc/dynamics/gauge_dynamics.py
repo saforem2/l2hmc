@@ -20,8 +20,9 @@ from network.conv_net import ConvNet2D, ConvNet3D
 from network.generic_net import GenericNet
 from lattice.lattice import GaugeLattice
 
+
 # pylint:disable=invalid-name
-def _exp(x, name=None):
+def exp(x, name=None):
     return tf.check_numerics(tf.exp(x), f'{name} is NaN')
 
 
@@ -35,6 +36,7 @@ def flatten_tensor(tensor):
     return tf.reshape(tensor, shape=(batch_size, -1))
 
 
+# pylint:disable=invalid-name, too-many-instance-attributes
 class GaugeDynamics(tf.keras.Model):
     """Dynamics engine of naive L2HMC sampler."""
     def __init__(self, lattice, potential_fn, **kwargs):
@@ -390,9 +392,9 @@ class GaugeDynamics(tf.keras.Model):
             with tf.name_scope('transformed'):
                 transformed *= self.eps
             with tf.name_scope('momentum'):
-                momentum = (momentum * _exp(scale, name='vf_scale')
+                momentum = (momentum * exp(scale, name='vf_scale')
                             - 0.5 * self.eps
-                            * (_exp(transformed, name='vf_transformed')
+                            * (exp(transformed, name='vf_transformed')
                                * grad - translation))
 
         #  return momentum, tf.reduce_sum(scale, axis=self.axes)
@@ -414,8 +416,8 @@ class GaugeDynamics(tf.keras.Model):
 
             with tf.name_scope('position'):
                 position = (mask * position + mask_inv
-                            * (position * _exp(scale, 'xf_scale') + self.eps
-                               * (_exp(transformed, 'xf_transformed')
+                            * (position * exp(scale, 'xf_scale') + self.eps
+                               * (exp(transformed, 'xf_transformed')
                                   * momentum + translation)))
 
         return position, tf.reduce_sum(mask_inv * scale, axis=1)
@@ -438,10 +440,10 @@ class GaugeDynamics(tf.keras.Model):
             with tf.name_scope('transformed'):
                 transformed *= self.eps
             with tf.name_scope('momentum'):
-                momentum = (_exp(scale, 'vb_scale')
+                momentum = (exp(scale, 'vb_scale')
                             * (momentum + 0.5 * self.eps
-                             * (_exp(transformed, 'vb_transformed')
-                                * grad - translation)))
+                               * (exp(transformed, 'vb_transformed')
+                                  * grad - translation)))
 
         return momentum, tf.reduce_sum(scale, axis=1)
 
@@ -461,10 +463,9 @@ class GaugeDynamics(tf.keras.Model):
                 transformed *= self.eps
 
             with tf.name_scope('position'):
-                position = (mask * position + mask_inv
-                            * _exp(scale, 'xb_scale')
+                position = (mask * position + mask_inv * exp(scale, 'xb_scale')
                             * (position - self.eps
-                               * (_exp(transformed, 'xb_transformed')
+                               * (exp(transformed, 'xb_transformed')
                                   * momentum + translation)))
 
         return position, tf.reduce_sum(mask_inv * scale, axis=1)
@@ -481,7 +482,7 @@ class GaugeDynamics(tf.keras.Model):
                                              beta)
 
             with tf.name_scope('prob'):
-                prob = _exp(tf.minimum(
+                prob = exp(tf.minimum(
                     (old_hamil - new_hamil + sumlogdet), 0.
                 ), 'accept_prob')
 
@@ -567,4 +568,3 @@ class GaugeDynamics(tf.keras.Model):
                 grad = tf.gradients(self.potential_energy(position, beta),
                                     position)[0]
         return grad
-

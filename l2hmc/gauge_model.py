@@ -77,25 +77,25 @@ LINESTYLES = 5000 * ['-', '--', ':', '-.', '-', '--', ':', '-.', '-', '--']
 
 PARAMS = {
 ###################### Lattice parameters ############################
-    'time_size': 12,
-    'space_size': 12,
+    'time_size': 8,
+    'space_size': 8,
     'link_type': 'U1',
     'dim': 2,
-    'num_samples': 6,
+    'num_samples': 20,
     'rand': False,
     'data_format': 'channels_last',
 ###################### Leapfrog parameters ###########################
-    'num_steps': 1,
+    'num_steps': 5,
     'eps': 0.2,
-    'loss_scale': .1,
+    'loss_scale': 1.,
 ###################### Learning rate parameters ######################
     'lr_init': 1e-3,
     'lr_decay_steps': 500,
     'lr_decay_rate': 0.96,
 ###################### Annealing rate parameters #####################
     'annealing': True,
-    'annealing_steps': 200,
-    'annealing_factor': 0.97,
+    #  'annealing_steps': 200,
+    #  'annealing_factor': 0.97,
     #  'beta': 2.,
     'beta_init': 2.,
     'beta_final': 6.,
@@ -111,7 +111,7 @@ PARAMS = {
     'network_arch': 'conv3D',
     'hmc': False,
     'eps_trainable': True,
-    'metric': 'l2',
+    'metric': 'cos_diff',
     'aux': True,
     'plaq_loss': True,
     'summaries': True,
@@ -193,7 +193,7 @@ class GaugeModel(object):
     # --------------------- LEAPFROG PARAMETERS ------------------------------
         self.num_steps = params.get('num_steps', 5)
         self.eps = params.get('eps', 0.1)
-        self.loss_scale = params.get('loss_scale', 0.1)
+        self.loss_scale = params.get('loss_scale', 1.)
     # --------------------- LEARNING RATE PARAMETERS -------------------------
         self.lr_init = params.get('lr_init', 1e-3)
         self.lr_decay_steps = params.get(
@@ -689,12 +689,12 @@ class GaugeModel(object):
             with tf.name_scope('x_loss'):
                 x_loss = (tf.reduce_sum(self.metric_fn(x, x_),
                                         axis=1, name='x_loss')
-                          + tf.reduce_sum(x_dq)) * px + eps
+                          - tf.reduce_sum(x_dq)) * px + eps
 
             with tf.name_scope('z_loss'):
                 z_loss = (tf.reduce_sum(self.metric_fn(z, z_),
                                         axis=1, name='z_loss')
-                          + tf.reduce_sum(z_dq)) * pz + eps
+                          - tf.reduce_sum(z_dq)) * pz + eps
 
             loss = tf.reduce_mean((1. / x_loss + 1. / z_loss) * self.loss_scale
                                   - (x_loss + z_loss) / self.loss_scale,
@@ -816,10 +816,10 @@ class GaugeModel(object):
             self.loss_op, self.grads, self.x_out, self.px = output
 
             t_diff = time.time() - t0
-            io.log(f"  done. took: {t_diff:4.3g} s.")
+            io.log(f"    done. took: {t_diff:4.3g} s.")
 
         with tf.name_scope('train'):
-            io.log(f"    Creating gradient operations...")
+            io.log(f"  Creating gradient operations...")
             t0 = time.time()
 
             grads_and_vars = zip(self.grads, self.dynamics.trainable_variables)
@@ -835,7 +835,7 @@ class GaugeModel(object):
             t0 = time.time()
             self._create_summaries()
             t_diff = time.time() - t0
-            io.log(f'  done. took: {t_diff:4.3g} s to create.')
+            io.log(f'    done. took: {t_diff:4.3g} s to create.')
             io.log(f'done. took: {time.time() - start_time:4.3g} s to build.')
             io.log(sep_str)
         else:
@@ -886,8 +886,8 @@ class GaugeModel(object):
 
         h_str = ("{:^12s}{:^10s}{:^10s}{:^10s}{:^10s}"
                  "{:^10s}{:^10s}{:^10s}{:^10s}{:^10s}{:^10s}")
-        h_strf = h_str.format("STEP", "LOSS", "t/STEP", "ACCEPT %", "EPS",
-                              "BETA", "ACTION", "PLAQ", "PLAQ INF", "dQ", "LR")
+        h_strf = h_str.format("STEP", "LOSS", "t/STEP", "% ACC", "EPS",
+                              "BETA", "ACTION", "PLAQ", "(EXACT)", "dQ", "LR")
         dash0 = (len(h_strf) + 1) * '-'
         dash1 = (len(h_strf) + 1) * '-'
         self.train_header = dash0 + '\n' + h_strf + '\n' + dash1
@@ -972,12 +972,14 @@ class GaugeModel(object):
         initial_step = self._current_state['step']
 
         #  self._current_state['lr'] = self.sess.run(self.lr)
-        lr_np = np.float32(self._current_state['lr'])
+        #  lr_np = np.float32(self._current_state['lr'])
 
-        if hasattr(self.dynamics, 'alpha'):
-            eps_op = self.dynamics.alpha
-        else:
-            eps_op = self.dynamics.eps
+        #  if hasattr(self.dynamics, 'alpha'):
+        #      eps_op = self.dynamics.alpha
+        #      io.log("Using `dynamics.alpha`.")
+        #  else:
+        #      eps_op = self.dynamics.eps
+        #      io.log("Using `dynamics.eps`.")
 
         data_str = (f"{0:>5g}/{self.train_steps:<6g} "   # step / train_steps
                     f"{0.:^9.4g} "                       # loss
@@ -989,7 +991,7 @@ class GaugeModel(object):
                     f"{0.:^9.4g} "                       # avg. plaq
                     f"{u1_plaq_exact(beta_np):^9.4g} "   # exact plaq
                     f"{0.:^9.4g} "                       # tunneling events
-                    f"{lr_np:^9.4g}")                    # learning rate
+                    f"{self.lr_init:^9.4g}")             # learning rate
 
         try:
             io.log(self.train_header)
@@ -1002,8 +1004,8 @@ class GaugeModel(object):
                 beta_np = self.update_beta(step)
 
                 fd = {self.x: samples_np,
-                      self.beta: beta_np,
-                      self.lr: lr_np}
+                      self.beta: beta_np}
+                      #  self.lr: lr_np}
 
                 #  try:
                 outputs = self.sess.run([
@@ -1011,11 +1013,11 @@ class GaugeModel(object):
                     self.loss_op,          # calculate loss
                     self.x_out,            # get new samples
                     self.px,               # calculate accept. prob
-                    eps_op,                # evaluate current step size
+                    self.dynamics.eps,     # evaluate current step size
                     self.actions_op,       # calculate avg. actions
                     self.plaqs_op,         # calculate avg. plaquettes
                     self.charges_op,       # calculate top. charges
-                    #  self.lr,               # evaluate learning rate
+                    self.lr,               # evaluate learning rate
                 ], feed_dict=fd)
 
                 loss_np = outputs[1]
@@ -1025,7 +1027,7 @@ class GaugeModel(object):
                 actions_np = outputs[5]
                 plaqs_np = outputs[6]
                 charges_np = outputs[7]
-                #  lr_np = outputs[8]
+                lr_np = outputs[8]
 
                 self.charges_arr.append(charges_np)
                 try:
@@ -1061,8 +1063,8 @@ class GaugeModel(object):
                 #      )
                 #      #  lr_np = np.float32(lr_np / 2)
 
-                if step % self.lr_decay_steps == 0:
-                    lr_np *= self.lr_decay_rate
+                #  if step % self.lr_decay_steps == 0:
+                #      lr_np *= self.lr_decay_rate
 
                 if step % self.print_steps == 0:
                     data_str = (f"{step:>5g}/{self.train_steps:<6g} "
@@ -1122,10 +1124,9 @@ class GaugeModel(object):
                         io.log(80 * '-')
                         io.log(self.train_header)
 
-                if step % self.save_steps == 0:
+                if (step +1) % self.save_steps == 0:
                     if self.condition1 or self.condition2:
                         self._save_model(samples=samples_np)
-                        self._plot_tun_events()
                         #  helpers.write_run_data(self.files['run_info_file'],
                         #                         self.data)
 
@@ -1162,7 +1163,7 @@ class GaugeModel(object):
                             self.summary_op, feed_dict={
                                 self.x: samples_np,
                                 self.beta: beta_np,
-                                self.lr: lr_np
+                                #  self.lr: lr_np
                             }, options=options, run_metadata=run_metadata
                         )
                         self.writer.add_summary(summary_str,
@@ -1233,8 +1234,8 @@ class GaugeModel(object):
 
         header = ("{:^12s}{:^10s}{:^10s}{:^10s}"
                   "{:^10s}{:^10s}{:^10s}{:^10s}{:^10s}")
-        header = header.format("STEP", "t/STEP", "ACCEPT %", "EPS", "BETA",
-                               "ACTIONS", "PLAQS", "PLAQ INF", "dQ")
+        header = header.format("STEP", "t/STEP", "% ACC", "EPS", "BETA",
+                               "ACTIONS", "PLAQS", "(EXACT)", "dQ")
         dash0 = (len(header) + 1) * '='
         dash1 = (len(header) + 1) * '-'
         header_str = dash0 + '\n' + header + '\n' + dash1
@@ -1299,7 +1300,7 @@ class GaugeModel(object):
                             f'{np.mean(actions_np):^9.4g} '
                             f'{np.mean(plaqs_np):^9.4g} '
                             f'{plaq_exact:^9.4g} '
-                            f'{int(tunneling_events):^9.4g}')
+                            f'{int(tunneling_events):^9.4g} ')
 
                 io.log(eval_str)
                 #  log('\n')
@@ -1323,7 +1324,9 @@ class GaugeModel(object):
         _args = (run_steps, current_step, beta, therm_frac)
 
         self._save_run_info(samples_history, observables, stats, _args)
-        if self._plot and HAS_MATPLOTLIB:
+        #  if self._plot and HAS_MATPLOTLIB:
+        if HAS_MATPLOTLIB:
+            self._plot_tun_events()
             self._plot_observables(observables, beta, current_step)
             self._plot_top_charges(charges_arr, beta, current_step)
             self._plot_top_charge_probs(charges_arr, beta, current_step)
@@ -1398,7 +1401,7 @@ class GaugeModel(object):
     def _plot_observables(self, observables, beta, current_step=None):
         """Plot observables stored in `observables`."""
         if not HAS_MATPLOTLIB:
-            return -1
+            return
 
         io.log("Plotting observables...")
         #  samples_history = observables[0]
@@ -1447,8 +1450,13 @@ class GaugeModel(object):
         kwargs['ret'] = True
         _, ax = plot_multiple_lines(steps_arr, plaqs_arr.T, x_label='Step',
                                     y_label='Avg. plaquette', **kwargs)
+
         _ = ax.axhline(y=u1_plaq_exact(beta),
-                       color='r', ls='--', lw=2.5, label='exact')
+                       color='darkgrey', ls=':', lw=2.5, label='exact')
+
+        _ = ax.plot(steps_arr, plaqs_arr.T.mean(axis=0),
+                    color='k', label='average', alpha=0.75)
+
         plt.savefig(plaqs_plt_file, dpi=400, bbox_inches='tight')
 
         ######################################################################
@@ -1479,6 +1487,8 @@ class GaugeModel(object):
 
     def _plot_tun_events(self):
         """Plot num. of tunneling events vs. training step after training."""
+        if not HAS_MATPLOTLIB:
+            return
         #  tun_events_keys = np.array(list(self.tunn_events_dict.keys()))
         tun_events_vals = np.array(list(self.tunn_events_dict.values()))
         _, ax = plt.subplots()
@@ -1497,7 +1507,7 @@ class GaugeModel(object):
     def _plot_top_charges(self, charges, beta, current_step=None):
         """Plot top. charge history using samples generated from `self.run`."""
         if not HAS_MATPLOTLIB:
-            return -1
+            return
 
         io.log("Plotting topological charge vs. step for each sample...")
 
@@ -1534,7 +1544,7 @@ class GaugeModel(object):
     def _plot_top_charge_probs(self, charges, beta, current_step=None):
         """Create scatter plot of frequency of topological charge values."""
         if not HAS_MATPLOTLIB:
-            return -1
+            return
 
         io.log("Plotting top. charge probability vs. value")
         out_dir, key = self._get_plot_dir(charges, beta, current_step)
@@ -1719,14 +1729,19 @@ class GaugeModel(object):
             _est_key: {}
         }
 
-        def format_stats(avgs, errs):
-            return [f'avg: {a:.6g} +/- {e:.6}' for (a, e) in zip(avgs, errs)]
+        def format_stats(avgs, errs, name=None):
+            return [
+                f'{name}: {a:.6g} +/- {e:.6}' for (a, e) in zip(avgs, errs)
+            ]
 
         keys = [f'sample {idx}' for idx in range(len(suscept_stats[0]))]
 
-        suscept_vals = format_stats(suscept_stats[0], suscept_stats[1])
-        actions_vals = format_stats(actions_stats[0], actions_stats[1])
-        plaqs_vals = format_stats(plaqs_stats[0], plaqs_stats[1])
+        suscept_vals = format_stats(suscept_stats[0], suscept_stats[1],
+                                    '< Q^2 >')
+        actions_vals = format_stats(actions_stats[0], actions_stats[1],
+                                    '< action >')
+        plaqs_vals = format_stats(plaqs_stats[0], plaqs_stats[1],
+                                  '< plaq >')
 
         for k, v in zip(keys, suscept_vals):
             suscept_stats_strings[_est_key][k] = v
@@ -1801,7 +1816,7 @@ class GaugeModel(object):
         io.log(sep_str0)
         io.log('')
 
-        io.write(sep_str0, statistics_txt_file, 'w')
+        io.write(sep_str0, statistics_txt_file, 'a')
         io.write(str0, statistics_txt_file, 'a')
         io.write(therm_str, statistics_txt_file, 'a')
         io.write(sep_str0, statistics_txt_file, 'a')
@@ -1942,7 +1957,8 @@ def main(FLAGS):
         io.log("INFO: USING HOROVOD")
         hvd.init()
 
-    params = PARAMS  # use default parameters if no command line args passed
+    #  params = PARAMS  # use default parameters if no command line args passed
+    params = {}
 
     for key, val in FLAGS.__dict__.items():
         params[key] = val
@@ -1970,7 +1986,7 @@ def main(FLAGS):
     if FLAGS.theta:
         params['_plot'] = False
         io.log("Training on Theta @ ALCF...")
-        params['data_format'] = 'channels_first'
+        params['data_format'] = 'channels_last'
         os.environ["KMP_BLOCKTIME"] = str(0)
         #  os.environ["KMP_AFFINITY"] = "granularity=fine,verbose,compact,1,0"
         # NOTE: KMP affinity taken care of by passing -cc depth to aprun call
@@ -2072,10 +2088,10 @@ if __name__ == '__main__':
                         help=("Step size to use in leapfrog integrator. "
                               "(Default: 0.1)"))
 
-    parser.add_argument("--loss_scale", type=float, default=0.1,
+    parser.add_argument("--loss_scale", type=float, default=1.,
                         required=False, dest="loss_scale",
                         help=("Scaling factor to be used in loss function. "
-                              "(lambda in Eq. 7 of paper). (Default: 0.1)"))
+                              "(lambda in Eq. 7 of paper). (Default: 1.)"))
 
 # ========================= Learning rate parameters ==========================
 
