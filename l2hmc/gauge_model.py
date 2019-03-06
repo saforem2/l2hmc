@@ -42,6 +42,7 @@ except ImportError:
 
 
 #  import utils.gauge_model_helpers as helpers
+from definitions import ROOT_DIR
 import utils.file_io as io
 
 from collections import Counter, OrderedDict
@@ -119,7 +120,7 @@ PARAMS = {
 }
 
 def create_log_dir(root_dir='gauge_logs_graph'):
-    root_log_dir = os.path.join('..', root_dir)
+    root_log_dir = os.path.join(os.path.split(ROOT_DIR)[0], root_dir)
     io.check_else_make_dir(root_log_dir)
     try:
         run_dirs = [i for i in os.listdir(root_log_dir) if 'run' in i]
@@ -665,8 +666,6 @@ class GaugeModel(object):
             x_out: Output samples obtained after Metropolis-Hastings
                 accept/reject step.
         """
-        io.log("    Creating loss...")
-        t0 = time.time()
         eps = 1e-4
         with tf.name_scope('x_update'):
             x_, _, px, x_out = self.dynamics.apply_transition(x, beta)
@@ -698,9 +697,6 @@ class GaugeModel(object):
                                   - (x_loss + z_loss) / self.loss_scale,
                                   axis=0, name='loss')
 
-        t_diff = time.time() - t0
-        io.log(f"    done. took: {t_diff:4.3g} s.")
-
         return loss, x_out, px
 
     def _calc_loss_and_grads(self, x, beta):
@@ -718,8 +714,6 @@ class GaugeModel(object):
             accept_prob: Acceptance probabilities used in Metropolis-Hastings
                 accept/reject step.
         """
-        io.log(f"  Creating gradient operations...")
-        t0 = time.time()
 
         if tf.executing_eagerly():
             with tf.name_scope('grads'):
@@ -735,9 +729,6 @@ class GaugeModel(object):
                     #  grads = tf.check_numerics(
                     #      grads, 'check_numerics caught bad gradients'
                     #  )
-
-        t_diff = time.time() - t0
-        io.log(f"  done. took: {t_diff:4.3g} s")
 
         return loss, grads, x_out, accept_prob
 
@@ -757,6 +748,7 @@ class GaugeModel(object):
         """Build graph for TensorFlow."""
         sep_str = 80 * '-'
         s = f"Building graph... (started at: {time.ctime()})"
+        start_time = time.time()
         io.log(sep_str)
         io.log(s)
 
@@ -797,7 +789,6 @@ class GaugeModel(object):
             if self.using_hvd:
                 self.optimizer = hvd.DistributedOptimizer(self.optimizer)
 
-        start_time = time.time()
         with tf.name_scope('plaq_observables'):
             with tf.name_scope('plaq_sums'):
                 self.plaq_sums_op = self.calc_plaq_sums(self.x)
@@ -815,14 +806,26 @@ class GaugeModel(object):
             return
 
         with tf.name_scope('loss'):
+            io.log("  Creating loss...")
+            t0 = time.time()
+
             output = self._calc_loss_and_grads(x=self.x, beta=self.beta)
             self.loss_op, self.grads, self.x_out, self.px = output
 
+            t_diff = time.time() - t0
+            io.log(f"  done. took: {t_diff:4.3g} s.")
+
         with tf.name_scope('train'):
+            io.log(f"    Creating gradient operations...")
+            t0 = time.time()
+
             grads_and_vars = zip(self.grads, self.dynamics.trainable_variables)
             self.train_op = self.optimizer.apply_gradients(
                 grads_and_vars, global_step=self.global_step, name='train_op'
             )
+
+            t_diff = time.time() - t0
+            io.log(f"    done. took: {t_diff:4.3g} s")
 
         if self.summaries:
             io.log("  Creating summaries...")
@@ -830,10 +833,11 @@ class GaugeModel(object):
             self._create_summaries()
             t_diff = time.time() - t0
             io.log(f'  done. took: {t_diff:4.3g} s to create.')
-            io.log(f'done. took: {time.time() - start_time:4.3g} s to create.')
+            io.log(f'done. took: {time.time() - start_time:4.3g} s to build.')
             io.log(sep_str)
         else:
-            t_diff = 0.
+            io.log(f'done. took: {time.time() - start_time:4.3g} s to build.')
+            io.log(sep_str)
             #  log(80 * '-' + '\n', nl=False)
 
         self.sess.run(tf.global_variables_initializer())
