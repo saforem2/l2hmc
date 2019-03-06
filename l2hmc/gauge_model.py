@@ -30,15 +30,12 @@ import tensorflow as tf
 
 try:
     import horovod.tensorflow as hvd
-
     HAS_HOROVOD = True
-
 except ImportError:
     HAS_HOROVOD = False
 
 try:
     import matplotlib.pyplot as plt
-
     HAS_MATPLOTLIB = True
 except ImportError:
     HAS_MATPLOTLIB = False
@@ -68,9 +65,9 @@ GLOBAL_SEED = 42
 np.random.seed(GLOBAL_SEED)
 tf.set_random_seed(GLOBAL_SEED)
 
-COLORS = 500 * ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9']
-MARKERS = 500 * ['o', 's', 'x', 'v', 'h', '^', 'p', '<', 'd', '>', 'o']
-LINESTYLES = 500 * ['-', '--', ':', '-.', '-', '--', ':', '-.', '-', '--']
+COLORS = 5000 * ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9']
+MARKERS = 5000 * ['o', 's', 'x', 'v', 'h', '^', 'p', '<', 'd', '>', 'o']
+LINESTYLES = 5000 * ['-', '--', ':', '-.', '-', '--', ':', '-.', '-', '--']
 
 
 #  MODULE_PATH = os.path.abspath(os.path.join('..'))
@@ -120,6 +117,29 @@ PARAMS = {
     'clip_grads': False,
     'clip_value': 10.,
 }
+
+def create_log_dir(root_dir='gauge_logs_graph'):
+    root_log_dir = os.path.join('..', root_dir)
+    io.check_else_make_dir(root_log_dir)
+    try:
+        run_dirs = [i for i in os.listdir(root_log_dir) if 'run' in i]
+        run_nums = [int(i.split('_')[-1]) for i in run_dirs]
+        run_num = sorted(run_nums)[-1] + 1
+    except:
+        run_num = 1
+
+    log_dir = os.path.join(root_log_dir, f'run_{run_num}')
+    try:
+        io.check_else_make_dir(log_dir)
+    except:
+        pass
+
+    return log_dir
+
+
+def make_dirs(dirs):
+    """Make directories if and only if hvd.rank == 0."""
+    _ = [io.check_else_make_dir(d) for d in dirs]
 
 
 def tf_accept(x, _x, px):
@@ -255,24 +275,6 @@ class GaugeModel(object):
             if hvd.rank() == 0:               # AND rank == 0:
                 self.condition2 = True        # condition2: True
 
-    def _create_log_dir(self, root_dir='gauge_logs_graph'):
-        root_log_dir = os.path.join('..', root_dir)
-        io.check_else_make_dir(root_log_dir)
-        run_dirs = [i for i in os.listdir(root_log_dir) if 'DS_Store' not in i]
-        run_nums = [int(i.split('_')[-1]) for i in run_dirs]
-        run_num = sorted(run_nums)[-1] + 1
-        log_dir = os.path.join(root_log_dir, f'run_{run_num}')
-        if not os.path.isdir(log_dir):
-            os.makedirs(log_dir)
-        else:
-            io.log(f"Directory {log_dir} already exists.")
-
-        return log_dir
-
-    def _make_dirs(self, dirs):
-        """Make directories if and only if hvd.rank == 0."""
-        _ = [io.check_else_make_dir(d) for d in dirs]
-
     def _create_dir_structure(self, log_dir):
         """Create self.files and directory structure."""
         #  if self.using_hvd:
@@ -280,22 +282,22 @@ class GaugeModel(object):
         #          return
 
         #  if self.condition1 or self.condition2:  # DEFINED IN: _create_attrs
-        if log_dir is None:
-            dirs = io.create_log_dir('gauge_logs_graph')
-        else:
-            dirs = io.check_log_dir(log_dir)
-
-        self.log_dir, self.info_dir, self.figs_dir = dirs
+        #  if log_dir is None:
+        #      dirs = io.create_log_dir('gauge_logs_graph')
+        #  else:
+        #      dirs = io.check_log_dir(log_dir)
+        #
+        #  self.log_dir, self.info_dir, self.figs_dir = dirs
         #  dirs = self._create_log_dirs(log_dir)
         #  self.log_dir, self.info_dir, self.figs_dir = dirs
-        #  if log_dir is None:
-        #      self.log_dir = self._create_log_dir()
-        #  else:
-        #      self.log_dir = log_dir
-        #      io.check_else_make_dir(self.log_dir)
+        if log_dir is None:
+            self.log_dir = create_log_dir()
+        else:
+            self.log_dir = log_dir
+            io.check_else_make_dir(self.log_dir)
 
-        #  self.info_dir = os.path.join(self.log_dir, 'run_info')
-        #  self.figs_dir = os.path.join(self.log_dir, 'figures')
+        self.info_dir = os.path.join(self.log_dir, 'run_info')
+        self.figs_dir = os.path.join(self.log_dir, 'figures')
         self.eval_dir = os.path.join(self.log_dir, 'eval_info')
         self.samples_dir = os.path.join(self.eval_dir, 'samples')
         self.train_eval_dir = os.path.join(self.eval_dir, 'training')
@@ -308,7 +310,7 @@ class GaugeModel(object):
                 self.train_eval_dir, self.train_samples_dir, self.obs_dir,
                 self.train_obs_dir]
 
-        self._make_dirs(dirs)
+        make_dirs(dirs)
 
         self.files = {
             'parameters_file': os.path.join(self.info_dir, 'parameters.txt'),

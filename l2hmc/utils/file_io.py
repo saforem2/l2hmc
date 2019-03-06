@@ -61,14 +61,9 @@ def check_else_make_dir(d):
     if not os.path.isdir(d):
         try:
             log(f"Creating directory: {d}")
-            #  print(f"Creating directory: {d}.")
             os.makedirs(d)
-        except OSError as e:
+        except OSError:
             pass
-            #  if e.errno == errno.EEXIST and os.path.isdir(d):
-            #      pass
-            #  else:
-            #      raise
     else:
         log(f"Directory {d} already exists.")
 
@@ -98,14 +93,10 @@ def _check_log_dir(log_dir):
     if not os.path.isdir(log_dir):
         raise ValueError(f'Unable to locate {log_dir}, exiting.')
     else:
-        if not log_dir.endswith('/'):
-            log_dir += '/'
-        info_dir = log_dir + 'run_info/'
-        figs_dir = log_dir + 'figures/'
-        if not os.path.isdir(info_dir):
-            os.makedirs(info_dir)
-        if not os.path.isdir(figs_dir):
-            os.makedirs(figs_dir)
+        info_dir = os.path.join(log_dir, 'run_info')
+        figs_dir = os.path.join(log_dir, 'figures')
+        check_else_make_dir(info_dir)
+        check_else_make_dir(figs_dir)
     return log_dir, info_dir, figs_dir
 
 
@@ -145,17 +136,19 @@ def get_run_num(log_dir):
 
 def _make_run_dir(log_dir):
     """Create directory for new run called `run_num` where `num` is unique."""
-    if log_dir.endswith('/'):
-        _dir = log_dir
-    else:
-        _dir = log_dir + '/'
-    run_num = get_run_num(_dir)
-    run_dir = _dir + f'run_{run_num}/'
-    if os.path.isdir(run_dir):
-        raise f'Directory: {run_dir} already exists, exiting!'
-    else:
-        log(f'Creating directory for new run: {run_dir}')
-        os.makedirs(run_dir)
+    #  if log_dir.endswith('/'):
+    #      _dir = log_dir
+    #  else:
+    #      _dir = log_dir + '/'
+    run_num = get_run_num(log_dir)
+    #  run_dir = _dir + f'run_{run_num}/'
+    run_dir = os.path.join(log_dir, f'run_{run_num}')
+    check_else_make_dir(run_dir)
+    #  if os.path.isdir(run_dir):
+    #      raise f'Directory: {run_dir} already exists, exiting!'
+    #  else:
+    #      log(f'Creating directory for new run: {run_dir}')
+    #      os.makedirs(run_dir)
     return run_dir
 
 
