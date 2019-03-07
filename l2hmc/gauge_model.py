@@ -374,11 +374,6 @@ class GaugeModel(object):
                                           potential_fn=self.potential_fn,
                                           **kwargs)
 
-        #  with tf.name_scope('hmc_dynamics'):
-        #      self.hmc_dynamics = GaugeDynamics(lattice=self.lattice,
-        #                                        potential_fn=self.potential_fn,
-        #                                        **kwargs)
-
     def _create_tensors(self):
         """Initialize tensors (and placeholders if executing in graph mode)."""
         self.batch_size = self.lattice.samples.shape[0]
@@ -388,9 +383,9 @@ class GaugeModel(object):
 
         if not tf.executing_eagerly():
             self.beta = tf.placeholder(tf.float32, shape=(), name='beta')
-
-            self.x = tf.placeholder(tf.float32,
-                                    (self.batch_size, self.x_dim), name='x')
+            self.x = tf.placeholder(tf.float32, (None, self.x_dim), name='x')
+            #  self.x = tf.placeholder(tf.float32,
+            #                          (self.batch_size, self.x_dim), name='x')
             #  if self.aux:
             #      self.z = tf.placeholder(tf.float32, tf.shape(self.x),
             #      name='z')
@@ -629,7 +624,7 @@ class GaugeModel(object):
     def calc_top_charges_diff(self, x1, x2):
         """Calculate difference in topological charges between x1 and x2."""
         with tf.name_scope('calc_top_charges_diff'):
-            dq = self.calc_top_charges(x1) - self.calc_top_charges(x2)
+            dq = tf.abs(self.calc_top_charges(x1) - self.calc_top_charges(x2))
         return dq
 
     def _create_observables_ops(self):
@@ -660,14 +655,18 @@ class GaugeModel(object):
         Args:
             x: Input tensor of shape (self.num_samples, self.lattice.num_links)
                 containing batch of GaugeLattice links variables.
-            beta: Inverse coupling strength.
+            beta (float): Inverse coupling strength.
 
         Returns:
-            loss: Operation for calculating the total loss.
-            px: Acceptance probabilities from Metropolis-Hastings accept/reject
-                step.
+            loss (float): Operation for calculating the total loss.
+            px (array-like): Acceptance probabilities from Metropolis-Hastings
+                accept/reject step. Has shape: (self.num_samples,)
             x_out: Output samples obtained after Metropolis-Hastings
                 accept/reject step.
+
+        NOTE: 
+            If proposed configuration is accepted following Metropolis-Hastings
+            accept/reject step, x_ and x_out are equivalent.
         """
         eps = 1e-4
         with tf.name_scope('x_update'):
@@ -677,8 +676,8 @@ class GaugeModel(object):
             z_, _, pz, _ = self.dynamics.apply_transition(z, beta)
 
         if self.plaq_loss:
-            x_dq = self.calc_top_charges_diff(x, x_)
-            z_dq = self.calc_top_charges_diff(z, z_)
+            x_dq = self.calc_top_charges_diff(x_, x)
+            z_dq = self.calc_top_charges_diff(z_, z)
 
         else:
             x_dq = 0.
@@ -687,14 +686,17 @@ class GaugeModel(object):
         # Add eps for numerical stability; following released impl
         with tf.name_scope('calc_loss'):
             with tf.name_scope('x_loss'):
-                x_loss = (tf.reduce_sum(self.metric_fn(x, x_),
-                                        axis=1, name='x_loss')
-                          - tf.reduce_sum(x_dq)) * px + eps
+                x_loss = ((tf.reduce_sum(self.metric_fn(x, x_), axis=1)
+                           + x_dq) * px + eps)
+                #  x_loss = (tf.reduce_sum(self.metric_fn(x, x_), axis=1,
+                #  name='x_loss') - x_dq) * px + eps
 
             with tf.name_scope('z_loss'):
-                z_loss = (tf.reduce_sum(self.metric_fn(z, z_),
-                                        axis=1, name='z_loss')
-                          - tf.reduce_sum(z_dq)) * pz + eps
+                z_loss = ((tf.reduce_sum(self.metric_fn(z, z_), axis=1)
+                           + z_dq) * pz + eps)
+                #  z_loss = (tf.reduce_sum(self.metric_fn(z, z_),
+                #                          axis=1, name='z_loss')
+                #            - tf.reduce_sum(z_dq)) * pz + eps
 
             loss = tf.reduce_mean((1. / x_loss + 1. / z_loss) * self.loss_scale
                                   - (x_loss + z_loss) / self.loss_scale,
@@ -1005,9 +1007,7 @@ class GaugeModel(object):
 
                 fd = {self.x: samples_np,
                       self.beta: beta_np}
-                      #  self.lr: lr_np}
 
-                #  try:
                 outputs = self.sess.run([
                     self.train_op,         # apply gradients
                     self.loss_op,          # calculate loss
