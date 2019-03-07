@@ -7,14 +7,14 @@
 --dim 2                        # dimensionality of lattice
 --num_samples 64               # number of samples per batch
 --num_steps 5                  # number of leapfrog steps in MD update
---eps 0.2                      # step size in leapfrog integrator
+--eps 0.4                      # step size in leapfrog integrator
 --lr_init 0.001                # initial value of learning rate
 --lr_decay_steps 1000          # steps after which lr is decayed by lr_decay_rate
---lr_decay_rate 0.96           # factor by which lr is decayed by after lr_decay_steps
+--lr_decay_rate 0.98           # factor by which lr is decayed by after lr_decay_steps
 --annealing                    # when passed, will anneal beta during training
 --beta_init 2.                 # initial value of beta used in annealing schedule
 --beta_final 4.                # final value of beta used in annealing schedule
---train_steps 10000            # number of training steps
+--train_steps 5000             # number of training steps
 --save_steps 1000              # "number of steps after which" to save model checkpoint
 --print_steps 1                # "" to display information during training
 --training_samples_steps 1000  # "" the sampler is evaluated at beta_final 
