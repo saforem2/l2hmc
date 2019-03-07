@@ -164,19 +164,89 @@ class GaugeModel(object):
         """Initialization method."""
         np.random.seed(GLOBAL_SEED)
         tf.set_random_seed(GLOBAL_SEED)
-        tf.enable_resource_variables()
+        #  tf.enable_resource_variables()
 
+        ####################################################################
+        # Create instance attributes from key, val pairs in `params`.
+        ####################################################################
         self._create_attrs(params)
-        self._create_dir_structure(log_dir)
-        self._write_run_parameters(_print=True)
-        self._create_lattice()
-        self._create_tensors()
-        self._create_dynamics()
-        self._create_metric_fn()
-        #  self._create_observables_ops()
 
+        ####################################################################
+        # Create necessary directories for holding checkpoints, data, etc.
+        ####################################################################
+        self._create_dir_structure(log_dir)
+
+        ####################################################################
+        # Write relevant instance attributes to human readable .txt file.
+        ####################################################################
+        self._write_run_parameters(_print=True)
+
+        ####################################################################
+        # Create lattice object.
+        ####################################################################
+        with tf.name_scope('lattice'):
+            self.lattice = self._create_lattice()
+
+            #  self._create_tensors()
+            self.batch_size = self.lattice.samples.shape[0]
+            self.x_dim = self.lattice.num_links
+            self.samples = tf.convert_to_tensor(self.lattice.samples,
+                                                dtype=tf.float32)
+
+        #####################################################################
+        # Create placeholders for input data.
+        #####################################################################
+        with tf.name_scope('inputs'):
+            if not tf.executing_eagerly():
+                self.x = tf.placeholder(dtype=tf.float32,
+                                        shape=(None, self.x_dim),
+                                        name='x')
+
+                self.beta = tf.placeholder(dtype=tf.float32,
+                                           shape=(),
+                                           name='beta')
+            else:
+                self.beta = self.beta_init
+
+        #####################################################################
+        # Create dynamics object responsible for performing L2HMC sampling.
+        #####################################################################
+        with tf.name_scope('dynamics'):
+            self.dynamics, self.potential_fn = self._create_dynamics(
+                lattice=self.lattice,
+                samples=self.samples,
+                hmc=self.hmc,
+                kwargs=None
+            )
+
+        #####################################################################
+        # Create metric function for measuring `distance` between configs.
+        #####################################################################
+        with tf.name_scope('metric_fn'):
+            self.metric_fn = self._create_metric_fn(self.metric)
+
+        #####################################################################
+        # Create operations for calculating plaquette observables.
+        #####################################################################
+        with tf.name_scope('plaq_observables'):
+            with tf.name_scope('plaq_sums'):
+                self.plaq_sums_op = self._calc_plaq_sums(self.x)
+            with tf.name_scope('actions'):
+                self.actions_op = self._calc_total_actions(self.x)
+            with tf.name_scope('avg_plaqs'):
+                self.plaqs_op = self._calc_avg_plaqs(self.x)
+            with tf.name_scope('top_charges'):
+                self.charges_op = self._calc_top_charges(self.x)
+
+        #####################################################################
+        # If restore, load from most recently saved checkpoint in `log_dir`.
+        #####################################################################
         if restore:
             self._restore_model(log_dir, sess, config)
+
+        #####################################################################
+        # Otherwise, build graph.
+        #####################################################################
         else:
             if not tf.executing_eagerly():
                 self.build_graph(sess, config)
@@ -342,57 +412,6 @@ class GaugeModel(object):
             ),
         }
 
-    def _create_lattice(self):
-        with tf.name_scope('lattice'):
-            self.lattice = GaugeLattice(time_size=self.time_size,
-                                        space_size=self.space_size,
-                                        dim=self.dim,
-                                        link_type=self.link_type,
-                                        num_samples=self.num_samples,
-                                        rand=self.rand)
-
-    def _create_dynamics(self, kwargs=None):
-        """Initialize dynamics object."""
-        if kwargs is None:
-            kwargs = {
-                'eps': self.eps,
-                'hmc': self.hmc,
-                'network_arch': self.network_arch,
-                'num_steps': self.num_steps,
-                'eps_trainable': self.eps_trainable,
-                'data_format': self.data_format,
-            }
-        if self.hmc:
-            kwargs['network_arch'] = None
-            kwargs['data_format'] = None
-
-        with tf.name_scope('potential_fn'):
-            self.potential_fn = self.lattice.get_energy_function(self.samples)
-
-        with tf.name_scope('dynamics'):
-            self.dynamics = GaugeDynamics(lattice=self.lattice,
-                                          potential_fn=self.potential_fn,
-                                          **kwargs)
-
-    def _create_tensors(self):
-        """Initialize tensors (and placeholders if executing in graph mode)."""
-        self.batch_size = self.lattice.samples.shape[0]
-        self.x_dim = self.lattice.num_links
-        self.samples = tf.convert_to_tensor(self.lattice.samples,
-                                            dtype=tf.float32)
-
-        if not tf.executing_eagerly():
-            self.beta = tf.placeholder(tf.float32, shape=(), name='beta')
-            self.x = tf.placeholder(tf.float32, (None, self.x_dim), name='x')
-            #  self.x = tf.placeholder(tf.float32,
-            #                          (self.batch_size, self.x_dim), name='x')
-            #  if self.aux:
-            #      self.z = tf.placeholder(tf.float32, tf.shape(self.x),
-            #      name='z')
-
-        else:
-            self.beta = self.beta_init
-
     def _restore_model(self, log_dir, sess, config):
         """Restore model from previous run contained in `log_dir`."""
         if self.using_hvd:
@@ -529,53 +548,90 @@ class GaugeModel(object):
         _ = [io.write(s, self.files['parameters_file'], 'a') for s in strings]
         io.write(sep_str, self.files['parameters_file'], 'a')
 
-    def _create_summaries(self):
-        """Create summary objects for logging in TensorBoard."""
-        if self.using_hvd:
-            if hvd.rank() != 0:
-                return
+    def _create_lattice(self):
+        """Create GaugeLattice object."""
+        return GaugeLattice(time_size=self.time_size,
+                            space_size=self.space_size,
+                            dim=self.dim,
+                            link_type=self.link_type,
+                            num_samples=self.num_samples,
+                            rand=self.rand)
 
-        ld = self.log_dir
-        self.summary_writer = tf.contrib.summary.create_file_writer(ld)
+    def _create_dynamics(self, lattice, samples, **kwargs):
+        """Initialize dynamics object."""
+        #  def _create_dynamics(self, lattice, samples, hmc=False,
+        #  kwargs=None):
+        default_kwargs = {
+            'eps': self.eps,
+            'hmc': self.hmc,
+            'network_arch': self.network_arch,
+            'num_steps': self.num_steps,
+            'eps_trainable': self.eps_trainable,
+            'data_format': self.data_format,
+        }
 
-        grads_and_vars = zip(self.grads, self.dynamics.trainable_variables)
+        default_kwargs.update(kwargs)  # update default_kwargs using kwargs
 
-        with tf.name_scope('loss'):
-            tf.summary.scalar('loss', self.loss_op)
+        #  if kwargs is None:
+        #      kwargs = {
+        #          'eps': self.eps,
+        #          'hmc': self.hmc,
+        #          'network_arch': self.network_arch,
+        #          'num_steps': self.num_steps,
+        #          'eps_trainable': self.eps_trainable,
+        #          'data_format': self.data_format,
+        #      }
+        #
+        #  if hmc:
+        #      kwargs['hmc'] = hmc
+        #      kwargs['network_arch'] = None
+        #      kwargs['data_format'] = None
 
-        with tf.name_scope('step_size'):
-            tf.summary.scalar('step_size', self.dynamics.eps)
+        potential_fn = lattice.get_energy_function(samples)
 
-        with tf.name_scope('summaries'):
-            for grad, var in grads_and_vars:
-                try:
-                    layer, type = var.name.split('/')[-2:]
-                    name = layer + '_' + type[:-2]
-                except:
-                    name = var.name[:-2]
-                variable_summaries(var, name)
-                variable_summaries(grad, name + '_gradient')
+        dynamics = GaugeDynamics(lattice=lattice,
+                                 potential_fn=potential_fn,
+                                 **default_kwargs)  # updated default_kwargs
 
-        self.summary_op = tf.summary.merge_all(name='summary_op')
+        return dynamics, potential_fn
 
-    def _create_metric_fn(self):
+    def _create_tensors(self):
+        """Initialize tensors (and placeholders if executing in graph mode).
+
+        NOTE: UNNECESSARY, TO BE REMOVED IN FUTURE UPDATE.
+        """
+        self.batch_size = self.lattice.samples.shape[0]
+        self.x_dim = self.lattice.num_links
+        self.samples = tf.convert_to_tensor(self.lattice.samples,
+                                            dtype=tf.float32)
+
+        if not tf.executing_eagerly():
+            self.x = tf.placeholder(tf.float32, (None, self.x_dim), name='x')
+            self.beta = tf.placeholder(tf.float32, shape=(), name='beta')
+        else:
+            self.beta = self.beta_init
+
+    @staticmethod
+    def _create_metric_fn(metric):
         """Create metric fn for measuring the distance between two samples."""
-        if self.metric == 'l1':
-            self.metric_fn = lambda x1, x2: tf.abs(x1 - x2)
+        if metric == 'l1':
+            metric_fn = lambda x1, x2: tf.abs(x1 - x2)
 
-        if self.metric == 'l2':
-            self.metric_fn = lambda x1, x2: tf.square(x1 - x2)
+        if metric == 'l2':
+            metric_fn = lambda x1, x2: tf.square(x1 - x2)
 
-        if self.metric == 'cos':
-            self.metric_fn = lambda x1, x2: tf.abs(tf.cos(x1) - tf.cos(x2))
+        if metric == 'cos':
+            metric_fn = lambda x1, x2: tf.abs(tf.cos(x1) - tf.cos(x2))
 
-        if self.metric == 'cos2':
-            self.metric_fn = lambda x1, x2: tf.square(tf.cos(x1) - tf.cos(x2))
+        if metric == 'cos2':
+            metric_fn = lambda x1, x2: tf.square(tf.cos(x1) - tf.cos(x2))
 
-        if self.metric == 'cos_diff':
-            self.metric_fn = lambda x1, x2: 1. - tf.cos(x1 - x2)
+        if metric == 'cos_diff':
+            metric_fn = lambda x1, x2: 1. - tf.cos(x1 - x2)
 
-    def calc_plaq_sums(self, x):
+        return metric_fn
+
+    def _calc_plaq_sums(self, x):
         """Calculate plaquette sums.
 
         Explicitly, calculate the sum of the links around each plaquette in the
@@ -594,59 +650,56 @@ class GaugeModel(object):
                          + tf.roll(x[:, :, :, 1], shift=-1, axis=1))
         return plaq_sums
 
-    def calc_total_actions(self, x):
+    def _calc_total_actions(self, x):
         """Calculate total action for each sample in samples."""
         with tf.name_scope('calc_total_actions'):
             total_actions = tf.reduce_sum(
-                1. - tf.cos(self.calc_plaq_sums(x)), axis=(1, 2),
+                1. - tf.cos(self._calc_plaq_sums(x)), axis=(1, 2),
                 name='total_actions'
             )
         return total_actions
 
-    def calc_avg_plaqs(self, x):
+    def _calc_avg_plaqs(self, x):
         """Calculate average plaquette values for each sample in samples."""
         num_plaqs = self.lattice.num_plaquettes
         with tf.name_scope('calc_avg_plaqs'):
-            avg_plaqs = tf.reduce_sum(tf.cos(self.calc_plaq_sums(x)),
+            avg_plaqs = tf.reduce_sum(tf.cos(self._calc_plaq_sums(x)),
                                       (1, 2), name='avg_plaqs') / num_plaqs
         return avg_plaqs
 
-    def calc_top_charges(self, x):
+    def _calc_top_charges(self, x):
         """Calculate topological charges for each sample in samples."""
         with tf.name_scope('calc_top_charges'):
             top_charges = tf.floor(
-                0.1 + (tf.reduce_sum(project_angle(self.calc_plaq_sums(x)),
+                0.1 + (tf.reduce_sum(project_angle(self._calc_plaq_sums(x)),
                                      axis=(1, 2), name='top_charges')
                        / (2 * np.pi))
             )
         return top_charges
 
-    def calc_top_charges_diff(self, x1, x2):
+    def _calc_top_charges_diff(self, x1, x2):
         """Calculate difference in topological charges between x1 and x2."""
         with tf.name_scope('calc_top_charges_diff'):
-            dq = tf.abs(self.calc_top_charges(x1) - self.calc_top_charges(x2))
+            dq = tf.abs(self._calc_top_charges(x1)
+                        - self._calc_top_charges(x2))
         return dq
 
-    def _create_observables_ops(self):
-        """Create operations for calculating plaquette observables."""
-        samples = tf.reshape(self.x, shape=(self.batch_size,
-                                            *self.lattice.links.shape))
+    def create_observables_ops(self, x):
+        """Create operations for calculating plaquette observables.
 
-        plaq_sums = (samples[:, :, :, 0]
-                     - samples[:, :, :, 1]
-                     - tf.roll(samples[:, :, :, 0], shift=-1, axis=2)
-                     + tf.roll(samples[:, :, :, 1], shift=-1, axis=1))
+        NOTE: DEPRECATED (!!) TO BE REMOVED IN FUTURE UPDATE.
+        """
+        with tf.name_scope('plaq_observables'):
+            with tf.name_scope('plaq_sums'):
+                plaq_sums_op = self._calc_plaq_sums(x)
+            with tf.name_scope('actions'):
+                actions_op = self._calc_total_actions(x)
+            with tf.name_scope('avg_plaqs'):
+                plaqs_op = self._calc_avg_plaqs(x)
+            with tf.name_scope('top_charges'):
+                charges_op = self._calc_top_charges(x)
 
-        local_actions = tf.cos(plaq_sums)
-
-        self.actions_op = tf.reduce_sum(1. - local_actions, axis=(1, 2))
-        self.plaqs_op = (
-            tf.reduce_sum(local_actions, (1, 2)) / self.lattice.num_plaquettes
-        )
-
-        self.charges_op = tf.floor(
-            0.1 + tf.reduce_sum(project_angle(plaq_sums), (1, 2)) / (2 * np.pi)
-        )
+        return (plaq_sums_op, actions_op, plaqs_op, charges_op)
 
     # pylint: disable=too-many-locals
     def _calc_loss(self, x, beta):
@@ -668,7 +721,7 @@ class GaugeModel(object):
             If proposed configuration is accepted following Metropolis-Hastings
             accept/reject step, x_ and x_out are equivalent.
         """
-        eps = 1e-4
+        eps = 1e-3
         with tf.name_scope('x_update'):
             x_, _, px, x_out = self.dynamics.apply_transition(x, beta)
         with tf.name_scope('z_update'):
@@ -676,8 +729,8 @@ class GaugeModel(object):
             z_, _, pz, _ = self.dynamics.apply_transition(z, beta)
 
         if self.plaq_loss:
-            x_dq = self.calc_top_charges_diff(x_, x)
-            z_dq = self.calc_top_charges_diff(z_, z)
+            x_dq = self._calc_top_charges_diff(x_, x)
+            z_dq = self._calc_top_charges_diff(z_, z)
 
         else:
             x_dq = 0.
@@ -748,19 +801,59 @@ class GaugeModel(object):
             inputs = (self.x, self.beta)
             _, _, self.px, self.x_out = self.dynamics(inputs)
 
+    def _create_summaries(self):
+        """Create summary objects for logging in TensorBoard."""
+        if self.using_hvd:
+            if hvd.rank() != 0:
+                return
+
+        ld = self.log_dir
+        self.summary_writer = tf.contrib.summary.create_file_writer(ld)
+
+        grads_and_vars = zip(self.grads, self.dynamics.trainable_variables)
+
+        with tf.name_scope('loss'):
+            tf.summary.scalar('loss', self.loss_op)
+
+        with tf.name_scope('step_size'):
+            tf.summary.scalar('step_size', self.dynamics.eps)
+
+        with tf.name_scope('summaries'):
+            for grad, var in grads_and_vars:
+                try:
+                    layer, type = var.name.split('/')[-2:]
+                    name = layer + '_' + type[:-2]
+                except:
+                    name = var.name[:-2]
+                variable_summaries(var, name)
+                variable_summaries(grad, name + '_gradient')
+
+        self.summary_op = tf.summary.merge_all(name='summary_op')
+
     # pylint:disable=too-many-statements
     def build_graph(self, sess=None, config=None):
         """Build graph for TensorFlow."""
+
+        def log_and_write(s, f):
+            """Print string `s` to std out and also write to file `f`."""
+            io.log(s)
+            io.write(s, f)
+
         sep_str = 80 * '-'
-        s = f"Building graph... (started at: {time.ctime()})"
+        log_and_write(sep_str, self.files['run_info_file'])
+        log_and_write(f"Building graph... (started at: {time.ctime()})",
+                      self.files['run_info_file'])
         start_time = time.time()
-        io.log(sep_str)
-        io.log(s)
+        #  io.log(sep_str)
+        #  io.log(graph_str0)
 
         if config is None:
             self.config = tf.ConfigProto()
-            #  off = rewriter_config_pb2.RewriterConfig.OFF
-            #  self.config.graph_options.rewrite_options.arithmetic_optimization = off
+            off = rewriter_config_pb2.RewriterConfig.OFF
+            graph_options = self.config.graph_options
+            rewrite_options = graph_options.rewrite_options
+            arithmetic_optimization = off
+            #  self.config.graph_options.rewrite_options.arithmetic_optimization=o
         else:
             self.config = config
 
@@ -774,54 +867,38 @@ class GaugeModel(object):
             self.global_step.assign(1)
 
         with tf.name_scope('learning_rate'):
-            #  self.lr = tf.placeholder(tf.float32, shape=[],
-            #                           name='learning_rate')
-            self.lr = tf.train.exponential_decay(
-                self.lr_init,
-                self.global_step,
-                self.lr_decay_steps,
-                self.lr_decay_rate,
-                staircase=True,
-                name='learning_rate'
-            )
+            self.lr = tf.train.exponential_decay(self.lr_init,
+                                                 self.global_step,
+                                                 self.lr_decay_steps,
+                                                 self.lr_decay_rate,
+                                                 staircase=True,
+                                                 name='learning_rate')
 
         with tf.name_scope('optimizer'):
-            self.optimizer = tf.train.AdamOptimizer(
-                learning_rate=self.lr,
-                name='AdamOptimizer'
-            )
-
+            self.optimizer = tf.train.AdamOptimizer(self.lr)
             if self.using_hvd:
                 self.optimizer = hvd.DistributedOptimizer(self.optimizer)
 
-        with tf.name_scope('plaq_observables'):
-            with tf.name_scope('plaq_sums'):
-                self.plaq_sums_op = self.calc_plaq_sums(self.x)
-            with tf.name_scope('actions'):
-                self.actions_op = self.calc_total_actions(self.x)
-            with tf.name_scope('avg_plaqs'):
-                self.plaqs_op = self.calc_avg_plaqs(self.x)
-            with tf.name_scope('top_charges'):
-                self.charges_op = self.calc_top_charges(self.x)
-
-        # if running generic HMC, all we need is the sampler
-        if self.hmc:
+        if self.hmc:  # if running generic HMC, all we need is the sampler
             self._create_sampler()
             self.sess.run(tf.global_variables_initializer())
             return
 
         with tf.name_scope('loss'):
-            io.log("  Creating loss...")
+            log_and_write("  Creating loss...", self.files['run_info_file'])
             t0 = time.time()
 
             output = self._calc_loss_and_grads(x=self.x, beta=self.beta)
             self.loss_op, self.grads, self.x_out, self.px = output
 
             t_diff = time.time() - t0
-            io.log(f"    done. took: {t_diff:4.3g} s.")
+            log_and_write(f"    done. took: {t_diff:4.3g} s.",
+                          self.files['run_info_file'])
 
         with tf.name_scope('train'):
-            io.log(f"  Creating gradient operations...")
+            #  io.log(f"  Creating gradient operations...")
+            log_and_write(f"  Creating gradient operations...",
+                          self.files['run_info_file'])
             t0 = time.time()
 
             grads_and_vars = zip(self.grads, self.dynamics.trainable_variables)
@@ -830,35 +907,40 @@ class GaugeModel(object):
             )
 
             t_diff = time.time() - t0
-            io.log(f"    done. took: {t_diff:4.3g} s")
+            #  io.log(f"    done. took: {t_diff:4.3g} s")
+            log_and_write(f"    done. took: {t_diff:4.3g} s",
+                          self.files['run_info_file'])
 
         if self.summaries:
-            io.log("  Creating summaries...")
+            #  io.log("  Creating summaries...")
+            log_and_write("  Creating summaries...",
+                         self.files['run_info_file'])
             t0 = time.time()
             self._create_summaries()
             t_diff = time.time() - t0
-            io.log(f'    done. took: {t_diff:4.3g} s to create.')
-            io.log(f'done. took: {time.time() - start_time:4.3g} s to build.')
-            io.log(sep_str)
-        else:
-            io.log(f'done. took: {time.time() - start_time:4.3g} s to build.')
-            io.log(sep_str)
-            #  log(80 * '-' + '\n', nl=False)
+            #  io.log(f'    done. took: {t_diff:4.3g} s to create.')
+            log_and_write(f'    done. took: {t_diff:4.3g} s to create.',
+                          self.files['run_info_file'])
+
+        log_and_write((f'done. Graph took: '
+                       f'{time.time() - start_time:4.3g} s to build.'),
+                      self.files['run_info_file'])
+        log_and_write(sep_str, self.files['run_info_file'])
 
         self.sess.run(tf.global_variables_initializer())
 
         if self.using_hvd:
             self.sess.run(hvd.broadcast_global_variables(0))
 
-        if self.condition1 or self.condition2:
-            io.write(sep_str, self.files['run_info_file'], 'a')
-            io.write(s, self.files['run_info_file'], 'a')
-            dt = time.time() - start_time
-            s0 = f'Summaries took: {t_diff:4.3g} s to build.\n'
-            s1 = f'Graph took: {dt:4.3g} s to build.\n'
-            io.write(s0, self.files['run_info_file'], 'a')
-            io.write(s1, self.files['run_info_file'], 'a')
-            io.write(sep_str, self.files['run_info_file'], 'a')
+        #  if self.condition1 or self.condition2:
+        #      io.write(sep_str, self.files['run_info_file'], 'a')
+        #      io.write(graph_str0, self.files['run_info_file'], 'a')
+        #      dt = time.time() - start_time
+        #      s0 = f'Summaries took: {t_diff:4.3g} s to build.\n'
+        #      s1 = f'Graph took: {dt:4.3g} s to build.\n'
+        #      io.write(s0, self.files['run_info_file'], 'a')
+        #      io.write(s1, self.files['run_info_file'], 'a')
+        #      io.write(sep_str, self.files['run_info_file'], 'a')
 
     def update_beta(self, step):
         """Returns new beta to follow annealing schedule."""
@@ -870,11 +952,19 @@ class GaugeModel(object):
         return new_beta
 
     def pre_train(self):
-        """Set up training for the model."""
+        """Prepare for training loop and set up training for the model.
+
+        NOTE:
+            If a checkpoint already exists in `self.log_dir`, this method will
+            restore from the most recently saved checkpoint and prepare the
+            model to resume training where it left off. 
+        """
+        #  if self.condition1 or self.condition2:
+        #      self.saver = tf.train.Saver(max_to_keep=3)
+
         if self.condition1 or self.condition2:
             self.saver = tf.train.Saver(max_to_keep=3)
 
-        if self.condition1 or self.condition2:
             ckpt = tf.train.get_checkpoint_state(self.log_dir)
             if ckpt and ckpt.model_checkpoint_path:
                 io.log('Restoring previous model from: '
@@ -893,8 +983,7 @@ class GaugeModel(object):
         dash0 = (len(h_strf) + 1) * '-'
         dash1 = (len(h_strf) + 1) * '-'
         self.train_header = dash0 + '\n' + h_strf + '\n' + dash1
-
-        #  self.sess.graph.finalize()
+        self.sess.graph.finalize()
 
     def train_profiler(self, 
                        train_steps,
@@ -925,12 +1014,7 @@ class GaugeModel(object):
             self.train(train_steps, samples_init, beta_init, pre_train, trace)
 
     # pylint: disable=too-many-statements, too-many-branches
-    def train(self,
-              train_steps,
-              samples_init=None,
-              beta_init=None,
-              pre_train=True,
-              trace=False):
+    def train(self, train_steps, **kwargs):
         """Train the L2HMC sampler for `train_steps`.
 
         Args:
@@ -942,6 +1026,16 @@ class GaugeModel(object):
             trace: Boolean that when True performs a full trace of the training
                 procedure.
         """
+        samples_init = kwargs.get('samples_init', None)
+        beta_init = kwargs.get('beta_init', None)
+        pre_train = kwargs.get('pre_train', True)
+        trace = kwargs.get('trace', False)
+
+        #  def train(self, train_steps,
+        #            samples_init=None,
+        #            beta_init=None,
+        #            pre_train=True,
+        #            trace=False):
 
         #  Move attribute look ups outside loop to improve performance
         #  loss_op = self.loss_op
@@ -1034,7 +1128,7 @@ class GaugeModel(object):
                     tunneling_events = np.sum(
                         np.abs(self.charges_arr[-1] - self.charges_arr[-2])
                     )
-                except:  # pylint: disable=bare-except
+                except IndexError:  # pylint: disable=bare-except
                     tunneling_events = 0
 
                 self._current_state['step'] = step
@@ -1495,7 +1589,8 @@ class GaugeModel(object):
         ax.plot(tun_events_vals, marker='o', ls='', alpha=0.6,
                 label=f'total across {self.num_samples} samples')
         ax.set_xlabel('Training step', fontsize=14)
-        ax.set_ylabel('Number of events', fontsize=14)
+        ax.set_ylabel(r"$\delta Q_{\mathrm{top}}$", fontsize=14)
+        ax.set_title(f"{self.num_samples} samples / batch", fontsize=16)
         #  title_str = (f'Number of tunneling events vs. '
         #               f'training step for {self.num_samples} samples')
         #  ax.set_title(title_str, fontsize=16)
@@ -1950,7 +2045,7 @@ class GaugeModel(object):
         return files
 
 
-# pylint: disable=too-many-statements
+# pylint: disable=too-many-statements, too-many-branches
 def main(FLAGS):
     """Main method for creating/training U(1) gauge model from command line."""
     if HAS_HOROVOD and FLAGS.horovod:
@@ -1967,8 +2062,8 @@ def main(FLAGS):
         params['eps_trainable'] = False
 
     config = tf.ConfigProto()
-    #  off = rewriter_config_pb2.RewriterConfig.OFF
-    #  config.graph_options.rewrite_options.arithmetic_optimization = off
+    off = rewriter_config_pb2.RewriterConfig.OFF
+    config.graph_options.rewrite_options.arithmetic_optimization = off
 
     if FLAGS.gpu:
         print("Using gpu for training.")
@@ -2004,6 +2099,9 @@ def main(FLAGS):
                        log_dir=FLAGS.log_dir,
                        restore=FLAGS.restore)
 
+    # create separate instance of GaugeModel using generic HMC for comparison
+
+
     if FLAGS.horovod:
         if hvd.rank() == 0:
             io.save_params_to_pkl_file(params, model.info_dir)
@@ -2016,7 +2114,11 @@ def main(FLAGS):
         if FLAGS.profiler:
             model.train_profiler(FLAGS.train_steps, pre_train=True, trace=True)
         else:
-            model.train(FLAGS.train_steps, pre_train=True, trace=False)
+            model.train(FLAGS.train_steps,
+                        samples_init=None,
+                        beta_init=None,
+                        pre_train=True,
+                        trace=False)
 
     try:
         #  run_steps_grid = [100, 500, 1000, 2500, 5000, 10000]
