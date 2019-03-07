@@ -1,14 +1,14 @@
 # arguments passed to `gauge_model.py` module
 # to run as script: `python3 gauge_model.py @gauge_model_args.txt`
 
---time_size 8                  # temporal extent of lattice
---space_size 8                 # spatial extent of lattice
+--time_size 16                 # temporal extent of lattice
+--space_size 16                # spatial extent of lattice
 --link_type 'U1'               # gauge group, one of 'SU2', 'SU3', 'U1'
 --dim 2                        # dimensionality of lattice
---num_samples 64               # number of samples per batch
---num_steps 5                  # number of leapfrog steps in MD update
---eps 0.4                      # step size in leapfrog integrator
---lr_init 0.001                # initial value of learning rate
+--num_samples 32               # number of samples per batch
+--num_steps 3                  # number of leapfrog steps in MD update
+--eps 0.2                      # step size in leapfrog integrator
+--lr_init 0.0001                # initial value of learning rate
 --lr_decay_steps 1000          # steps after which lr is decayed by lr_decay_rate
 --lr_decay_rate 0.98           # factor by which lr is decayed by after lr_decay_steps
 --annealing                    # when passed, will anneal beta during training
