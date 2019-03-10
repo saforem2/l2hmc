@@ -163,7 +163,6 @@ def get_run_num(d):
     return run_num
 
 
-
 def make_dirs(dirs):
     """Make directories if and only if hvd.rank == 0."""
     _ = [io.check_else_make_dir(d) for d in dirs]
@@ -390,6 +389,9 @@ class GaugeModel(object):
         #      root_log_dir = os.path.join(project_dir, log_dir)
         #      self.log_dir = log_dir
         #      io.check_else_make_dir(self.log_dir)
+
+        if log_dir is None:
+            log_dir = 'gauge_logs_graph'
 
         project_dir = os.path.abspath(os.path.dirname(FILE_PATH))
         root_log_dir = os.path.abspath(os.path.join(project_dir, log_dir))
@@ -966,16 +968,17 @@ class GaugeModel(object):
                     hvd.BroadcastGlobalVariablesHook(0),
 
                     # Horovod: adjust number of steps based on number of GPUs.
-                    tf.train.StopAtStepHook(
-                        last_step=self.train_steps // hvd.size()
-                    ),
+                    #  tf.train.StopAtStepHook(
+                    #      last_step=self.train_steps // hvd.size()
+                    #  ),
 
                     #  tf.train.LoggingTensorHook(tensors={'step': global_step,
                     #                                      'loss': loss},
                     #                             every_n_iter=10),
                 ]
             else:
-                hooks = [tf.train.StopAtStepHook(last_step=self.train_steps)]
+                hooks = []
+                #  hooks = [tf.train.StopAtStepHook(last_step=self.train_steps)]
             # The MonitoredTrainingSession takes care of session
             # initialization, restoring from a checkpoint, saving to a
             # checkpoint, and closing when done or an error occurs.
@@ -1161,11 +1164,12 @@ class GaugeModel(object):
             io.write(self.train_header, self.files['run_info_file'], 'a')
 
             #  for step in range(initial_step, train_steps):
-            while not self.sess.should_stop():
+            #  while not self.sess.should_stop():
+            for step in range(initial_step, train_steps):
                 start_step_time = time.time()
 
                 #  beta_np = annealing_sched[step]
-                step = self.sess.run(self.global_step)
+                #  step = self.sess.run(self.global_step)
                 beta_np = self.update_beta(step)
 
                 fd = {self.x: samples_np,
