@@ -59,11 +59,15 @@ if HAS_MATPLOTLIB:
 
 
 #  tfe = tf.contrib.eager
-tf.logging.set_verbosity(tf.logging.INFO)
+
+FILE_PATH = os.path.abspath(os.path.dirname(__file__))
 
 GLOBAL_SEED = 42
 np.random.seed(GLOBAL_SEED)
-tf.set_random_seed(GLOBAL_SEED)
+
+if '2.' not in tf.__version__: 
+    tf.set_random_seed(GLOBAL_SEED)
+    tf.logging.set_verbosity(tf.logging.INFO)
 
 COLORS = 5000 * ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9']
 MARKERS = 5000 * ['o', 's', 'x', 'v', 'h', '^', 'p', '<', 'd', '>', 'o']
@@ -379,7 +383,7 @@ class GaugeModel(object):
         #      self.log_dir = log_dir
         #      io.check_else_make_dir(self.log_dir)
 
-        project_dir = os.path.abspath(os.path.dirname(os.getcwd()))
+        project_dir = os.path.abspath(os.path.dirname(FILE_PATH))
         root_log_dir = os.path.abspath(os.path.join(project_dir, log_dir))
         run_num = get_run_num(root_log_dir)
         self.log_dir = os.path.abspath(os.path.join(root_log_dir,
@@ -1352,7 +1356,7 @@ class GaugeModel(object):
         # start with randomly generated samples
         samples = np.random.randn(*(self.batch_size, self.x_dim))
         #  samples = np.random.randn(*self.samples.shape)
-        samples_history = []
+        #  samples_history = []
         charges_arr = []
         actions_dict = {}
         plaqs_dict = {}
@@ -1397,7 +1401,7 @@ class GaugeModel(object):
                 #  except IndexError:
                 #      tunneling_events = 0
 
-                samples_history.append(np.squeeze(samples))
+                #  samples_history.append(np.squeeze(samples))
 
                 key = (step, beta)
                 actions_dict[key] = actions_np
@@ -1441,12 +1445,13 @@ class GaugeModel(object):
 
         #  io.write(eval_strings, eval_file, 'a')
         _ = [io.write(s, eval_file, 'a') for s in eval_strings]
-        observables = (actions_dict, plaqs_dict, charges_dict, charge_diff_dict)
+        observables = (actions_dict, plaqs_dict,
+                       charges_dict, charge_diff_dict)
         stats = self.calc_observables_stats(observables, therm_frac)
         charges_arr = np.array(charges_arr)
         _args = (run_steps, current_step, beta, therm_frac)
 
-        self._save_run_info(samples_history, observables, stats, _args)
+        self._save_run_info(observables, stats, _args)
         self.make_plots(observables, charges_arr, beta, current_step)
         io.log(f'\n Time to complete run: {time.time() - start_time} seconds.')
         io.log(80*'-' + '\n', nl=False)
@@ -1747,10 +1752,10 @@ class GaugeModel(object):
 
         return out_dir, title_str_key
 
-    def _save_run_info(self, samples, observables, stats, _args):
+    def _save_run_info(self, observables, stats, _args):
         """Save samples and observables generated from `self.run` call."""
         #  samples_history = observables[0]
-        samples_history = samples
+        #  samples_history = samples
         actions_dict = observables[0]
         plaqs_dict = observables[1]
         charges_dict = observables[2]
@@ -1809,8 +1814,8 @@ class GaugeModel(object):
                 pdb.set_trace()
                 #  raise IOError(f'Unable to save {name} to {out_file}.')
 
-        save_data(samples_history, samples_file_npy,
-                  name='samples_history_npy')
+        #  save_data(samples_history, samples_file_npy,
+        #            name='samples_history_npy')
         #  save_data(samples_history, samples_file_json,
         #            name='samples_history_json')
         save_data(actions_dict, actions_file, name='actions')
