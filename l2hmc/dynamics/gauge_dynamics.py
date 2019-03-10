@@ -83,11 +83,10 @@ class GaugeDynamics(tf.keras.Model):
         #      self.alpha = tf.log(tf.constant(kwargs.get('eps', 0.1),
         #                                      dtype=tf.float32))
 
-        #  self.eps = _exp(self.alpha, name='eps')
-
         with tf.name_scope('eps'):
+            #  self.eps = exp(self.alpha, name='eps')
             self.eps = tf.Variable(
-                initial_value=kwargs.get('eps', 0.1),
+                initial_value=kwargs.get('eps', 0.2),
                 name='eps',
                 dtype=tf.float32,
                 trainable=self.eps_trainable
@@ -169,7 +168,7 @@ class GaugeDynamics(tf.keras.Model):
         kwargs = {
             'x_dim': self.x_dim,
             'links_shape': self.lattice.links.shape,
-            'num_hidden': int(2 * self.x_dim),
+            'num_hidden': int(4 * self.x_dim),
             'name_scope': 'position',
             'factor': 2.
         }
@@ -183,9 +182,9 @@ class GaugeDynamics(tf.keras.Model):
             with tf.name_scope("VNet"):
                 self.momentum_fn = GenericNet(model_name='VNet', **kwargs)
 
-    def call(self, inputs):
+    def call(self, position, beta):
         """Call method."""
-        position, beta = inputs
+        #  position, beta = inputs
         return self.apply_transition(position, beta)
 
     # pylint:disable=too-many-locals
@@ -311,7 +310,8 @@ class GaugeDynamics(tf.keras.Model):
         """One forward augmented leapfrog step."""
         with tf.name_scope('forward_lf'):
             #  t = self._get_time(i)
-            t = self._format_time(i, tile=tf.shape(position)[0])
+            with tf.name_scope('format_time'):
+                t = self._format_time(i, tile=tf.shape(position)[0])
 
             mask, mask_inv = self._get_mask(i)
             sumlogdet = 0.
@@ -345,33 +345,39 @@ class GaugeDynamics(tf.keras.Model):
 
         # Reversed index/sinusoidal time
         with tf.name_scope('backward_lf'):
-            t = self._format_time(self.num_steps - i - 1,
-                                  tile=tf.shape(position)[0])
+            with tf.name_scope('format_time'):
+                t = self._format_time(self.num_steps - i - 1,
+                                      tile=tf.shape(position)[0])
 
             mask, mask_inv = self._get_mask(self.num_steps - i - 1)
-            sumlogdet = 0.
+            with tf.name_scope('sumlogdet'):
+                sumlogdet = 0.
 
             momentum, logdet = self._update_momentum_backward(position,
                                                               momentum,
                                                               beta, t)
-            sumlogdet += logdet
+            with tf.name_scope('sumlogdet'):
+                sumlogdet += logdet
 
             position, logdet = self._update_position_backward(position,
                                                               momentum,
                                                               t, mask_inv,
                                                               mask)
-            sumlogdet += logdet
+            with tf.name_scope('sumlogdet'):
+                sumlogdet += logdet
 
             position, logdet = self._update_position_backward(position,
                                                               momentum,
                                                               t, mask,
                                                               mask_inv)
-            sumlogdet += logdet
+            with tf.name_scope('sumlogdet'):
+                sumlogdet += logdet
 
             momentum, logdet = self._update_momentum_backward(position,
                                                               momentum,
                                                               beta, t)
-            sumlogdet += logdet
+            with tf.name_scope('sumlogdet'):
+                sumlogdet += logdet
 
         return position, momentum, sumlogdet
 

@@ -64,8 +64,6 @@ def check_else_make_dir(d):
             os.makedirs(d)
         except OSError:
             pass
-    else:
-        log(f"Directory {d} already exists.")
 
 
 def _create_log_dir(base_name):

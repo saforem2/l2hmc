@@ -42,7 +42,6 @@ except ImportError:
 
 
 #  import utils.gauge_model_helpers as helpers
-from definitions import ROOT_DIR
 import utils.file_io as io
 
 from collections import Counter, OrderedDict
@@ -59,7 +58,7 @@ if HAS_MATPLOTLIB:
     from utils.plot_helper import plot_multiple_lines
 
 
-tfe = tf.contrib.eager
+#  tfe = tf.contrib.eager
 tf.logging.set_verbosity(tf.logging.INFO)
 
 GLOBAL_SEED = 42
@@ -70,60 +69,65 @@ COLORS = 5000 * ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9']
 MARKERS = 5000 * ['o', 's', 'x', 'v', 'h', '^', 'p', '<', 'd', '>', 'o']
 LINESTYLES = 5000 * ['-', '--', ':', '-.', '-', '--', ':', '-.', '-', '--']
 
+PROJECT_DIR = os.path.dirname(os.path.abspath(os.getcwd()))
+
 
 #  MODULE_PATH = os.path.abspath(os.path.join('..'))
 #  if MODULE_PATH not in sys.path:
 #      sys.path.append(MODULE_PATH)
 
 PARAMS = {
-###################### Lattice parameters ############################
+    # --------------------- Lattice parameters ----------------------------
     'time_size': 8,
     'space_size': 8,
     'link_type': 'U1',
     'dim': 2,
-    'num_samples': 20,
+    'num_samples': 56,
     'rand': False,
     'data_format': 'channels_last',
-###################### Leapfrog parameters ###########################
+    # --------------------- Leapfrog parameters ---------------------------
     'num_steps': 5,
-    'eps': 0.2,
+    'eps': 0.25,
     'loss_scale': 1.,
-###################### Learning rate parameters ######################
+    # --------------------- Learning rate parameters ----------------------
     'lr_init': 1e-3,
-    'lr_decay_steps': 500,
+    'lr_decay_steps': 1000,
     'lr_decay_rate': 0.96,
-###################### Annealing rate parameters #####################
+    # --------------------- Annealing rate parameters ---------------------
     'annealing': True,
     #  'annealing_steps': 200,
     #  'annealing_factor': 0.97,
     #  'beta': 2.,
     'beta_init': 2.,
-    'beta_final': 6.,
-###################### Training parameters ###########################
-    'train_steps': 20000,
+    'beta_final': 4.,
+    # --------------------- Training parameters ---------------------------
+    'train_steps': 10000,
     'save_steps': 1000,
     'logging_steps': 50,
     'print_steps': 1,
     'training_samples_steps': 1000,
-    'training_samples_length': 100,
-###################### Model parameters ##############################
+    'training_samples_length': 500,
+    # --------------------- Model parameters ------------------------------
     #  'conv_net': True,
     'network_arch': 'conv3D',
     'hmc': False,
     'eps_trainable': True,
     'metric': 'cos_diff',
     'aux': True,
-    'plaq_loss': True,
+    'std_weight': 1.,
+    'aux_weight': 1.,
+    'charge_weight': 1.,
+    'charge_loss': True,
     'summaries': True,
     'clip_grads': False,
-    'clip_value': 10.,
+    'clip_value': None,
 }
 
 ##############################################################################
 #                       Helper functions
 ##############################################################################
 def create_log_dir(root_dir='gauge_logs_graph'):
-    root_log_dir = os.path.join(os.path.split(ROOT_DIR)[0], root_dir)
+    root_log_dir = os.path.join(PROJECT_DIR, root_dir)
     io.check_else_make_dir(root_log_dir)
     try:
         run_dirs = [i for i in os.listdir(root_log_dir) if 'run' in i]
@@ -138,7 +142,22 @@ def create_log_dir(root_dir='gauge_logs_graph'):
     except:
         pass
 
+    import pdb; pdb.set_trace()
+
     return log_dir
+
+
+def get_run_num(d):
+    """Get integer value for next run directory."""
+    try:
+        run_dirs = [i for i in os.listdir(d) if 'run' in i]
+        run_nums = [int(i.split('_')[-1]) for i in run_dirs]
+        run_num = sorted(run_nums)[-1] + 1
+    except:
+        run_num = 1
+
+    return run_num
+
 
 
 def make_dirs(dirs):
@@ -165,25 +184,21 @@ class GaugeModel(object):
         np.random.seed(GLOBAL_SEED)
         tf.set_random_seed(GLOBAL_SEED)
         #  tf.enable_resource_variables()
-
-        ####################################################################
+        # ------------------------------------------------------------------
         # Create instance attributes from key, val pairs in `params`.
-        ####################################################################
+        # ------------------------------------------------------------------
         self._create_attrs(params)
-
-        ####################################################################
+        # ------------------------------------------------------------------
         # Create necessary directories for holding checkpoints, data, etc.
-        ####################################################################
+        # ------------------------------------------------------------------
         self._create_dir_structure(log_dir)
-
-        ####################################################################
+        # ------------------------------------------------------------------
         # Write relevant instance attributes to human readable .txt file.
-        ####################################################################
+        # ------------------------------------------------------------------
         self._write_run_parameters(_print=True)
-
-        ####################################################################
+        # ------------------------------------------------------------------
         # Create lattice object.
-        ####################################################################
+        # ------------------------------------------------------------------
         with tf.name_scope('lattice'):
             self.lattice = self._create_lattice()
 
@@ -192,10 +207,9 @@ class GaugeModel(object):
             self.x_dim = self.lattice.num_links
             self.samples = tf.convert_to_tensor(self.lattice.samples,
                                                 dtype=tf.float32)
-
-        #####################################################################
+        # ------------------------------------------------------------------
         # Create placeholders for input data.
-        #####################################################################
+        # ------------------------------------------------------------------
         with tf.name_scope('inputs'):
             if not tf.executing_eagerly():
                 self.x = tf.placeholder(dtype=tf.float32,
@@ -207,10 +221,9 @@ class GaugeModel(object):
                                            name='beta')
             else:
                 self.beta = self.beta_init
-
-        #####################################################################
+        # ------------------------------------------------------------------
         # Create dynamics object responsible for performing L2HMC sampling.
-        #####################################################################
+        # ------------------------------------------------------------------
         with tf.name_scope('dynamics'):
             self.dynamics, self.potential_fn = self._create_dynamics(
                 lattice=self.lattice,
@@ -218,16 +231,14 @@ class GaugeModel(object):
                 hmc=self.hmc,
                 kwargs=None
             )
-
-        #####################################################################
+        # ------------------------------------------------------------------
         # Create metric function for measuring `distance` between configs.
-        #####################################################################
+        # ------------------------------------------------------------------
         with tf.name_scope('metric_fn'):
             self.metric_fn = self._create_metric_fn(self.metric)
-
-        #####################################################################
+        # ------------------------------------------------------------------
         # Create operations for calculating plaquette observables.
-        #####################################################################
+        # ------------------------------------------------------------------
         with tf.name_scope('plaq_observables'):
             with tf.name_scope('plaq_sums'):
                 self.plaq_sums_op = self._calc_plaq_sums(self.x)
@@ -235,18 +246,18 @@ class GaugeModel(object):
                 self.actions_op = self._calc_total_actions(self.x)
             with tf.name_scope('avg_plaqs'):
                 self.plaqs_op = self._calc_avg_plaqs(self.x)
+                self.avg_plaq_op = tf.reduce_mean(self.plaqs_op,
+                                                  name='avg_plaq')
             with tf.name_scope('top_charges'):
                 self.charges_op = self._calc_top_charges(self.x)
-
-        #####################################################################
+        # ------------------------------------------------------------------
         # If restore, load from most recently saved checkpoint in `log_dir`.
-        #####################################################################
+        # ------------------------------------------------------------------
         if restore:
             self._restore_model(log_dir, sess, config)
-
-        #####################################################################
+        # ------------------------------------------------------------------
         # Otherwise, build graph.
-        #####################################################################
+        # ------------------------------------------------------------------
         else:
             if not tf.executing_eagerly():
                 self.build_graph(sess, config)
@@ -294,7 +305,8 @@ class GaugeModel(object):
         self.eps_trainable = params.get('eps_trainable', True)
         self.metric = params.get('metric', 'cos_diff')
         self.aux = params.get('aux', True)
-        self.plaq_loss = params.get('plaq_loss', False)
+        self.aux_factor = params.get('aux_factor', 1.)
+        self.charge_loss = params.get('charge_loss', False)
         self.summaries = params.get('summaries', False)
         self.clip_grads = params.get('clip_grads', False)
         self.clip_value = params.get('clip_value', 1.)
@@ -308,11 +320,15 @@ class GaugeModel(object):
         else:
             self._parse_params(params)
 
+        self.loss_weights = {}
+
         self.params = params
 
         for key, val in params.items():
-            #  print(f"Creating new class attribute: `self.{key} = {val}`.")
-            setattr(self, key, val)
+            if 'weight' in key:
+                self.loss_weights[key] = val
+            else:
+                setattr(self, key, val)
 
         if not self.clip_grads:
             self.clip_value = None
@@ -325,16 +341,18 @@ class GaugeModel(object):
         self.charges_dict = {}
         self.actions_dict = {}
         self.plaqs_dict = {}
-        self.tunn_events_dict = {}
+        self.charge_diff_dict = {}
         self.train_data_dict = {
             'loss': {},
             'actions': {},
             'plaqs': {},
             'charges': {},
-            'tun_events': {},
+            'charge_diff': {},
             'accept_prob': {}
         }
         self._current_state = {
+            'samples': None,
+            'eps': self.eps,
             'step': 0,
             'beta': self.beta_init,
             'lr': self.lr_init
@@ -349,26 +367,20 @@ class GaugeModel(object):
             if hvd.rank() == 0:               # AND rank == 0:
                 self.condition2 = True        # condition2: True
 
-    def _create_dir_structure(self, log_dir):
+    def _create_dir_structure(self, log_dir='gauge_logs_graph'):
         """Create self.files and directory structure."""
-        #  if self.using_hvd:
-        #      if hvd.rank() != 0:
-        #          return
-
-        #  if self.condition1 or self.condition2:  # DEFINED IN: _create_attrs
+        #  log_dir = os.path.join(root_log_dir, f'run_{run_num}')
         #  if log_dir is None:
-        #      dirs = io.create_log_dir('gauge_logs_graph')
+        #      root_log_dir = os.path.join(project_dir, 'gauge_logs_graph')
         #  else:
-        #      dirs = io.check_log_dir(log_dir)
-        #
-        #  self.log_dir, self.info_dir, self.figs_dir = dirs
-        #  dirs = self._create_log_dirs(log_dir)
-        #  self.log_dir, self.info_dir, self.figs_dir = dirs
-        if log_dir is None:
-            self.log_dir = create_log_dir()
-        else:
-            self.log_dir = log_dir
-            io.check_else_make_dir(self.log_dir)
+        #      root_log_dir = os.path.join(project_dir, log_dir)
+        #      self.log_dir = log_dir
+        #      io.check_else_make_dir(self.log_dir)
+
+        project_dir = os.path.dirname(os.getcwd())
+        root_log_dir = os.path.join(project_dir, log_dir)
+        run_num = get_run_num(root_log_dir)
+        self.log_dir = os.path.join(root_log_dir, f'run_{run_num}')
 
         self.info_dir = os.path.join(self.log_dir, 'run_info')
         self.figs_dir = os.path.join(self.log_dir, 'figures')
@@ -407,8 +419,8 @@ class GaugeModel(object):
             'charges_out_file': os.path.join(
                 self.train_obs_dir, 'charges_training.pkl'
             ),
-            'tunn_events_out_file': os.path.join(
-                self.train_obs_dir, 'tunn_events_training.pkl'
+            'charge_diff_out_file': os.path.join(
+                self.train_obs_dir, 'charge_diff_training.pkl'
             ),
         }
 
@@ -416,7 +428,7 @@ class GaugeModel(object):
         """Restore model from previous run contained in `log_dir`."""
         if self.using_hvd:
             if hvd.rank() != 0:
-                return -1
+                return
 
         if self.hmc:
             io.log(f"ERROR: self.hmc: {self.hmc}. "
@@ -432,11 +444,6 @@ class GaugeModel(object):
         with open(self.files['params_pkl_file'], 'rb') as f:
             self.params = pickle.load(f)
 
-        #  with open(self.files['data_pkl_file'], 'rb') as f:
-        #      self.data = pickle.load(f)
-        with open(self.files['samples_pkl_file'], 'rb') as f:
-            self.samples = pickle.load(f)
-
         with open(self.files['train_data_file'], 'rb') as f:
             self.train_data_dict = pickle.load(f)
 
@@ -448,17 +455,23 @@ class GaugeModel(object):
         self.global_step.assign(self._current_state['step'])
         self.lr.assign(self._current_state['lr'])
 
+        self.lattice = self._create_lattice()
+        self.samples = tf.convert_to_tensor(self.lattice.samples,
+                                            dtype=tf.float32)
+
         kwargs = {
             'hmc': self.hmc,
-            'eps': self.data['eps'],
+            'eps': self._current_state['eps'],
             'network_arch': self.network_arch,
-            #  'conv_net': self.conv_net,
             'beta_init': self.data['beta'],
             'num_steps': self.num_steps,
             'eps_trainable': self.eps_trainable
         }
+        self.dynamics, self.potential_fn = self._create_dynamics(self.lattice,
+                                                                 self.samples,
+                                                                 **kwargs)
 
-        self._create_dynamics(kwargs)
+        self._create_dynamics(self.lattice, self.samples, kwargs)
 
         self.build_graph(sess, config)
 
@@ -471,11 +484,9 @@ class GaugeModel(object):
             self.saver.restore(self.sess, ckpt.model_checkpoint_path)
             io.log('Model restored.\n', nl=False)
             self.global_step = tf.train.get_global_step()
-            initial_step = self.sess.run(self.global_step)
-            return initial_step
 
         sys.stdout.flush()
-        return -1
+        return
 
     def _save_model(self, samples=None):
         """Save run `data` to `files` in `log_dir` using `checkpointer`"""
@@ -486,23 +497,13 @@ class GaugeModel(object):
         if samples is not None:
             with open(self.files['samples_pkl_file'], 'wb') as f:
                 pickle.dump(samples, f)
-            #  with open(self.files['samples_json_file'], 'w') as f:
-            #      json.dump(samples, f)
 
-        #  with open(self.files['data_pkl_file'], 'wb') as f:
-        #      pickle.dump(self.data, f)
         with open(self.files['train_data_file'], 'wb') as f:
             pickle.dump(self.train_data_dict, f)
         with open(self.files['current_state_file'], 'wb') as f:
             pickle.dump(self._current_state, f)
-        #  with open(self.files['actions_out_file'], 'wb') as f:
-        #      pickle.dump(self.actions_dict, f)
-        #  with open(self.files['plaqs_out_file'], 'wb') as f:
-        #      pickle.dump(self.plaqs_dict, f)
-        #  with open(self.files['charges_out_file'], 'wb') as f:
-        #      pickle.dump(self.charges_dict, f)
-        #  with open(self.files['tunn_events_out_file'], 'wb') as f:
-        #      pickle.dump(self.tunn_events_dict, f)
+
+
         if not tf.executing_eagerly():
             #  ckpt_prefix = os.path.join(self.log_dir, 'ckpt')
             io.log(f'Saving checkpoint to: {self.ckpt_file}')
@@ -533,15 +534,16 @@ class GaugeModel(object):
             if hvd.rank() != 0:
                 return
 
-        if _print:
-            for key, val in self.params.items():
-                io.log(f'{key}: {val}')
-
         s0 = 'Parameters'
         sep_str = 80 * '-'
         strings = []
         for key, val in self.params.items():
             strings.append(f'{key}: {val}')
+
+        if _print:
+            io.log(sep_str)
+            for key, val in self.params.items():
+                io.log(f'{key}: {val}')
 
         io.write(s0, self.files['parameters_file'], 'w')
         io.write(sep_str, self.files['parameters_file'], 'a')
@@ -559,8 +561,6 @@ class GaugeModel(object):
 
     def _create_dynamics(self, lattice, samples, **kwargs):
         """Initialize dynamics object."""
-        #  def _create_dynamics(self, lattice, samples, hmc=False,
-        #  kwargs=None):
         default_kwargs = {
             'eps': self.eps,
             'hmc': self.hmc,
@@ -571,21 +571,6 @@ class GaugeModel(object):
         }
 
         default_kwargs.update(kwargs)  # update default_kwargs using kwargs
-
-        #  if kwargs is None:
-        #      kwargs = {
-        #          'eps': self.eps,
-        #          'hmc': self.hmc,
-        #          'network_arch': self.network_arch,
-        #          'num_steps': self.num_steps,
-        #          'eps_trainable': self.eps_trainable,
-        #          'data_format': self.data_format,
-        #      }
-        #
-        #  if hmc:
-        #      kwargs['hmc'] = hmc
-        #      kwargs['network_arch'] = None
-        #      kwargs['data_format'] = None
 
         potential_fn = lattice.get_energy_function(samples)
 
@@ -702,7 +687,7 @@ class GaugeModel(object):
         return (plaq_sums_op, actions_op, plaqs_op, charges_op)
 
     # pylint: disable=too-many-locals
-    def _calc_loss(self, x, beta):
+    def _calc_loss(self, x, beta, **weights):
         """Create operation for calculating the loss.
 
         Args:
@@ -722,42 +707,56 @@ class GaugeModel(object):
             accept/reject step, x_ and x_out are equivalent.
         """
         eps = 1e-3
+        aux_weight = weights.get('aux_weight', 1.)
+        std_weight = weights.get('std_weight', 1.)
+        charge_weight =  weights.get('charge_weight', 1.)
+
         with tf.name_scope('x_update'):
-            x_, _, px, x_out = self.dynamics.apply_transition(x, beta)
+            #  x_, _, px, x_out = self.dynamics.apply_transition(x, beta)
+            x_, _, px, x_out = self.dynamics(x, beta)
         with tf.name_scope('z_update'):
             z = tf.random_normal(tf.shape(x), name='z')  # Auxiliary variable
-            z_, _, pz, _ = self.dynamics.apply_transition(z, beta)
+            #  z_, _, pz, _ = self.dynamics.apply_transition(z, beta)
+            z_, _, pz, _ = self.dynamics(z, beta)
 
-        if self.plaq_loss:
-            x_dq = self._calc_top_charges_diff(x_, x)
-            z_dq = self._calc_top_charges_diff(z_, z)
-
-        else:
-            x_dq = 0.
-            z_dq = 0.
-
+        ls = self.loss_scale
         # Add eps for numerical stability; following released impl
         with tf.name_scope('calc_loss'):
-            with tf.name_scope('x_loss'):
-                x_loss = ((tf.reduce_sum(self.metric_fn(x, x_), axis=1)
-                           + x_dq) * px + eps)
-                #  x_loss = (tf.reduce_sum(self.metric_fn(x, x_), axis=1,
-                #  name='x_loss') - x_dq) * px + eps
+            with tf.name_scope('std_loss'):
+                with tf.name_scope('x_loss'):
+                    x_std_loss = (
+                        tf.reduce_sum(self.metric_fn(x, x_), axis=1) * px + eps
+                    )
 
-            with tf.name_scope('z_loss'):
-                z_loss = ((tf.reduce_sum(self.metric_fn(z, z_), axis=1)
-                           + z_dq) * pz + eps)
-                #  z_loss = (tf.reduce_sum(self.metric_fn(z, z_),
-                #                          axis=1, name='z_loss')
-                #            - tf.reduce_sum(z_dq)) * pz + eps
+                with tf.name_scope('z_loss'):
+                    z_std_loss = aux_weight * (
+                        tf.reduce_sum(self.metric_fn(z, z_), axis=1) * pz + eps
+                    )
 
-            loss = tf.reduce_mean((1. / x_loss + 1. / z_loss) * self.loss_scale
-                                  - (x_loss + z_loss) / self.loss_scale,
+                std_loss = ((1. / x_std_loss + 1. / z_std_loss) * ls
+                            - (x_std_loss + z_std_loss) / ls)
+
+            if self.charge_loss:
+                with tf.name_scope('charge_loss'):
+                    with tf.name_scope('x_loss'):
+                        x_dq = self._calc_top_charges_diff(x_, x)
+                        xq_loss = - px * x_dq + eps
+                    with tf.name_scope('z_loss'):
+                        z_dq = self._calc_top_charges_diff(z_, z)
+                        zq_loss = aux_weight * (- pz * z_dq + eps)
+
+                charge_loss = xq_loss + zq_loss
+
+            else:
+                charge_loss = 0.
+
+            loss = tf.reduce_mean((std_weight * std_loss
+                                   + charge_weight * charge_loss),
                                   axis=0, name='loss')
 
-        return loss, x_out, px
+        return loss, x_out, px, x_dq
 
-    def _calc_loss_and_grads(self, x, beta):
+    def _calc_loss_and_grads(self, x, beta, **weights):
         """Calculate loss and gradients.
 
         Args:
@@ -776,10 +775,12 @@ class GaugeModel(object):
         if tf.executing_eagerly():
             with tf.name_scope('grads'):
                 with tf.GradientTape() as tape:
-                    loss, x_out, accept_prob = self._calc_loss(x, beta)
+                    loss, x_out, accept_prob, x_dq = self._calc_loss(x, beta,
+                                                                     **weights)
                 grads = tape.gradient(loss, self.dynamics.trainable_variables)
         else:
-            loss, x_out, accept_prob = self._calc_loss(x, beta)
+            loss, x_out, accept_prob, x_dq = self._calc_loss(x, beta,
+                                                             **weights)
             with tf.name_scope('grads'):
                 grads = tf.gradients(loss, self.dynamics.trainable_variables)
                 if self.clip_grads:
@@ -788,7 +789,7 @@ class GaugeModel(object):
                     #      grads, 'check_numerics caught bad gradients'
                     #  )
 
-        return loss, grads, x_out, accept_prob
+        return loss, grads, x_out, accept_prob, x_dq
 
     def _create_sampler(self):
         """Create operation for generating new samples using dynamics engine.
@@ -817,6 +818,12 @@ class GaugeModel(object):
 
         with tf.name_scope('step_size'):
             tf.summary.scalar('step_size', self.dynamics.eps)
+
+        with tf.name_scope('tunneling_events'):
+            tf.summary.scalar('tunneling_events_per_sample',
+                              self.charge_diff_op)
+        with tf.name_scope('avg_plaq'):
+            tf.summary.scalar('avg_plaq', self.avg_plaq_op)
 
         with tf.name_scope('summaries'):
             for grad, var in grads_and_vars:
@@ -852,7 +859,8 @@ class GaugeModel(object):
             off = rewriter_config_pb2.RewriterConfig.OFF
             graph_options = self.config.graph_options
             rewrite_options = graph_options.rewrite_options
-            arithmetic_optimization = off
+            rewrite_options.arithmetic_optimization = off
+
             #  self.config.graph_options.rewrite_options.arithmetic_optimization=o
         else:
             self.config = config
@@ -871,7 +879,7 @@ class GaugeModel(object):
                                                  self.global_step,
                                                  self.lr_decay_steps,
                                                  self.lr_decay_rate,
-                                                 staircase=True,
+                                                 staircase=False,
                                                  name='learning_rate')
 
         with tf.name_scope('optimizer'):
@@ -888,8 +896,10 @@ class GaugeModel(object):
             log_and_write("  Creating loss...", self.files['run_info_file'])
             t0 = time.time()
 
-            output = self._calc_loss_and_grads(x=self.x, beta=self.beta)
-            self.loss_op, self.grads, self.x_out, self.px = output
+            output = self._calc_loss_and_grads(x=self.x, beta=self.beta,
+                                               **self.loss_weights)
+            self.loss_op, self.grads, self.x_out, self.px, x_dq = output
+            self.charge_diff_op = tf.reduce_sum(x_dq) / self.num_samples
 
             t_diff = time.time() - t0
             log_and_write(f"    done. took: {t_diff:4.3g} s.",
@@ -914,7 +924,7 @@ class GaugeModel(object):
         if self.summaries:
             #  io.log("  Creating summaries...")
             log_and_write("  Creating summaries...",
-                         self.files['run_info_file'])
+                          self.files['run_info_file'])
             t0 = time.time()
             self._create_summaries()
             t_diff = time.time() - t0
@@ -1015,6 +1025,7 @@ class GaugeModel(object):
 
     # pylint: disable=too-many-statements, too-many-branches
     def train(self, train_steps, **kwargs):
+
         """Train the L2HMC sampler for `train_steps`.
 
         Args:
@@ -1112,6 +1123,7 @@ class GaugeModel(object):
                     self.plaqs_op,         # calculate avg. plaquettes
                     self.charges_op,       # calculate top. charges
                     self.lr,               # evaluate learning rate
+                    self.charge_diff_op,    # change in top charge / num_samples 
                 ], feed_dict=fd)
 
                 loss_np = outputs[1]
@@ -1122,43 +1134,24 @@ class GaugeModel(object):
                 plaqs_np = outputs[6]
                 charges_np = outputs[7]
                 lr_np = outputs[8]
+                charge_diff = outputs[9]
 
-                self.charges_arr.append(charges_np)
-                try:
-                    tunneling_events = np.sum(
-                        np.abs(self.charges_arr[-1] - self.charges_arr[-2])
-                    )
-                except IndexError:  # pylint: disable=bare-except
-                    tunneling_events = 0
-
+                self._current_state['samples'] = samples_np
                 self._current_state['step'] = step
                 self._current_state['beta'] = beta_np
                 self._current_state['lr'] = lr_np
+                self._current_state['eps'] = eps_np
 
                 key = (step, beta_np)
                 self.charges_dict[key] = charges_np
-                self.tunn_events_dict[key] = tunneling_events
+                self.charge_diff_dict[key] = charge_diff
 
                 self.train_data_dict['loss'][key] = loss_np
                 self.train_data_dict['actions'][key] = actions_np
                 self.train_data_dict['plaqs'][key] = plaqs_np
                 self.train_data_dict['charges'][key] = charges_np
-                self.train_data_dict['tun_events'][key] = tunneling_events
+                self.train_data_dict['charge_diff'][key] = charge_diff
                 self.train_data_dict['accept_prob'][key] = px_np
-
-                #  except:  # pylint:disable=bare-except
-                #      lr_new = np.float32(lr_np * self.lr_decay_rate)
-                #      io.log("Ran into Inf value...")
-                #      io.log("Resetting samples and decreasing "
-                #             f"learning rate from: {lr_np} to {lr_new}.")
-                #      samples_np = np.reshape(
-                #          np.array(self.lattice.samples, dtype=np.float32),
-                #          (self.num_samples, self.x_dim)
-                #      )
-                #      #  lr_np = np.float32(lr_np / 2)
-
-                #  if step % self.lr_decay_steps == 0:
-                #      lr_np *= self.lr_decay_rate
 
                 if step % self.print_steps == 0:
                     data_str = (f"{step:>5g}/{self.train_steps:<6g} "
@@ -1170,39 +1163,11 @@ class GaugeModel(object):
                                 f"{np.mean(actions_np):^9.4g} "
                                 f"{np.mean(plaqs_np):^9.4g} "
                                 f"{u1_plaq_exact(beta_np):^9.4g} "
-                                f"{tunneling_events:^9.4g} "
+                                f"{charge_diff:^9.4g} "
                                 f"{lr_np:^9.4g}")
 
                     io.log(data_str)
                     io.write(data_str, self.files['run_info_file'], 'a')
-
-                    #  self.data['step'] = step
-                    #  self.data['loss'] = loss_np
-                    #  self.data['accept_prob'] = px_np
-                    #  #  self.data['eps'] = np.exp(alpha_np)
-                    #  self.data['eps'] = eps_np
-                    #  self.data['beta'] = beta_np
-                    #  self.data['learning_rate'] = lr_np
-                    #  self.data['step_time_norm'] = (
-                    #      (time.time() - start_step_time) / norm_factor
-                    #  )
-                    #  self.data['step_time'] = (
-                    #      time.time() - start_step_time
-                    #  )
-                    #  self.data['tunneling_events'] = tunneling_events
-                    #  self.data['action_avg'] = np.mean(actions_np)
-                    #  self.data['plaq_avg'] = np.mean(plaqs_np)
-
-                    #  self.losses_arr.append(loss_np)
-                    #  self.accept_prob_arr.extend(px_np)
-                    #  self.eps_arr.append(eps_np)
-                    #  self.losses_arr.append(loss_np)
-
-                    #  if (step + 1) % 10 == 0:
-                    #  if self.condition1 or self.condition2:
-                    #      helpers.print_run_data(self.data)
-                    #      helpers.write_run_data(self.files['run_info_file'],
-                    #                             self.data)
 
                 # Intermittently run sampler and save samples to pkl file.
                 # We can calculate observables from these samples to
@@ -1218,7 +1183,7 @@ class GaugeModel(object):
                         io.log(80 * '-')
                         io.log(self.train_header)
 
-                if (step +1) % self.save_steps == 0:
+                if (step + 1) % self.save_steps == 0:
                     if self.condition1 or self.condition2:
                         self._save_model(samples=samples_np)
                         #  helpers.write_run_data(self.files['run_info_file'],
@@ -1274,7 +1239,7 @@ class GaugeModel(object):
             io.log(f"Time to complete training: {train_time:.3g}.")
             step = self.sess.run(self.global_step)
             self._save_model(samples=samples_np)
-            self._plot_tun_events()
+            self._plot_charge_diff()
 
         except (KeyboardInterrupt, SystemExit):
             io.log("\nKeyboardInterrupt detected! \n", nl=False)
@@ -1282,7 +1247,7 @@ class GaugeModel(object):
             io.log(data_str)
             io.write(data_str, self.files['run_info_file'], 'a')
             self._save_model(samples=samples_np)
-            self._plot_tun_events()
+            self._plot_charge_diff()
 
     # pylint: disable=inconsistent-return-statements, too-many-locals
     def run(self, 
@@ -1307,7 +1272,7 @@ class GaugeModel(object):
         Returns:
             observables: Tuple of observables dictionaries containing
                 (samples_history, actions_dict, plaqs_dict, charges_dict,
-                tun_events_dict).
+                charge_diff_dict).
         """
         if self.using_hvd:        # if using horovod, make sure we only perform
             if hvd.rank() != 0:   # file IO on rank 0.
@@ -1346,45 +1311,55 @@ class GaugeModel(object):
         actions_dict = {}
         plaqs_dict = {}
         charges_dict = {}
-        tun_events_dict = {}
+        charge_diff_dict = {}
         plaq_exact = u1_plaq_exact(beta)
 
         start_time = time.time()
-        for step in range(run_steps):
-            t0 = time.time()
+        eval_strings = []
+        try:
+            for step in range(run_steps):
+                t0 = time.time()
 
-            fd = {
-                self.x: samples,
-                self.beta: beta,
-            }
+                fd = {
+                    self.x: samples,
+                    self.beta: beta,
+                }
 
-            samples, px, actions_np, plaqs_np, charges_np = self.sess.run([
-                self.x_out,
-                self.px,
-                self.actions_op,
-                self.plaqs_op,
-                self.charges_op
-            ], feed_dict=fd)
+                outputs = self.sess.run([
+                    self.x_out,
+                    self.px,
+                    self.actions_op,
+                    self.plaqs_op,
+                    self.charges_op,
+                    self.charge_diff_op,
+                ], feed_dict=fd)
 
-            charges_arr.append(charges_np)
+                samples = outputs[0]
+                px = outputs[1]
+                actions_np = outputs[2]
+                plaqs_np = outputs[3]
+                charges_np = outputs[4]
+                charge_diff = outputs[5]
 
-            try:
-                tunneling_events = np.sum(
-                    np.abs(charges_arr[-1] - charges_arr[-2])
-                )
+                charges_arr.append(charges_np)
 
-            except IndexError:
-                tunneling_events = 0
+                #  try:
+                #      tunneling_events = np.sum(
+                #          np.abs(charges_arr[-1] - charges_arr[-2])
+                #      )
+                #
+                #  except IndexError:
+                #      tunneling_events = 0
 
-            samples_history.append(np.squeeze(samples))
+                samples_history.append(np.squeeze(samples))
 
-            key = (step, beta)
-            actions_dict[key] = actions_np
-            plaqs_dict[key] = plaqs_np
-            charges_dict[key] = charges_np
-            tun_events_dict[key] = tunneling_events
+                key = (step, beta)
+                actions_dict[key] = actions_np
+                plaqs_dict[key] = plaqs_np
+                charges_dict[key] = charges_np
+                charge_diff_dict[key] = charge_diff
 
-            if step % 10 == 0:
+                #  if step % 10 == 0:
                 tt = (time.time() - t0)  # / (norm_factor)
                 eval_str = (f'{step:>5g}/{run_steps:<6g} '
                             f'{tt:^9.4g} '
@@ -1394,40 +1369,53 @@ class GaugeModel(object):
                             f'{np.mean(actions_np):^9.4g} '
                             f'{np.mean(plaqs_np):^9.4g} '
                             f'{plaq_exact:^9.4g} '
-                            f'{int(tunneling_events):^9.4g} ')
+                            f'{charge_diff:^9.4g} ')
 
                 io.log(eval_str)
+
+                eval_strings.append(eval_str)
                 #  log('\n')
                 #  log('top_charges: ', nl=False)
                 #  log(charges_np)
                 #  log('\n')
 
-                io.write(eval_str, eval_file, 'a')
                 #  io.write('accept_prob:', eval_file, 'a', nl=False)
                 #  io.write(str(px), eval_file, 'a', nl=True)
-                io.write('top. charges:', eval_file, 'a', nl=False)
-                io.write(str(charges_np), eval_file, 'a', nl=True)
-                io.write('', eval_file, 'a')
+                #  io.write('top. charges:', eval_file, 'a', nl=False)
+                #  io.write(str(charges_np), eval_file, 'a', nl=True)
+                #  io.write('', eval_file, 'a')
 
-            if step % 100 == 0:
-                io.log(header_str)
+                if step % 100 == 0:
+                    io.log(header_str)
 
-        observables = (actions_dict, plaqs_dict, charges_dict, tun_events_dict)
+        except (KeyboardInterrupt, SystemExit):
+            io.log("\nKeyboardInterrupt detected! \n", nl=False)
+            io.log("Saving current state and exiting.\n", nl=False)
+            pass
+
+        #  io.write(eval_strings, eval_file, 'a')
+        _ = [io.write(s, eval_file, 'a') for s in eval_strings]
+        observables = (actions_dict, plaqs_dict, charges_dict, charge_diff_dict)
         stats = self.calc_observables_stats(observables, therm_frac)
         charges_arr = np.array(charges_arr)
         _args = (run_steps, current_step, beta, therm_frac)
 
         self._save_run_info(samples_history, observables, stats, _args)
-        #  if self._plot and HAS_MATPLOTLIB:
-        if HAS_MATPLOTLIB:
-            self._plot_tun_events()
-            self._plot_observables(observables, beta, current_step)
-            self._plot_top_charges(charges_arr, beta, current_step)
-            self._plot_top_charge_probs(charges_arr, beta, current_step)
+        self.make_plots(observables, charges_arr, beta, current_step)
         io.log(f'\n Time to complete run: {time.time() - start_time} seconds.')
         io.log(80*'-' + '\n', nl=False)
 
         return observables, stats
+
+    def make_plots(self, observables, charges_arr, beta, current_step):
+        """Wrapper function that calls all individual plotting functions."""
+        t0 = time.time()
+        if HAS_MATPLOTLIB:
+            self._plot_charge_diff()
+            self._plot_observables(observables, beta, current_step)
+            self._plot_top_charges(charges_arr, beta, current_step)
+            self._plot_top_charge_probs(charges_arr, beta, current_step)
+        io.log(f'\n Took {time.time() - t0:4.3g} s to create and save plots.')
 
     # pylint:disable=no-self-use
     def calc_observables_stats(self, observables, therm_frac=10):
@@ -1435,7 +1423,7 @@ class GaugeModel(object):
 
         Args:
             observables: Tuple of dictionaries containing (samples_history,
-            actions_dict, plaqs_dict, charges_dict, tun_events_dict).
+            actions_dict, plaqs_dict, charges_dict, charge_diff_dict).
             therm_frac: Fraction of data to ignore due to thermalization.
 
         Returns:
@@ -1449,7 +1437,7 @@ class GaugeModel(object):
         actions_dict = observables[0]
         plaqs_dict = observables[1]
         charges_dict = observables[2]
-        #  tun_events_dict = observables[4]
+        #  charge_diff_dict = observables[4]
 
         actions_arr = np.array(list(actions_dict.values()))
         plaqs_arr = np.array(list(plaqs_dict.values()))
@@ -1502,12 +1490,12 @@ class GaugeModel(object):
         actions_dict = observables[0]
         plaqs_dict = observables[1]
         charges_dict = observables[2]
-        tun_events_dict = observables[3]
+        charge_diff_dict = observables[3]
 
         actions_arr = np.array(list(actions_dict.values()))
         plaqs_arr = np.array(list(plaqs_dict.values()))
         charges_arr = np.array(list(charges_dict.values()))
-        tun_events_arr = np.array(list(tun_events_dict.values()))
+        charge_diff_arr = np.array(list(charge_diff_dict.values()))
 
         num_steps = actions_arr.shape[0]
         steps_arr = np.arange(num_steps)
@@ -1520,11 +1508,11 @@ class GaugeModel(object):
         actions_plt_file = os.path.join(out_dir, 'total_actions_vs_step.png')
         plaqs_plt_file = os.path.join(out_dir, 'avg_plaquettes_vs_step.png')
         charges_plt_file = os.path.join(out_dir, 'top_charges_vs_step.png')
-        tun_events_plt_file = os.path.join(out_dir, 'tun_events_vs_step.png')
+        charge_diff_plt_file = os.path.join(out_dir, 'charge_diff_vs_step.png')
 
-        ######################################################################
+        ######################
         # Total actions plots
-        ######################################################################
+        ######################
         kwargs = {
             'out_file': actions_plt_file,
             'markers': False,
@@ -1537,25 +1525,25 @@ class GaugeModel(object):
         plot_multiple_lines(steps_arr, actions_arr.T, x_label='Step',
                             y_label='Total action', **kwargs)
 
-        ######################################################################
+        ###########################
         # Average plaquettes plots
-        ######################################################################
+        ###########################
         kwargs['out_file'] = None
         kwargs['ret'] = True
         _, ax = plot_multiple_lines(steps_arr, plaqs_arr.T, x_label='Step',
                                     y_label='Avg. plaquette', **kwargs)
 
         _ = ax.axhline(y=u1_plaq_exact(beta),
-                       color='darkgrey', ls=':', lw=2.5, label='exact')
+                       color='#CC0033', ls='-', lw=2.5, label='exact')
 
         _ = ax.plot(steps_arr, plaqs_arr.T.mean(axis=0),
                     color='k', label='average', alpha=0.75)
 
         plt.savefig(plaqs_plt_file, dpi=400, bbox_inches='tight')
 
-        ######################################################################
+        ###########################
         # Topological charge plots
-        ######################################################################
+        ###########################
         kwargs['out_file'] = charges_plt_file
         kwargs['markers'] = True
         kwargs['lines'] = False
@@ -1564,33 +1552,34 @@ class GaugeModel(object):
         plot_multiple_lines(steps_arr, charges_arr.T, x_label='Step',
                             y_label='Topological charge', **kwargs)
 
-        ######################################################################
+        #########################
         # Tunneling events plots
-        ######################################################################
+        #########################
         _, ax = plt.subplots()
-        ax.plot(steps_arr, tun_events_arr,
+        ax.plot(steps_arr, charge_diff_arr,
                 marker='.', ls='', fillstyle='none', color='C0')
         ax.set_xlabel('Steps', fontsize=14)
         ax.set_ylabel('Number of tunneling events', fontsize=14)
         ax.set_title(title_str, fontsize=16)
-        io.log(f"Saving figure to: {tun_events_plt_file}")
-        plt.savefig(tun_events_plt_file, dpi=400, bbox_inches='tight')
+        io.log(f"Saving figure to: {charge_diff_plt_file}")
+        plt.savefig(charge_diff_plt_file, dpi=400, bbox_inches='tight')
         io.log('done.')
 
         return 1
 
-    def _plot_tun_events(self):
+    def _plot_charge_diff(self):
         """Plot num. of tunneling events vs. training step after training."""
         if not HAS_MATPLOTLIB:
             return
-        #  tun_events_keys = np.array(list(self.tunn_events_dict.keys()))
-        tun_events_vals = np.array(list(self.tunn_events_dict.values()))
+        #  charge_diff_keys = np.array(list(self.tunn_events_dict.keys()))
+        charge_diff_vals = np.array(list(self.charge_diff_dict.values()))
         _, ax = plt.subplots()
-        ax.plot(tun_events_vals, marker='o', ls='', alpha=0.6,
+        ax.plot(charge_diff_vals, marker='o', ls='', alpha=0.6,
                 label=f'total across {self.num_samples} samples')
         ax.set_xlabel('Training step', fontsize=14)
-        ax.set_ylabel(r"$\delta Q_{\mathrm{top}}$", fontsize=14)
-        ax.set_title(f"{self.num_samples} samples / batch", fontsize=16)
+        ax.set_ylabel(r"$\delta Q_{\mathrm{top}} / N$", fontsize=14)
+        ax.set_title(r"$N = #{self.num_samples} samples / batch", fontsize=16)
+
         #  title_str = (f'Number of tunneling events vs. '
         #               f'training step for {self.num_samples} samples')
         #  ax.set_title(title_str, fontsize=16)
@@ -1617,7 +1606,7 @@ class GaugeModel(object):
 
         t0 = time.time()
         # if we have more than 10 samples per batch, only plot first 10
-        for idx in range(min(self.num_samples, 10)):
+        for idx in range(min(self.num_samples, 5)):
             _, ax = plt.subplots()
             _ = ax.plot(charges[:, idx],
                         marker=MARKERS[idx],
@@ -1719,7 +1708,7 @@ class GaugeModel(object):
         actions_dict = observables[0]
         plaqs_dict = observables[1]
         charges_dict = observables[2]
-        tun_events_dict = observables[3]
+        charge_diff_dict = observables[3]
 
         run_steps, current_step, beta, therm_frac = _args
         therm_steps = run_steps // therm_frac
@@ -1747,7 +1736,7 @@ class GaugeModel(object):
         actions_file = files[2]
         plaqs_file = files[3]
         charges_file = files[4]
-        tun_events_file = files[5]
+        charge_diff_file = files[5]
         actions_stats_file = files[6]
         plaqs_stats_file = files[7]
         charges_stats_file = files[8]
@@ -1781,7 +1770,7 @@ class GaugeModel(object):
         save_data(actions_dict, actions_file, name='actions')
         save_data(plaqs_dict, plaqs_file, name='plaqs')
         save_data(charges_dict, charges_file, name='charges')
-        save_data(tun_events_dict, tun_events_file, name='tunneling_events')
+        save_data(charge_diff_dict, charge_diff_file, name='tunneling_events')
         save_data(actions_stats, actions_stats_file, name='actions_stats')
         save_data(plaqs_stats, plaqs_stats_file, name='plaqs_stats')
         save_data(charges_stats, charges_stats_file, name='charges_stats')
@@ -1900,80 +1889,104 @@ class GaugeModel(object):
 
         io.log(f"Writing statistics to: {statistics_txt_file}")
 
+        def log_and_write(sep_str, str0, therm_str, stats_strings, file):
+            io.log(sep_str)
+            io.log(str0)
+            io.log(therm_str)
+            io.log('')
+            _ = [io.log(s) for s in stats_strings]
+            io.log(sep_str)
+            io.log('')
+
+            io.write(sep_str, file, 'a')
+            io.write(str0, file, 'a')
+            io.write(therm_str, file, 'a')
+            _ = [io.write(s, file, 'a') for s in stats_strings]
+            io.write('\n', file, 'a')
+
+        log_and_write(sep_str0, str0, therm_str, suscept_strings,
+                      statistics_txt_file)
+        log_and_write(sep_str1, str1, therm_str, actions_strings,
+                      statistics_txt_file)
+        log_and_write(sep_str2, str2, therm_str, plaqs_strings,
+                      statistics_txt_file)
+        log_and_write(sep_str3, str3, therm_str, charge_probs_strings,
+                      statistics_txt_file)
+
         ################################################################
         # Topological charge / susceptibility statistics
         ################################################################
-        io.log(sep_str0)
-        io.log(str0)
-        io.log(therm_str)
-        io.log('')
-        _ = [io.log(s) for s in suscept_strings]
-        io.log(sep_str0)
-        io.log('')
-
-        io.write(sep_str0, statistics_txt_file, 'a')
-        io.write(str0, statistics_txt_file, 'a')
-        io.write(therm_str, statistics_txt_file, 'a')
-        io.write(sep_str0, statistics_txt_file, 'a')
-        #  write(sep_str0, statistics_txt_file, 'a')
-        _ = [io.write(s, statistics_txt_file, 'a') for s in suscept_strings]
+        #  io.log(sep_str0)
+        #  io.log(str0)
+        #  io.log(therm_str)
+        #  io.log('')
+        #  _ = [io.log(s) for s in suscept_strings]
+        #  io.log(sep_str0)
+        #  io.log('')
+        #
         #  io.write(sep_str0, statistics_txt_file, 'a')
-        io.write('\n', statistics_txt_file, 'a')
+        #  io.write(str0, statistics_txt_file, 'a')
+        #  io.write(therm_str, statistics_txt_file, 'a')
+        #  io.write(sep_str0, statistics_txt_file, 'a')
+        #  #  write(sep_str0, statistics_txt_file, 'a')
+        #  _ = [io.write(s, statistics_txt_file, 'a') for s in suscept_strings]
+        #  #  io.write(sep_str0, statistics_txt_file, 'a')
+        #  io.write('\n', statistics_txt_file, 'a')
 
         ################################################################
         # Total action statistics
         ################################################################
-        io.log(sep_str1)
-        io.log(str1)
-        io.log(therm_str)
-        io.log('')
-        _ = [io.log(s) for s in plaqs_strings]
-        io.log(sep_str1)
-
-        io.write(sep_str1, statistics_txt_file, 'a')
-        io.write(str1, statistics_txt_file, 'a')
-        io.write(therm_str, statistics_txt_file, 'a')
-        io.write(sep_str1, statistics_txt_file, 'a')
-        _ = [io.write(s, statistics_txt_file, 'a') for s in actions_strings]
+        #  io.log(sep_str1)
+        #  io.log(str1)
+        #  io.log(therm_str)
+        #  io.log('')
+        #  _ = [io.log(s) for s in plaqs_strings]
+        #  io.log(sep_str1)
+        #
+        #  io.write(sep_str1, statistics_txt_file, 'a')
+        #  io.write(str1, statistics_txt_file, 'a')
+        #  io.write(therm_str, statistics_txt_file, 'a')
+        #  io.write(sep_str1, statistics_txt_file, 'a')
+        #  _ = [io.write(s, statistics_txt_file, 'a') for s in actions_strings]
         #  write(sep_str1, statistics_txt_file, 'a')
 
         ################################################################
         # Average plaquette statistics
         ################################################################
-        io.log(sep_str2)
-        io.log(str2)
-        io.log(therm_str)
-        io.log('')
-        _ = [io.log(s) for s in plaqs_strings]
-        io.log(sep_str2)
-
-        io.write(sep_str2, statistics_txt_file, 'a')
-        io.write(str2, statistics_txt_file, 'a')
-        io.write(therm_str, statistics_txt_file, 'a')
-        io.write(sep_str2, statistics_txt_file, 'a')
-        _ = [io.write(s, statistics_txt_file, 'a') for s in plaqs_strings]
-        #  io.write(sep_str1, statistics_txt_file, 'a')
-        io.write('\n', statistics_txt_file, 'a')
-        io.write('\n', statistics_txt_file, 'a')
+        #  io.log(sep_str2)
+        #  io.log(str2)
+        #  io.log(therm_str)
+        #  io.log('')
+        #  _ = [io.log(s) for s in plaqs_strings]
+        #  io.log(sep_str2)
+        #
+        #  io.write(sep_str2, statistics_txt_file, 'a')
+        #  io.write(str2, statistics_txt_file, 'a')
+        #  io.write(therm_str, statistics_txt_file, 'a')
+        #  io.write(sep_str2, statistics_txt_file, 'a')
+        #  _ = [io.write(s, statistics_txt_file, 'a') for s in plaqs_strings]
+        #  #  io.write(sep_str1, statistics_txt_file, 'a')
+        #  io.write('\n', statistics_txt_file, 'a')
+        #  io.write('\n', statistics_txt_file, 'a')
 
         ################################################################
         # Topological charge probability statistics
         ################################################################
-        io.log(sep_str3)
-        io.log(str3)
-        io.log(therm_str)
-        io.log('')
-        _ = [io.log(s) for s in charge_probs_strings]
-        io.log(sep_str3)
-
-        io.write(sep_str3, statistics_txt_file, 'a')
-        io.write(str2, statistics_txt_file, 'a')
-        io.write(therm_str, statistics_txt_file, 'a')
-        io.write(sep_str3, statistics_txt_file, 'a')
-        _ = [
-            io.write(s, statistics_txt_file, 'a') for s in charge_probs_strings
-        ]
-        io.write(sep_str3, statistics_txt_file, 'a')
+        #  io.log(sep_str3)
+        #  io.log(str3)
+        #  io.log(therm_str)
+        #  io.log('')
+        #  _ = [io.log(s) for s in charge_probs_strings]
+        #  io.log(sep_str3)
+        #
+        #  io.write(sep_str3, statistics_txt_file, 'a')
+        #  io.write(str2, statistics_txt_file, 'a')
+        #  io.write(therm_str, statistics_txt_file, 'a')
+        #  io.write(sep_str3, statistics_txt_file, 'a')
+        #  _ = [
+        #      io.write(s, statistics_txt_file, 'a') for s in charge_probs_strings
+        #  ]
+        #  io.write(sep_str3, statistics_txt_file, 'a')
 
     def _get_run_files(self, *_args):
         """Create dir and files for storing observables from `self.run`."""
@@ -2015,8 +2028,8 @@ class GaugeModel(object):
         charges_file = os.path.join(
             obs_dir, f'charges_steps_{run_steps}_beta_{beta}.pkl'
         )
-        tun_events_file = os.path.join(
-            obs_dir, f'tunn_events_{run_steps}_beta_{beta}.pkl'
+        charge_diff_file = os.path.join(
+            obs_dir, f'charge_diff_{run_steps}_beta_{beta}.pkl'
         )
         actions_stats_file = os.path.join(
             obs_dir, f'actions_stats_steps_{run_steps}_beta_{beta}.pkl'
@@ -2038,12 +2051,11 @@ class GaugeModel(object):
         )
 
         files = (samples_file_npy, samples_file_json, actions_file, plaqs_file,
-                 charges_file, tun_events_file, actions_stats_file,
+                 charges_file, charge_diff_file, actions_stats_file,
                  plaqs_stats_file, charges_stats_file, suscept_stats_file,
                  charge_probs_file, statistics_txt_file)
 
         return files
-
 
 # pylint: disable=too-many-statements, too-many-branches
 def main(FLAGS):
@@ -2077,7 +2089,9 @@ def main(FLAGS):
     else:
         params['data_format'] = 'channels_last'
 
-    params['_plot'] = True
+    if HAS_MATPLOTLIB:
+        params['_plot'] = True
+
     if FLAGS.theta:
         params['_plot'] = False
         io.log("Training on Theta @ ALCF...")
@@ -2099,9 +2113,6 @@ def main(FLAGS):
                        log_dir=FLAGS.log_dir,
                        restore=FLAGS.restore)
 
-    # create separate instance of GaugeModel using generic HMC for comparison
-
-
     if FLAGS.horovod:
         if hvd.rank() == 0:
             io.save_params_to_pkl_file(params, model.info_dir)
@@ -2114,11 +2125,23 @@ def main(FLAGS):
         if FLAGS.profiler:
             model.train_profiler(FLAGS.train_steps, pre_train=True, trace=True)
         else:
-            model.train(FLAGS.train_steps,
-                        samples_init=None,
-                        beta_init=None,
-                        pre_train=True,
-                        trace=False)
+            if FLAGS.restore:
+                if model._current_state['step'] <= model.train_steps:
+                    model.train(model.train_steps,
+                                samples_init=model._current_state['samples'],
+                                beta_init=model._current_state['beta'],
+                                pre_train=False,
+                                trace=False)
+                else:
+                    io.log('Model restored but training completed. '
+                           'Preparing to run the trained sampler...')
+                    pass
+            else:
+                model.train(FLAGS.train_steps,
+                            samples_init=None,
+                            beta_init=None,
+                            pre_train=True,
+                            trace=False)
 
     try:
         #  run_steps_grid = [100, 500, 1000, 2500, 5000, 10000]
@@ -2322,8 +2345,8 @@ if __name__ == '__main__':
                         help=("Metric to use in loss function. "
                               "(Default: `l2`, choices: [`l2`, `l1`, `cos`])"))
 
-    parser.add_argument("--plaq_loss", action="store_true",
-                        required=False, dest="plaq_loss",
+    parser.add_argument("--charge_loss", action="store_true",
+                        required=False, dest="charge_loss",
                         help=("Flag then when passed will modify the loss "
                               "function to include an additional term that "
                               "measures the difference in topological charge "
@@ -2334,6 +2357,24 @@ if __name__ == '__main__':
                         help=("Include auxiliary function `q` for calculating "
                               "expected squared jump distance conditioned on "
                               "initialization distribution. (Default: False)"))
+
+    parser.add_argument("--std_weight", type=float, default=1.,
+                        required=False, dest="std_weight",
+                        help=("Multiplicative factor used to weigh relative "
+                              "strength of stdiliary term in loss function. "
+                              "(Default: 1.)"))
+
+    parser.add_argument("--aux_weight", type=float, default=1.,
+                        required=False, dest="aux_weight",
+                        help=("Multiplicative factor used to weigh relative "
+                              "strength of auxiliary term in loss function. "
+                              "(Default: 1.)"))
+
+    parser.add_argument("--charge_weight", type=float, default=1.,
+                        required=False, dest="charge_weight",
+                        help=("Multiplicative factor used to weigh relative "
+                              "strength of chargeiliary term in loss function. "
+                              "(Default: 1.)"))
 
     parser.add_argument("--clip_grads", action="store_true",
                         required=False, dest="clip_grads",

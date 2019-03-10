@@ -27,93 +27,109 @@ class GenericNet(tf.keras.Model):
         for key, val in kwargs.items():
             setattr(self, key, val)
 
+        if self.name_scope is None:
+            self.name_scope = model_name
+
+
 
         #  with tf.variable_scope(variable_scope):
         with tf.name_scope(self.name_scope):
-            self.flatten_x = tf.keras.layers.Flatten(name='flat_x')
-            self.flatten_v = tf.keras.layers.Flatten(name='flat_v')
+            self.flatten = tf.keras.layers.Flatten(name='flatten')
 
-            self.x_layer = _custom_dense(self.num_hidden,
-                                         self.factor/3.,
-                                         name='x_layer')
-            self.v_layer = _custom_dense(self.num_hidden,
-                                         1./3.,
-                                         name='v_layer')
-            self.t_layer = _custom_dense(self.num_hidden,
-                                         1./3.,
-                                         name='t_layer')
-            self.h_layer = _custom_dense(self.num_hidden,
-                                         name='h_layer')
+            with tf.name_scope('x_layer'):
+                self.x_layer = _custom_dense(self.num_hidden,
+                                             self.factor/3.,
+                                             name='x_layer')
 
-            self.scale_layer = _custom_dense(self.x_dim,
-                                             0.001,
+            with tf.name_scope('v_layer'):
+                self.v_layer = _custom_dense(self.num_hidden,
+                                             1./3.,
+                                             name='v_layer')
+
+            with tf.name_scope('t_layer'):
+                self.t_layer = _custom_dense(self.num_hidden,
+                                             1./3.,
+                                             name='t_layer')
+
+            with tf.name_scope('h_layer'):
+                self.h_layer = _custom_dense(self.num_hidden,
                                              name='h_layer')
 
-            self.coeff_scale = tf.Variable(
-                initial_value=tf.zeros([1, self.x_dim]),
-                name='coeff_scale',
-                trainable=True,
-                dtype=tf.float32,
-            )
+            with tf.name_scope('scale_layer'):
+                self.scale_layer = _custom_dense(self.x_dim,
+                                                 0.001,
+                                                 name='h_layer')
 
-            self.translation_layer = _custom_dense(
-                self.x_dim,
-                0.001,
-                name='translation_layer'
-            )
+            with tf.name_scope('coeff_scale'):
+                self.coeff_scale = tf.Variable(
+                    initial_value=tf.zeros([1, self.x_dim]),
+                    name='coeff_scale',
+                    trainable=True,
+                    dtype=tf.float32,
+                )
 
-            self.transformation_layer = _custom_dense(
-                self.x_dim,
-                0.001,
-                name='transformation_layer'
-            )
+            with tf.name_scope('translation_layer'):
+                self.translation_layer = _custom_dense(
+                    self.x_dim,
+                    0.001,
+                    name='translation_layer'
+                )
 
-            self.coeff_transformation = tf.Variable(
-                initial_value=tf.zeros([1, self.x_dim]),
-                name='coeff_transformation',
-                trainable=True,
-                dtype=tf.float32
-            )
+            with tf.name_scope('transformation_layer'):
+                self.transformation_layer = _custom_dense(
+                    self.x_dim,
+                    0.001,
+                    name='transformation_layer'
+                )
+
+            with tf.name_scope('coeff_transformation'):
+                self.coeff_transformation = tf.Variable(
+                    initial_value=tf.zeros([1, self.x_dim]),
+                    name='coeff_transformation',
+                    trainable=True,
+                    dtype=tf.float32
+                )
+
 
     # pylint: disable=invalid-name, arguments-differ
     def call(self, inputs):
         """call method.
 
-        NOTE: 
-            * Architecture looks like 
-                * inputs: x, v, t
-                    x --> FLATTEN_X --> X_LAYER --> X_OUT
-                    v --> FLATTEN_V --> V_LAYER --> V_OUT
-                    t --> T_LAYER --> T_OUT
+        NOTE Architecture looks like:
 
-                    X_OUT + V_OUT + T_OUT --> H_LAYER --> H_OUT
+            * inputs: x, v, t
+                x --> FLATTEN_X --> X_LAYER --> X_OUT
+                v --> FLATTEN_V --> V_LAYER --> V_OUT
+                t --> T_LAYER --> T_OUT
 
-                * H_OUT is then fed to three separate layers:
-                    (1.) H_OUT -->
-                           TANH(SCALE_LAYER) * exp(COEFF_SCALE) --> SCALE_OUT
+                X_OUT + V_OUT + T_OUT --> H_LAYER --> H_OUT
 
-                         input: H_OUT
-                         output: scale
-                
-                    (2.) H_OUT --> TRANSLATION_LAYER --> TRANSLATION_OUT
+            * H_OUT is then fed to three separate layers:
+                (1.) H_OUT -->
+                       TANH(SCALE_LAYER) * exp(COEFF_SCALE) --> SCALE_OUT
 
-                         input: H_OUT
-                         output: translation
+                     input: H_OUT
+                     output: scale
+            
+                (2.) H_OUT --> TRANSLATION_LAYER --> TRANSLATION_OUT
 
-                    (3.) H_OUT -->
-                           TANH(SCALE_LAYER)*exp(COEFF_TRANSFORMATION) -->
-                             TRANFORMATION_OUT
+                     input: H_OUT
+                     output: translation
 
-                         input: H_OUT
-                         output: transformation
+                (3.) H_OUT -->
+                       TANH(SCALE_LAYER)*exp(COEFF_TRANSFORMATION) -->
+                         TRANFORMATION_OUT
+
+                     input: H_OUT
+                     output: transformation
 
        Returns:
            scale, translation, transformation
         """
         v, x, t = inputs
 
-        x = self.flatten_x(x)
-        v = self.flatten_v(v)
+        x = self.flatten(x)
+        v = self.flatten(v)
 
         h = self.v_layer(v) + self.x_layer(x) + self.t_layer(t)
         h = tf.nn.relu(h)
@@ -121,19 +137,12 @@ class GenericNet(tf.keras.Model):
         h = tf.nn.relu(h)
 
         scale = tf.nn.tanh(self.scale_layer(h)) * tf.exp(self.coeff_scale)
-        scale = tf.reshape(scale, shape=(-1, *self.links_shape), name='scale')
 
         translation = self.translation_layer(h)
-        translation = tf.reshape(translation,
-                                 shape=(-1, *self.links_shape),
-                                 name='translation')
 
         transformation = (self.transformation_layer(h)
                           * tf.exp(self.coeff_transformation))
-        transformation = tf.reshape(transformation,
-                                    shape=(-1, *self.links_shape),
-                                    name='transformation')
-
+        #
         return scale, translation, transformation
 
 
