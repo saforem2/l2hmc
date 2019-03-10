@@ -113,11 +113,11 @@ PARAMS = {
     'hmc': False,
     'eps_trainable': True,
     'metric': 'cos_diff',
-    'aux': True,
+    #  'aux': True,
     'std_weight': 1.,
     'aux_weight': 1.,
     'charge_weight': 1.,
-    'charge_loss': True,
+    #  'charge_loss': True,
     'summaries': True,
     'clip_grads': False,
     'clip_value': None,
@@ -304,9 +304,11 @@ class GaugeModel(object):
         self.hmc = params.get('hmc', False)
         self.eps_trainable = params.get('eps_trainable', True)
         self.metric = params.get('metric', 'cos_diff')
-        self.aux = params.get('aux', True)
-        self.aux_factor = params.get('aux_factor', 1.)
-        self.charge_loss = params.get('charge_loss', False)
+        #  self.aux = params.get('aux', True)
+        self.std_weight = params.get('std_weight', 1.)
+        self.aux_weight = params.get('aux_weight', 1.)
+        self.charge_weight = params.get('charge_weight', 1.)
+        #  self.charge_loss = params.get('charge_loss', False)
         self.summaries = params.get('summaries', False)
         self.clip_grads = params.get('clip_grads', False)
         self.clip_value = params.get('clip_value', 1.)
@@ -710,7 +712,7 @@ class GaugeModel(object):
         eps = 1e-3
         aux_weight = weights.get('aux_weight', 1.)
         std_weight = weights.get('std_weight', 1.)
-        charge_weight =  weights.get('charge_weight', 1.)
+        charge_weight = weights.get('charge_weight', 1.)
 
         with tf.name_scope('x_update'):
             #  x_, _, px, x_out = self.dynamics.apply_transition(x, beta)
@@ -734,26 +736,20 @@ class GaugeModel(object):
                         tf.reduce_sum(self.metric_fn(z, z_), axis=1) * pz + eps
                     )
 
-                std_loss = ((1. / x_std_loss + 1. / z_std_loss) * ls
-                            - (x_std_loss + z_std_loss) / ls)
+                std_loss = std_weight * ((1. / x_std_loss + 1. / z_std_loss)
+                                         * ls - (x_std_loss + z_std_loss) / ls)
 
-            if self.charge_loss:
-                with tf.name_scope('charge_loss'):
-                    with tf.name_scope('x_loss'):
-                        x_dq = self._calc_top_charges_diff(x_, x)
-                        xq_loss = - px * x_dq + eps
-                    with tf.name_scope('z_loss'):
-                        z_dq = self._calc_top_charges_diff(z_, z)
-                        zq_loss = aux_weight * (- pz * z_dq + eps)
+            with tf.name_scope('charge_loss'):
+                with tf.name_scope('x_loss'):
+                    x_dq = self._calc_top_charges_diff(x_, x)
+                    xq_loss = - px * x_dq + eps
+                with tf.name_scope('z_loss'):
+                    z_dq = self._calc_top_charges_diff(z_, z)
+                    zq_loss = aux_weight * (- pz * z_dq + eps)
 
-                charge_loss = xq_loss + zq_loss
+                charge_loss = charge_weight * (xq_loss + zq_loss)
 
-            else:
-                charge_loss = 0.
-
-            loss = tf.reduce_mean((std_weight * std_loss
-                                   + charge_weight * charge_loss),
-                                  axis=0, name='loss')
+            loss = tf.reduce_mean(std_loss + charge_loss, axis=0, name='loss')
 
         return loss, x_out, px, x_dq
 
@@ -2397,18 +2393,18 @@ if __name__ == '__main__':
                         help=("Metric to use in loss function. "
                               "(Default: `l2`, choices: [`l2`, `l1`, `cos`])"))
 
-    parser.add_argument("--charge_loss", action="store_true",
-                        required=False, dest="charge_loss",
-                        help=("Flag then when passed will modify the loss "
-                              "function to include an additional term that "
-                              "measures the difference in topological charge "
-                              "between the original and proposed sample."))
+    #  parser.add_argument("--charge_loss", action="store_true",
+    #                      required=False, dest="charge_loss",
+    #                      help=("Flag then when passed will modify the loss "
+    #                            "function to include an additional term that "
+    #                            "measures the difference in topological charge "
+    #                            "between the original and proposed sample."))
 
-    parser.add_argument("--aux", action="store_true",
-                        required=False, dest="aux",
-                        help=("Include auxiliary function `q` for calculating "
-                              "expected squared jump distance conditioned on "
-                              "initialization distribution. (Default: False)"))
+    #  parser.add_argument("--aux", action="store_true",
+    #                      required=False, dest="aux",
+    #                      help=("Include auxiliary function `q` for calculating "
+    #                            "expected squared jump distance conditioned on "
+    #                            "initialization distribution. (Default: False)"))
 
     parser.add_argument("--std_weight", type=float, default=1.,
                         required=False, dest="std_weight",

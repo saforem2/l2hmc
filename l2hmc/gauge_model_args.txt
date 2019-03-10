@@ -9,12 +9,12 @@
 --space_size 8                  
 --num_samples 56               
 --num_steps 5                   
---eps 0.25                      
+--eps 0.35                      
 --annealing
 --beta_init 2.                  
 --beta_final 4.                 
 --lr_init 0.0005                 
---lr_decay_steps 1000            
+--lr_decay_steps 500            
 --lr_decay_rate 0.95            
 --train_steps 5000             
 --save_steps 1000               
@@ -23,16 +23,14 @@
 --training_samples_length 500
 --network_arch 'conv3D'
 --metric 'cos_diff'
---aux
 --aux_weight 1.
 --std_weight 1.
 --charge_weight 0.
 --loss_scale 1.
---charge_loss
 --summaries
 --eps_trainable
---clip_grads
---clip_val 10.
+#--clip_grads
+#--clip_val 10.
 --log_dir 'conv3D_logs/lattice_88/stdw1_qw0_aw1_steps5_lr5e_4'
 
 
