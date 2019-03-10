@@ -257,8 +257,15 @@ class GaugeDynamics(tf.keras.Model):
 
         return position_post, momentum_post, accept_prob, position_out
 
-    # pylint:disable=missing-docstring,invalid-name,unused-argument
     def transition_kernel(self, position, beta, forward=True):
+        """Transition kernel of augmented leapfrog integrator."""
+        if forward:
+            return self.forward(position, beta)
+
+        return self.backward(position, beta)
+
+    # pylint:disable=missing-docstring,invalid-name,unused-argument
+    def _transition_kernel(self, position, beta, forward=True):
         """Transition kernel of augmented leapfrog integrator."""
         if forward:
             name_scope = 'transition_kernel_forward'
@@ -306,14 +313,93 @@ class GaugeDynamics(tf.keras.Model):
 
         return position_post, momentum_post, accept_prob
 
-    def _forward_lf(self, position, momentum, beta, i):
+    def forward(self, position, beta):
+        """Forward implementation of transition kernel."""
+        with tf.name_scope('forward'):
+            # resmaple momentum
+            with tf.name_scope('resample_momentum'):
+                momentum = tf.random_normal(tf.shape(position),
+                                            name='momentum')
+            position_post, momentum_post = position, momentum
+            sumlogdet = 0.
+            t = tf.constant(0., name='step_forward', dtype=tf.float32)
+            dN = tf.shape(position)[0]
+            j = tf.zeros((dN,))
+
+            # Apply augmented leapfrog steps
+            def body(x, v, beta, t, j):
+                new_x, new_v, logdet = self._forward_lf(x, v, beta, t)
+                return new_x, new_v, beta, t+1, j+logdet
+
+            def cond(x, v, beta, t, j):
+                return tf.less(t, self.num_steps)
+
+            position_post, momentum_post, beta, t, sumlogdet = tf.while_loop(
+                cond=cond,
+                body=body,
+                loop_vars=[position_post, momentum_post, beta, t, j]
+            )
+
+            with tf.name_scope('accept_prob'):
+                accept_prob = self._compute_accept_prob(
+                    position,
+                    momentum,
+                    position_post,
+                    momentum_post,
+                    sumlogdet,
+                    beta
+                )
+
+        return position_post, momentum_post, accept_prob
+
+    def backward(self, position, beta):
+        """Forward implementation of transition kernel."""
+        with tf.name_scope('backward'):
+            # resmaple momentum
+            with tf.name_scope('resample_momentum'):
+                momentum = tf.random_normal(tf.shape(position),
+                                            name='momentum')
+            position_post, momentum_post = position, momentum
+            sumlogdet = 0.
+            t = tf.constant(0., name='step_forward', dtype=tf.float32)
+            dN = tf.shape(position)[0]
+            j = tf.zeros((dN,))
+
+            # Apply augmented leapfrog steps
+            def body(x, v, beta, t, j):
+                tt = self.num_steps - t - 1
+                new_x, new_v, logdet = self._backward_lf(x, v, beta, tt)
+                return new_x, new_v, beta, t+1, j+logdet
+
+            def cond(x, v, beta, t, j):
+                return tf.less(t, self.num_steps)
+
+            position_post, momentum_post, beta, t, sumlogdet = tf.while_loop(
+                cond=cond,
+                body=body,
+                loop_vars=[position_post, momentum_post, beta, t, j]
+            )
+
+            with tf.name_scope('accept_prob'):
+                accept_prob = self._compute_accept_prob(
+                    position,
+                    momentum,
+                    position_post,
+                    momentum_post,
+                    sumlogdet,
+                    beta
+                )
+
+        return position_post, momentum_post, accept_prob
+
+    def _forward_lf(self, position, momentum, beta, step):
         """One forward augmented leapfrog step."""
         with tf.name_scope('forward_lf'):
             #  t = self._get_time(i)
             with tf.name_scope('format_time'):
-                t = self._format_time(i, tile=tf.shape(position)[0])
+                t = self._format_time(step, tile=tf.shape(position)[0])
 
-            mask, mask_inv = self._get_mask(i)
+            mask, mask_inv = self._get_mask(step)
             sumlogdet = 0.
 
             momentum, logdet = self._update_momentum_forward(position,
@@ -340,16 +426,17 @@ class GaugeDynamics(tf.keras.Model):
 
         return position, momentum, sumlogdet
 
-    def _backward_lf(self, position, momentum, beta, i):
+    def _backward_lf(self, position, momentum, beta, step):
         """One backward augmented leapfrog step."""
 
         # Reversed index/sinusoidal time
         with tf.name_scope('backward_lf'):
             with tf.name_scope('format_time'):
-                t = self._format_time(self.num_steps - i - 1,
-                                      tile=tf.shape(position)[0])
+                t = self._format_time(step, tile=tf.shape(position)[0])
+                #  t = self._format_time(self.num_steps - i - 1,
+                #                        tile=tf.shape(position)[0])
 
-            mask, mask_inv = self._get_mask(self.num_steps - i - 1)
+            mask, mask_inv = self._get_mask(step)
             with tf.name_scope('sumlogdet'):
                 sumlogdet = 0.
 

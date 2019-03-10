@@ -948,45 +948,48 @@ class GaugeModel(object):
 
         if sess is None:
             #  self.sess = tf.Session(config=self.config)
-            hooks = [
-                # Horovod: BroadcastGlobalVariablesHook broadcasts initial
-                # variable states from rank 0 to all other processes. This is
-                # necessary to ensure consistent initialization of all workers
-                # when training is started with random weights or restored from
-                # a checkpoint.
-                hvd.BroadcastGlobalVariablesHook(0),
+            if self.using_hvd:
+                hooks = [
+                    # Horovod: BroadcastGlobalVariablesHook broadcasts initial
+                    # variable states from rank 0 to all other processes. This
+                    # is necessary to ensure consistent initialization of all
+                    # workers when training is started with random weights or
+                    # restored from a checkpoint.
+                    hvd.BroadcastGlobalVariablesHook(0),
 
-                # Horovod: adjust number of steps based on number of GPUs.
-                tf.train.StopAtStepHook(
-                    last_step=self.train_steps // hvd.size()
-                ),
+                    # Horovod: adjust number of steps based on number of GPUs.
+                    tf.train.StopAtStepHook(
+                        last_step=self.train_steps // hvd.size()
+                    ),
 
-                #  tf.train.LoggingTensorHook(tensors={'step': global_step,
-                #                                      'loss': loss},
-                #                             every_n_iter=10),
-            ]
+                    #  tf.train.LoggingTensorHook(tensors={'step': global_step,
+                    #                                      'loss': loss},
+                    #                             every_n_iter=10),
+                ]
+            else:
+                hooks = [tf.train.StopAtStepHook(last_step=self.train_steps)]
             # The MonitoredTrainingSession takes care of session
             # initialization, restoring from a checkpoint, saving to a
             # checkpoint, and closing when done or an error occurs.
             self.sess = tf.train.MonitoredTrainingSession(
                 checkpoint_dir=self.log_dir,
                 hooks=hooks,
-                config=config
+                config=config,
+                save_summaries_secs=None,
+                save_summaries_steps=None
             )
         else:
             self.sess = sess
-
-
 
         log_and_write((f'done. Graph took: '
                        f'{time.time() - start_time:4.3g} s to build.'),
                       self.files['run_info_file'])
         log_and_write(sep_str, self.files['run_info_file'])
 
-        self.sess.run(tf.global_variables_initializer())
+        #  self.sess.run(tf.global_variables_initializer())
 
-        if self.using_hvd:
-            self.sess.run(hvd.broadcast_global_variables(0))
+        #  if self.using_hvd:
+            #  self.sess.run(hvd.broadcast_global_variables(0))
 
         #  if self.condition1 or self.condition2:
         #      io.write(sep_str, self.files['run_info_file'], 'a')
@@ -1017,19 +1020,20 @@ class GaugeModel(object):
         """
         #  if self.condition1 or self.condition2:
         #      self.saver = tf.train.Saver(max_to_keep=3)
+        #
+        #  if self.condition1 or self.condition2:
+        #      self.saver = tf.train.Saver(max_to_keep=3)
+        #
+        #      ckpt = tf.train.get_checkpoint_state(self.log_dir)
+        #      if ckpt and ckpt.model_checkpoint_path:
+        #          io.log('Restoring previous model from: '
+        #                 f'{ckpt.model_checkpoint_path}')
+        #          self.saver.restore(self.sess, ckpt.model_checkpoint_path)
+        #          io.log('Model restored.\n', nl=False)
+        #          self.global_step = tf.train.get_global_step()
+        #          initial_step = self.sess.run(self.global_step)
 
         if self.condition1 or self.condition2:
-            self.saver = tf.train.Saver(max_to_keep=3)
-
-            ckpt = tf.train.get_checkpoint_state(self.log_dir)
-            if ckpt and ckpt.model_checkpoint_path:
-                io.log('Restoring previous model from: '
-                       f'{ckpt.model_checkpoint_path}')
-                self.saver.restore(self.sess, ckpt.model_checkpoint_path)
-                io.log('Model restored.\n', nl=False)
-                self.global_step = tf.train.get_global_step()
-                #  initial_step = self.sess.run(self.global_step)
-
             self.writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
 
         h_str = ("{:^12s}{:^10s}{:^10s}{:^10s}{:^10s}"
@@ -1120,7 +1124,7 @@ class GaugeModel(object):
             assert samples_np.shape == self.x.shape
 
         initial_step = self._current_state['step']
-        self.global_step.assign(initial_step)
+        #  self.global_step.assign(initial_step)
 
         #  self._current_state['lr'] = self.sess.run(self.lr)
         #  lr_np = np.float32(self._current_state['lr'])
