@@ -203,7 +203,11 @@ class GaugeModel(object):
         # ------------------------------------------------------------------
         # Write relevant instance attributes to human readable .txt file.
         # ------------------------------------------------------------------
-        self._write_run_parameters(_print=True)
+        try:
+            self._write_run_parameters(_print=True)
+        except:
+            import pdb; pdb.set_trace()
+
         # ------------------------------------------------------------------
         # Create lattice object.
         # ------------------------------------------------------------------
