@@ -195,7 +195,11 @@ class GaugeModel(object):
         # ------------------------------------------------------------------
         # Create necessary directories for holding checkpoints, data, etc.
         # ------------------------------------------------------------------
-        self._create_dir_structure(log_dir)
+        try:
+            self._create_dir_structure(log_dir)
+        except:
+            import pdb
+            pdb.set_trace()
         # ------------------------------------------------------------------
         # Write relevant instance attributes to human readable .txt file.
         # ------------------------------------------------------------------
