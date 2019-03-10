@@ -617,19 +617,27 @@ class GaugeModel(object):
     def _create_metric_fn(metric):
         """Create metric fn for measuring the distance between two samples."""
         if metric == 'l1':
-            metric_fn = lambda x1, x2: tf.abs(x1 - x2)
+            def metric_fn(x1, x2):
+                return tf.abs(x1 - x2)
 
-        if metric == 'l2':
-            metric_fn = lambda x1, x2: tf.square(x1 - x2)
+        elif metric == 'l2':
+            def metric_fn(x1, x2):
+                return tf.square(x1 - x2)
 
-        if metric == 'cos':
-            metric_fn = lambda x1, x2: tf.abs(tf.cos(x1) - tf.cos(x2))
+        elif metric == 'cos':
+            def metric_fn(x1, x2):
+                return tf.abs(tf.cos(x1) - tf.cos(x2))
 
-        if metric == 'cos2':
-            metric_fn = lambda x1, x2: tf.square(tf.cos(x1) - tf.cos(x2))
+        elif metric == 'cos2':
+            def metric_fn(x1, x2):
+                return tf.square(tf.cos(x1) - tf.cos(x2))
 
-        if metric == 'cos_diff':
-            metric_fn = lambda x1, x2: 1. - tf.cos(x1 - x2)
+        elif metric == 'cos_diff':
+            def metric_fn(x1, x2):
+                return 1. - tf.cos(x1 - x2)
+        else:
+            raise AttributeError(f"metric={metric}. Expected one of: 'l1', "
+                                 f"'l2', 'cos', 'cos2', or 'cos_diff'.")
 
         return metric_fn
 
