@@ -377,10 +377,11 @@ class GaugeModel(object):
         #      self.log_dir = log_dir
         #      io.check_else_make_dir(self.log_dir)
 
-        project_dir = os.path.dirname(os.getcwd())
-        root_log_dir = os.path.join(project_dir, log_dir)
+        project_dir = os.path.abspath(os.path.dirname(os.getcwd()))
+        root_log_dir = os.path.abspath(os.path.join(project_dir, log_dir))
         run_num = get_run_num(root_log_dir)
-        self.log_dir = os.path.join(root_log_dir, f'run_{run_num}')
+        self.log_dir = os.path.abspath(os.path.join(root_log_dir,
+                                                    f'run_{run_num}'))
 
         self.info_dir = os.path.join(self.log_dir, 'run_info')
         self.figs_dir = os.path.join(self.log_dir, 'figures')
@@ -504,18 +505,18 @@ class GaugeModel(object):
             pickle.dump(self._current_state, f)
 
 
-        if not tf.executing_eagerly():
-            #  ckpt_prefix = os.path.join(self.log_dir, 'ckpt')
-            io.log(f'Saving checkpoint to: {self.ckpt_file}')
-            self.saver.save(self.sess,
-                            self.ckpt_file,
-                            global_step=self._current_state['step'])
-            self.writer.flush()
-        else:
-            saved_path = self.checkpoint.save(
-                file_prefix=os.path.join(self.log_dir, 'ckpt')
-            )
-            io.log(f"\n Saved checkpoint to: {saved_path}")
+        #  if not tf.executing_eagerly():
+        #      #  ckpt_prefix = os.path.join(self.log_dir, 'ckpt')
+        #      io.log(f'INFO: Saving checkpoint to: {self.ckpt_file}')
+        #      self.saver.save(self.sess,
+        #                      self.ckpt_file,
+        #                      global_step=self._current_state['step'])
+        #      self.writer.flush()
+        #  else:
+        #      saved_path = self.checkpoint.save(
+        #          file_prefix=os.path.join(self.log_dir, 'ckpt')
+        #      )
+        #      io.log(f"\n Saved checkpoint to: {saved_path}")
 
         if not self.hmc:
             if tf.executing_eagerly():
@@ -854,21 +855,25 @@ class GaugeModel(object):
         #  io.log(sep_str)
         #  io.log(graph_str0)
 
-        if config is None:
-            self.config = tf.ConfigProto()
-            off = rewriter_config_pb2.RewriterConfig.OFF
-            graph_options = self.config.graph_options
-            rewrite_options = graph_options.rewrite_options
-            rewrite_options.arithmetic_optimization = off
+        if self.hmc:  # if running generic HMC, all we need is the sampler
+            if config is None:
+                self.config = tf.ConfigProto()
+            else:
+                self.config = config
+            if sess is None:
+                self.sess = tf.Session(config=self.config)
+            else:
+                self.sess = sess
 
-            #  self.config.graph_options.rewrite_options.arithmetic_optimization=o
-        else:
-            self.config = config
+            if self.space_size > 8:
+                off = rewriter_config_pb2.RewriterConfig.OFF
+                graph_options = self.config.graph_options
+                rewrite_options = graph_options.rewrite_options
+                rewrite_options.arithmetic_optimization = off
 
-        if sess is None:
-            self.sess = tf.Session(config=self.config)
-        else:
-            self.sess = sess
+            self._create_sampler()
+            self.sess.run(tf.global_variables_initializer())
+            return
 
         with tf.name_scope('global_step'):
             self.global_step = tf.train.get_or_create_global_step()
@@ -883,14 +888,11 @@ class GaugeModel(object):
                                                  name='learning_rate')
 
         with tf.name_scope('optimizer'):
-            self.optimizer = tf.train.AdamOptimizer(self.lr)
             if self.using_hvd:
+                self.optimizer = tf.train.AdamOptimizer(self.lr * hvd.size())
                 self.optimizer = hvd.DistributedOptimizer(self.optimizer)
-
-        if self.hmc:  # if running generic HMC, all we need is the sampler
-            self._create_sampler()
-            self.sess.run(tf.global_variables_initializer())
-            return
+            else:
+                self.optimizer = tf.train.AdamOptimizer(self.lr)
 
         with tf.name_scope('loss'):
             log_and_write("  Creating loss...", self.files['run_info_file'])
@@ -931,6 +933,50 @@ class GaugeModel(object):
             #  io.log(f'    done. took: {t_diff:4.3g} s to create.')
             log_and_write(f'    done. took: {t_diff:4.3g} s to create.',
                           self.files['run_info_file'])
+
+        if config is None:
+            self.config = tf.ConfigProto()
+            if self.space_size > 8:
+                off = rewriter_config_pb2.RewriterConfig.OFF
+                graph_options = self.config.graph_options
+                rewrite_options = graph_options.rewrite_options
+                rewrite_options.arithmetic_optimization = off
+
+            #  self.config.graph_options.rewrite_options.arithmetic_optimization=o
+        else:
+            self.config = config
+
+        if sess is None:
+            #  self.sess = tf.Session(config=self.config)
+            hooks = [
+                # Horovod: BroadcastGlobalVariablesHook broadcasts initial
+                # variable states from rank 0 to all other processes. This is
+                # necessary to ensure consistent initialization of all workers
+                # when training is started with random weights or restored from
+                # a checkpoint.
+                hvd.BroadcastGlobalVariablesHook(0),
+
+                # Horovod: adjust number of steps based on number of GPUs.
+                tf.train.StopAtStepHook(
+                    last_step=self.train_steps // hvd.size()
+                ),
+
+                #  tf.train.LoggingTensorHook(tensors={'step': global_step,
+                #                                      'loss': loss},
+                #                             every_n_iter=10),
+            ]
+            # The MonitoredTrainingSession takes care of session
+            # initialization, restoring from a checkpoint, saving to a
+            # checkpoint, and closing when done or an error occurs.
+            self.sess = tf.train.MonitoredTrainingSession(
+                checkpoint_dir=self.log_dir,
+                hooks=hooks,
+                config=config
+            )
+        else:
+            self.sess = sess
+
+
 
         log_and_write((f'done. Graph took: '
                        f'{time.time() - start_time:4.3g} s to build.'),
@@ -995,12 +1041,7 @@ class GaugeModel(object):
         self.train_header = dash0 + '\n' + h_strf + '\n' + dash1
         self.sess.graph.finalize()
 
-    def train_profiler(self, 
-                       train_steps,
-                       samples_init=None,
-                       beta_init=None,
-                       pre_train=True,
-                       trace=True):
+    def train_profiler(self, train_steps, **kwargs):
         """Wrapper around training loop for profiling graph execution."""
         builder = tf.profiler.ProfileOptionBuilder
         opt = builder(builder.time_and_memory()).order_by('micros').build()
@@ -1021,7 +1062,9 @@ class GaugeModel(object):
             #  step 20.
             pctx.add_auto_profiling('scope', opt2, [20])
             # High level API, such as slim, Estimator, etc.
-            self.train(train_steps, samples_init, beta_init, pre_train, trace)
+            kwargs['trace'] = True
+
+            self.train(train_steps, **kwargs)
 
     # pylint: disable=too-many-statements, too-many-branches
     def train(self, train_steps, **kwargs):
@@ -1077,6 +1120,7 @@ class GaugeModel(object):
             assert samples_np.shape == self.x.shape
 
         initial_step = self._current_state['step']
+        self.global_step.assign(initial_step)
 
         #  self._current_state['lr'] = self.sess.run(self.lr)
         #  lr_np = np.float32(self._current_state['lr'])
@@ -1104,10 +1148,12 @@ class GaugeModel(object):
             io.log(self.train_header)
             io.write(self.train_header, self.files['run_info_file'], 'a')
 
-            for step in range(initial_step, train_steps):
+            #  for step in range(initial_step, train_steps):
+            while not self.sess.should_stop():
                 start_step_time = time.time()
 
                 #  beta_np = annealing_sched[step]
+                step = self.sess.run(self.global_step)
                 beta_np = self.update_beta(step)
 
                 fd = {self.x: samples_np,
@@ -2082,10 +2128,12 @@ def main(FLAGS):
         params['data_format'] = 'channels_first'
         os.environ["KMP_BLOCKTIME"] = str(0)
         os.environ["KMP_AFFINITY"] = "granularity=fine,verbose,compact,1,0"
+        # Horovod: pin GPU to be used to process local rank (one GPU per
+        # process)
         config.allow_soft_placement = True
         config.gpu_options.allow_growth = True
-        #  config.intra_op_parallelism_threads = FLAGS.num_intra_threads
-        #  config.inter_op_parallelism_threads = FLAGS.num_inter_threads
+        if HAS_HOROVOD and FLAGS.horovod:
+            config.gpu_options.visible_device_list = str(hvd.local_rank())
     else:
         params['data_format'] = 'channels_last'
 
