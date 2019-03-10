@@ -18,9 +18,6 @@ from scipy.special import i0, i1
 from .gauge_generators import generate_SU2, generate_SU3, generate_SU3_array
 
 
-
-tfe = tf.contrib.eager
-
 EPS = 0.1
 
 NUM_SAMPLES = 500
