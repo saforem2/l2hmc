@@ -45,7 +45,7 @@ except ImportError:
 import utils.file_io as io
 
 from collections import Counter, OrderedDict
-from lattice.lattice import GaugeLattice, project_angle, u1_plaq_exact
+from lattice.lattice import GaugeLattice, u1_plaq_exact
 from utils.tf_logging import variable_summaries
 from dynamics.gauge_dynamics import GaugeDynamics
 
@@ -146,8 +146,6 @@ def create_log_dir(root_dir='gauge_logs_graph'):
     except:
         pass
 
-    import pdb; pdb.set_trace()
-
     return log_dir
 
 
@@ -174,6 +172,112 @@ def tf_accept(x, _x, px):
     return tf.where(mask, _x, x)
 
 
+def project_angle(x):
+    """Returns the projection of an angle `x` from [-4pi, 4pi] to [-pi, pi]."""
+    return x - 2 * np.pi * tf.floor((x + np.pi) / (2 * np.pi))
+
+
+def linear_fft(x, N=100):
+    """Fourier series representation of linear function y = x."""
+    y = np.zeros_like(x)
+    #  k = np.arange(1, N)
+    for n in range(1, N):
+        y[n] = np.sum(np.sin(n * x))
+        #  y += (-1) ** (1 + n) * np.sin(n * x)
+    y *= - 2
+    return y
+
+def project_angle_approx(x, N=25):
+    """Use the fourier series representation `x` to approx `project_angle`.
+
+    NOTE: Because `project_angle` suffers a discontinuity, we approximate `x`
+    with its Fourier series representation in order to have a differentiable
+    function when computing the loss.
+    
+    Args:
+        x (array-like): Array to be projected.
+        N (int): Number of terms to keep in Fourier series.
+    """
+    y = np.zeros(x.shape)
+    for n in range(1, N):
+        y += (-1) ** (1 + n) * tf.sin(n * x) / n
+    y *= 2
+    return y
+
+
+def calc_fourier_coeffs(f, T, N, return_complex=False):
+    """Calculates the first 2*N+1 Fourier series coeff. of a periodic function.
+
+    Given a periodic, function f(t) with period T, this function returns the
+    coefficients a0, {a1,a2,...},{b1,b2,...} such that:
+
+        f(t) ~= a0/2+ sum_{k=1}^{N} (a_k*cos(2*pi*k*t/T) + b_k*sin(2*pi*k*t/T))
+
+    If return_complex is set to True, it returns instead the coefficients
+    {c0,c1,c2,...}
+    such that:
+
+        f(t) ~= sum_{k=-N}^{N} c_k * exp(i*2*pi*k*t/T)
+
+    where we define c_{-n} = complex_conjugate(c_{n})
+
+    Refer to wikipedia for the relation between the real-valued and complex
+    valued coeffs at http://en.wikipedia.org/wiki/Fourier_series.
+
+    Args:
+        f: The periodic function, a callable.
+        T: The period of the function f so that f(0) == f(T)
+        N: The degree of the resulting approximation (number of Fourier
+            coefficient) to return.
+        return_complex: Return Fourier coefficients of complex representation
+            of Fourier series. (Deafult: False)
+    Returns:
+        if return_complex: 
+            c (np.ndarray): Has shape = (N+1,), i.e. the first N+1 Fourier
+                coefficients multiplying the complex exponential representation
+                of the series.
+        else:
+            a0 (float): Coefficient of the 0th order term.
+            a (np.ndarray): Has shape = (N+1,), i.e. the first N+1 Fourier
+                coefficients multiplying the `cos` (even) part of the series.
+            b (np.ndarray): Has shape = (N+1,), i.e. the first N+1 Fourier
+                coefficients multiplying the `sin` (odd) part of the series.
+    """
+    # From Shanon theorem we must use a sampling freq. larger than the maximum
+    # frequency you want to catch in the signal.
+    f_sample = 2 * N
+    # we also need to use an integer sampling frequency, or the
+    # points will not be equispaced between 0 and 1. We then add +2 to f_sample
+    t, dt = np.linspace(0, T, f_sample + 2, endpoint=False, retstep=True)
+
+    y = np.fft.rfft(f(t)) / t.size
+
+    if return_complex:
+        return y
+
+    y *= 2
+    return y[0].real, y[1:-1].real, -y[1:-1].imag
+
+
+def calc_fourier_series(a0, a, b, t, T):
+    """Calculates the Fourier series with period T at times t.
+
+    Example: 
+        f(t) ~ a0/2 + Σ_{k=1}^{N} [ a_k*cos(2*pi*k*t/T) + b_k*sin(2*pi*k*t/T) ]
+    """
+    p2 = 2 * np.pi
+    tmp = np.ones_like(t) * a0 / 2.
+    for k, (ak, bk) in enumerate(zip(a, b)):
+        tmp += (ak * tf.cos(p2 * (k+1) * t / T)
+                + bk * tf.sin(p2 * (k+1) * t / T))
+    return tmp
+
+def project_angle_fft(x, num_components=50):
+    a0, a, b = calc_fourier_coeffs(project_angle, 2 * np.pi, num_components)
+    y_fft = calc_fourier_series(a0, a, b, x, 2 * np.pi)
+    return y_fft
+
+
 # pylint: disable=attribute-defined-outside-init, too-many-instance-attributes
 class GaugeModel(object):
     """Wrapper class implementing L2HMC algorithm on lattice gauge models."""
@@ -182,7 +286,8 @@ class GaugeModel(object):
                  sess=None,
                  config=None,
                  log_dir=None,
-                 restore=False):
+                 restore=False,
+                 build_graph=True):
         """Initialization method."""
         np.random.seed(GLOBAL_SEED)
         tf.set_random_seed(GLOBAL_SEED)
@@ -190,22 +295,16 @@ class GaugeModel(object):
         # ------------------------------------------------------------------
         # Create instance attributes from key, val pairs in `params`.
         # ------------------------------------------------------------------
-        self._create_attrs(params)
-        # ------------------------------------------------------------------
-        # Create necessary directories for holding checkpoints, data, etc.
-        # ------------------------------------------------------------------
-        try:
+        if not restore:
+            self._create_attrs(params)
+            # --------------------------------------------------------------
+            # Create necessary directories for holding checkpoints, data, etc.
+            # --------------------------------------------------------------
             self._create_dir_structure(log_dir)
-        except:
-            import pdb
-            pdb.set_trace()
-        # ------------------------------------------------------------------
-        # Write relevant instance attributes to human readable .txt file.
-        # ------------------------------------------------------------------
-        try:
+            # --------------------------------------------------------------
+            # Write relevant instance attributes to human readable .txt file.
+            # --------------------------------------------------------------
             self._write_run_parameters(_print=True)
-        except:
-            import pdb; pdb.set_trace()
 
         # ------------------------------------------------------------------
         # Create lattice object.
@@ -231,6 +330,7 @@ class GaugeModel(object):
                                            shape=(),
                                            name='beta')
             else:
+                self.x = self.lattice.samples
                 self.beta = self.beta_init
         # ------------------------------------------------------------------
         # Create dynamics object responsible for performing L2HMC sampling.
@@ -260,7 +360,7 @@ class GaugeModel(object):
                 self.avg_plaq_op = tf.reduce_mean(self.plaqs_op,
                                                   name='avg_plaq')
             with tf.name_scope('top_charges'):
-                self.charges_op = self._calc_top_charges(self.x)
+                self.charges_op = self._calc_top_charges(self.x, fft=False)
         # ------------------------------------------------------------------
         # If restore, load from most recently saved checkpoint in `log_dir`.
         # ------------------------------------------------------------------
@@ -271,7 +371,8 @@ class GaugeModel(object):
         # ------------------------------------------------------------------
         else:
             if not tf.executing_eagerly():
-                self.build_graph(sess, config)
+                if build_graph:
+                    self.build_graph(sess, config)
 
     def _parse_params(self, params):
         """Parse key, value pairs from params and set class attributes."""
@@ -562,6 +663,11 @@ class GaugeModel(object):
             for key, val in self.params.items():
                 io.log(f'{key}: {val}')
 
+        params_pkl_file = os.path.join(self.info_dir, 'parameters.pkl')
+        io.log(f"Saving parameters to: {params_pkl_file}.")
+        with open(params_pkl_file, 'wb') as f:
+            pickle.dump(self.params, f)
+
         io.write(s0, self.files['parameters_file'], 'w')
         io.write(sep_str, self.files['parameters_file'], 'a')
         _ = [io.write(s, self.files['parameters_file'], 'a') for s in strings]
@@ -677,39 +783,32 @@ class GaugeModel(object):
                                       (1, 2), name='avg_plaqs') / num_plaqs
         return avg_plaqs
 
-    def _calc_top_charges(self, x):
+    def _calc_top_charges(self, x, fft=False):
         """Calculate topological charges for each sample in samples."""
         with tf.name_scope('calc_top_charges'):
-            top_charges = tf.floor(
-                0.1 + (tf.reduce_sum(project_angle(self._calc_plaq_sums(x)),
-                                     axis=(1, 2), name='top_charges')
-                       / (2 * np.pi))
-            )
+            if fft:
+                ps_proj = project_angle_approx(self._calc_plaq_sums(x))
+            else:
+                ps_proj = project_angle(self._calc_plaq_sums(x))
+
+            top_charges = (tf.reduce_sum(ps_proj, axis=(1, 2),
+                                         name='top_charges')) / (2 * np.pi)
+            #  top_charges = (
+            #      0.1 + (tf.reduce_sum(projector(self._calc_plaq_sums(x)),
+            #                           axis=(1, 2), name='top_charges')
+            #             / (2 * np.pi))
+            #  )
+
         return top_charges
 
-    def _calc_top_charges_diff(self, x1, x2):
+    def _calc_top_charges_diff(self, x1, x2, fft=False):
         """Calculate difference in topological charges between x1 and x2."""
         with tf.name_scope('calc_top_charges_diff'):
-            dq = tf.abs(self._calc_top_charges(x1)
-                        - self._calc_top_charges(x2))
+            dq = tf.abs(self._calc_top_charges(x1, fft)
+                        - self._calc_top_charges(x2, fft))
+            #  dq = tf.abs(tf.cast(self._calc_top_charges(x1, fft), tf.float32)
+            #  - tf.cast(self._calc_top_charges(x2, fft), tf.float32))
         return dq
-
-    def create_observables_ops(self, x):
-        """Create operations for calculating plaquette observables.
-
-        NOTE: DEPRECATED (!!) TO BE REMOVED IN FUTURE UPDATE.
-        """
-        with tf.name_scope('plaq_observables'):
-            with tf.name_scope('plaq_sums'):
-                plaq_sums_op = self._calc_plaq_sums(x)
-            with tf.name_scope('actions'):
-                actions_op = self._calc_total_actions(x)
-            with tf.name_scope('avg_plaqs'):
-                plaqs_op = self._calc_avg_plaqs(x)
-            with tf.name_scope('top_charges'):
-                charges_op = self._calc_top_charges(x)
-
-        return (plaq_sums_op, actions_op, plaqs_op, charges_op)
 
     # pylint: disable=too-many-locals
     def _calc_loss(self, x, beta, **weights):
@@ -737,43 +836,50 @@ class GaugeModel(object):
         charge_weight = weights.get('charge_weight', 1.)
 
         with tf.name_scope('x_update'):
-            #  x_, _, px, x_out = self.dynamics.apply_transition(x, beta)
             x_, _, px, x_out = self.dynamics(x, beta)
+            xn = x_[0]                  # dynamics update:    x  -->  xn
+            xf = tf.squeeze(x_out)      # accept/reject:      xn -->  xf
         with tf.name_scope('z_update'):
             z = tf.random_normal(tf.shape(x), name='z')  # Auxiliary variable
-            #  z_, _, pz, _ = self.dynamics.apply_transition(z, beta)
             z_, _, pz, _ = self.dynamics(z, beta)
+            zn = z_[0]
 
-        ls = self.loss_scale
+        with tf.name_scope('top_charge_diff'):
+            x_dq = self._calc_top_charges_diff(x, xn, fft=False)
+
         # Add eps for numerical stability; following released impl
         with tf.name_scope('calc_loss'):
             with tf.name_scope('std_loss'):
                 with tf.name_scope('x_loss'):
                     x_std_loss = (
-                        tf.reduce_sum(self.metric_fn(x, x_), axis=1) * px + eps
+                        tf.reduce_sum(self.metric_fn(x, xn), axis=1) * px + eps
                     )
 
                 with tf.name_scope('z_loss'):
                     z_std_loss = aux_weight * (
-                        tf.reduce_sum(self.metric_fn(z, z_), axis=1) * pz + eps
+                        tf.reduce_sum(self.metric_fn(z, zn), axis=1) * pz + eps
                     )
 
-                std_loss = std_weight * ((1. / x_std_loss + 1. / z_std_loss)
-                                         * ls - (x_std_loss + z_std_loss) / ls)
+                with tf.name_scope('tot_loss'):
+                    ls = self.loss_scale
+                    std_loss = (ls * (1. / x_std_loss + 1. / z_std_loss)
+                                - (x_std_loss + z_std_loss) / ls)
+                    std_loss *= std_weight
 
             with tf.name_scope('charge_loss'):
                 with tf.name_scope('x_loss'):
-                    x_dq = self._calc_top_charges_diff(x_, x)
-                    xq_loss = - px * x_dq + eps
+                    x_dq_fft = self._calc_top_charges_diff(x, xn, fft=True)
+                    xq_loss = px * x_dq_fft + eps
                 with tf.name_scope('z_loss'):
-                    z_dq = self._calc_top_charges_diff(z_, z)
-                    zq_loss = aux_weight * (- pz * z_dq + eps)
+                    z_dq = self._calc_top_charges_diff(z, zn, fft=True)
+                    zq_loss = aux_weight * (pz * z_dq + eps)
 
-                charge_loss = charge_weight * (xq_loss + zq_loss)
+                with tf.name_scope('tot_loss'):
+                    charge_loss = charge_weight * (xq_loss + zq_loss)
 
             loss = tf.reduce_mean(std_loss + charge_loss, axis=0, name='loss')
 
-        return loss, x_out, px, x_dq
+        return loss, xf, px, x_dq
 
     def _calc_loss_and_grads(self, x, beta, **weights):
         """Calculate loss and gradients.
@@ -864,6 +970,7 @@ class GaugeModel(object):
             """Print string `s` to std out and also write to file `f`."""
             io.log(s)
             io.write(s, f)
+            return
 
         sep_str = 80 * '-'
         log_and_write(sep_str, self.files['run_info_file'])
@@ -902,7 +1009,7 @@ class GaugeModel(object):
                                                  self.global_step,
                                                  self.lr_decay_steps,
                                                  self.lr_decay_rate,
-                                                 staircase=False,
+                                                 staircase=True,
                                                  name='learning_rate')
 
         with tf.name_scope('optimizer'):
@@ -918,6 +1025,7 @@ class GaugeModel(object):
 
             output = self._calc_loss_and_grads(x=self.x, beta=self.beta,
                                                **self.loss_weights)
+
             self.loss_op, self.grads, self.x_out, self.px, x_dq = output
             self.charge_diff_op = tf.reduce_sum(x_dq) / self.num_samples
 
@@ -986,7 +1094,6 @@ class GaugeModel(object):
                 ]
             else:
                 hooks = []
-                #  hooks = [tf.train.StopAtStepHook(last_step=self.train_steps)]
             # The MonitoredTrainingSession takes care of session
             # initialization, restoring from a checkpoint, saving to a
             # checkpoint, and closing when done or an error occurs.
@@ -1005,21 +1112,6 @@ class GaugeModel(object):
                       self.files['run_info_file'])
         log_and_write(sep_str, self.files['run_info_file'])
 
-        #  self.sess.run(tf.global_variables_initializer())
-
-        #  if self.using_hvd:
-            #  self.sess.run(hvd.broadcast_global_variables(0))
-
-        #  if self.condition1 or self.condition2:
-        #      io.write(sep_str, self.files['run_info_file'], 'a')
-        #      io.write(graph_str0, self.files['run_info_file'], 'a')
-        #      dt = time.time() - start_time
-        #      s0 = f'Summaries took: {t_diff:4.3g} s to build.\n'
-        #      s1 = f'Graph took: {dt:4.3g} s to build.\n'
-        #      io.write(s0, self.files['run_info_file'], 'a')
-        #      io.write(s1, self.files['run_info_file'], 'a')
-        #      io.write(sep_str, self.files['run_info_file'], 'a')
-
     def update_beta(self, step):
         """Returns new beta to follow annealing schedule."""
         temp = ((1. / self.beta_init - 1. / self.beta_final)
@@ -1028,41 +1120,6 @@ class GaugeModel(object):
         new_beta = 1. / temp
 
         return new_beta
-
-    def pre_train(self):
-        """Prepare for training loop and set up training for the model.
-
-        NOTE:
-            If a checkpoint already exists in `self.log_dir`, this method will
-            restore from the most recently saved checkpoint and prepare the
-            model to resume training where it left off. 
-        """
-        #  if self.condition1 or self.condition2:
-        #      self.saver = tf.train.Saver(max_to_keep=3)
-        #
-        #  if self.condition1 or self.condition2:
-        #      self.saver = tf.train.Saver(max_to_keep=3)
-        #
-        #      ckpt = tf.train.get_checkpoint_state(self.log_dir)
-        #      if ckpt and ckpt.model_checkpoint_path:
-        #          io.log('Restoring previous model from: '
-        #                 f'{ckpt.model_checkpoint_path}')
-        #          self.saver.restore(self.sess, ckpt.model_checkpoint_path)
-        #          io.log('Model restored.\n', nl=False)
-        #          self.global_step = tf.train.get_global_step()
-        #          initial_step = self.sess.run(self.global_step)
-
-        if self.condition1 or self.condition2:
-            self.writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
-
-        h_str = ("{:^12s}{:^10s}{:^10s}{:^10s}{:^10s}"
-                 "{:^10s}{:^10s}{:^10s}{:^10s}{:^10s}{:^10s}")
-        h_strf = h_str.format("STEP", "LOSS", "t/STEP", "% ACC", "EPS",
-                              "BETA", "ACTION", "PLAQ", "(EXACT)", "dQ", "LR")
-        dash0 = (len(h_strf) + 1) * '-'
-        dash1 = (len(h_strf) + 1) * '-'
-        self.train_header = dash0 + '\n' + h_strf + '\n' + dash1
-        self.sess.graph.finalize()
 
     def train_profiler(self, train_steps, **kwargs):
         """Wrapper around training loop for profiling graph execution."""
@@ -1091,7 +1148,6 @@ class GaugeModel(object):
 
     # pylint: disable=too-many-statements, too-many-branches
     def train(self, train_steps, **kwargs):
-
         """Train the L2HMC sampler for `train_steps`.
 
         Args:
@@ -1102,17 +1158,33 @@ class GaugeModel(object):
                 additional operations are created during training.
             trace: Boolean that when True performs a full trace of the training
                 procedure.
+            **kwargs: Dictionary of additional keyword arguments. Possible
+                key, value pairs:
+                    'samples_init': Array of samples used to start training.
+                        (default: None)
+                    'beta_init': Initial value of beta used in annealing
+                        schedule. (Default: None)
+                    'trace': Trace training loop for profiling. (Default:
+                        False)
         """
+        if self.using_hvd:
+            train_steps = train_steps // hvd.size()
+
         samples_init = kwargs.get('samples_init', None)
         beta_init = kwargs.get('beta_init', None)
-        pre_train = kwargs.get('pre_train', True)
         trace = kwargs.get('trace', False)
 
-        #  def train(self, train_steps,
-        #            samples_init=None,
-        #            beta_init=None,
-        #            pre_train=True,
-        #            trace=False):
+        if self.condition1 or self.condition2:
+            self.writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
+
+        h_str = ("{:^12s}{:^10s}{:^10s}{:^10s}{:^10s}"
+                 "{:^10s}{:^10s}{:^10s}{:^10s}{:^10s}{:^10s}")
+        h_strf = h_str.format("STEP", "LOSS", "t/STEP", "% ACC", "EPS",
+                              "BETA", "ACTION", "PLAQ", "(EXACT)", "dQ", "LR")
+        dash0 = (len(h_strf) + 1) * '-'
+        dash1 = (len(h_strf) + 1) * '-'
+        self.train_header = dash0 + '\n' + h_strf + '\n' + dash1
+        self.sess.graph.finalize()
 
         #  Move attribute look ups outside loop to improve performance
         #  loss_op = self.loss_op
@@ -1125,8 +1197,6 @@ class GaugeModel(object):
         #  x = self.x
         #  dynamics_beta = self.dynamics.beta
         start_time = time.time()
-        if pre_train:
-            self.pre_train()
 
         if beta_init is None:
             beta_np = self.beta_init
@@ -1143,17 +1213,6 @@ class GaugeModel(object):
             assert samples_np.shape == self.x.shape
 
         initial_step = self._current_state['step']
-        #  self.global_step.assign(initial_step)
-
-        #  self._current_state['lr'] = self.sess.run(self.lr)
-        #  lr_np = np.float32(self._current_state['lr'])
-
-        #  if hasattr(self.dynamics, 'alpha'):
-        #      eps_op = self.dynamics.alpha
-        #      io.log("Using `dynamics.alpha`.")
-        #  else:
-        #      eps_op = self.dynamics.eps
-        #      io.log("Using `dynamics.eps`.")
 
         data_str = (f"{0:>5g}/{self.train_steps:<6g} "   # step / train_steps
                     f"{0.:^9.4g} "                       # loss
@@ -1171,13 +1230,10 @@ class GaugeModel(object):
             io.log(self.train_header)
             io.write(self.train_header, self.files['run_info_file'], 'a')
 
-            #  for step in range(initial_step, train_steps):
             #  while not self.sess.should_stop():
             for step in range(initial_step, train_steps):
                 start_step_time = time.time()
 
-                #  beta_np = annealing_sched[step]
-                #  step = self.sess.run(self.global_step)
                 beta_np = self.update_beta(step)
 
                 fd = {self.x: samples_np,
@@ -1193,7 +1249,7 @@ class GaugeModel(object):
                     self.plaqs_op,         # calculate avg. plaquettes
                     self.charges_op,       # calculate top. charges
                     self.lr,               # evaluate learning rate
-                    self.charge_diff_op,    # change in top charge / num_samples 
+                    self.charge_diff_op,   # change in top charge / num_samples 
                 ], feed_dict=fd)
 
                 loss_np = outputs[1]
@@ -1404,7 +1460,7 @@ class GaugeModel(object):
                     self.charge_diff_op,
                 ], feed_dict=fd)
 
-                samples = outputs[0]
+                samples = np.mod(outputs[0], 2 * np.pi)
                 px = outputs[1]
                 actions_np = outputs[2]
                 plaqs_np = outputs[3]
@@ -1623,9 +1679,9 @@ class GaugeModel(object):
         plot_multiple_lines(steps_arr, charges_arr.T, x_label='Step',
                             y_label='Topological charge', **kwargs)
 
-        #########################
-        # Tunneling events plots
-        #########################
+        ##################################################
+        # Tunneling events (change in top. charge) plots
+        ##################################################
         _, ax = plt.subplots()
         ax.plot(steps_arr, charge_diff_arr,
                 marker='.', ls='', fillstyle='none', color='C0')
@@ -1649,7 +1705,8 @@ class GaugeModel(object):
                 label=f'total across {self.num_samples} samples')
         ax.set_xlabel('Training step', fontsize=14)
         ax.set_ylabel(r"$\delta Q_{\mathrm{top}} / N$", fontsize=14)
-        ax.set_title(r"$N = #{self.num_samples} samples / batch", fontsize=16)
+        ax.set_title(rf"""$N = #{self.num_samples} samples / batch""",
+                     fontsize=16)
 
         #  title_str = (f'Number of tunneling events vs. '
         #               f'training step for {self.num_samples} samples')
@@ -1712,7 +1769,7 @@ class GaugeModel(object):
                      f"{beta}, {run_steps} {key} steps")
 
         # if we have more than 10 samples per batch, only plot first 10
-        for idx in range(min(self.num_samples, 10)):
+        for idx in range(min(self.num_samples, 5)):
             counts = Counter(charges[:, idx])
             total_counts = np.sum(list(counts.values()))
             _, ax = plt.subplots()
@@ -1791,7 +1848,10 @@ class GaugeModel(object):
 
         actions_arr = np.array(list(actions_dict.values()))[therm_steps:, :]
         plaqs_arr = np.array(list(plaqs_dict.values()))[therm_steps:, :]
-        charges_arr = np.array(list(charges_dict.values()))[therm_steps:, :]
+
+        charges_arr = np.array(list(charges_dict.values()),
+                               dtype=np.int32)[therm_steps:, :]
+
         charges_squared_arr = charges_arr ** 2
 
         actions_stats = stats[0]
@@ -1802,7 +1862,7 @@ class GaugeModel(object):
 
         files = self._get_run_files(*_args)
 
-        samples_file_npy = files[0]
+        #  samples_file_npy = files[0]
         #  samples_file_json = files[1]
         actions_file = files[2]
         plaqs_file = files[3]
@@ -2128,6 +2188,7 @@ class GaugeModel(object):
 
         return files
 
+
 # pylint: disable=too-many-statements, too-many-branches
 def main(FLAGS):
     """Main method for creating/training U(1) gauge model from command line."""
@@ -2145,8 +2206,9 @@ def main(FLAGS):
         params['eps_trainable'] = False
 
     config = tf.ConfigProto()
-    off = rewriter_config_pb2.RewriterConfig.OFF
-    config.graph_options.rewrite_options.arithmetic_optimization = off
+    if FLAGS.time_size > 8:
+        off = rewriter_config_pb2.RewriterConfig.OFF
+        config.graph_options.rewrite_options.arithmetic_optimization = off
 
     if FLAGS.gpu:
         print("Using gpu for training.")
@@ -2186,19 +2248,26 @@ def main(FLAGS):
                        log_dir=FLAGS.log_dir,
                        restore=FLAGS.restore)
 
-    if FLAGS.horovod:
-        if hvd.rank() == 0:
-            io.save_params_to_pkl_file(params, model.info_dir)
+    if not FLAGS.horovod or (FLAGS.horovod and hvd.rank() == 0):
+        io.save_params_to_pkl_file(params, model.info_dir)
 
+    if FLAGS.horovod:
         io.log('Number of CPUs: %d' % hvd.size())
+
+    #  if FLAGS.horovod:
+    #      if hvd.rank() == 0:
+    #          io.save_params_to_pkl_file(params, model.info_dir)
+    #  else:
+    #      io.save_params_to_pkl_file(params, model.info_dir)
 
     io.log(f"Training began at: {time.ctime()}")
 
     if not FLAGS.hmc:
         if FLAGS.profiler:
-            model.train_profiler(FLAGS.train_steps, pre_train=True, trace=True)
+            model.train_profiler(FLAGS.train_steps, trace=True)
         else:
             if FLAGS.restore:
+                # pylint: disable=protected-access
                 if model._current_state['step'] <= model.train_steps:
                     model.train(model.train_steps,
                                 samples_init=model._current_state['samples'],
@@ -2208,13 +2277,9 @@ def main(FLAGS):
                 else:
                     io.log('Model restored but training completed. '
                            'Preparing to run the trained sampler...')
-                    pass
             else:
-                model.train(FLAGS.train_steps,
-                            samples_init=None,
-                            beta_init=None,
-                            pre_train=True,
-                            trace=False)
+                model.train(FLAGS.train_steps, samples_init=None,
+                            beta_init=None, trace=False)
 
     try:
         #  run_steps_grid = [100, 500, 1000, 2500, 5000, 10000]
@@ -2226,9 +2291,7 @@ def main(FLAGS):
 
     except (KeyboardInterrupt, SystemExit):
         io.log("\nKeyboardInterrupt detected! \n")
-
         import pdb
-
         pdb.set_trace()
 
 
