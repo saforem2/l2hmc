@@ -224,10 +224,10 @@ class GaugeDynamics(tf.keras.Model):
 
             # Obtain proposed states
             with tf.name_scope('position_post'):
-                position_post = tf.mod(  # mod by 2 pi to enforce U(1) symmetry
+                position_post = (#tf.mod( # mod 2 pi to enforce U(1) symmetry
                     (forward_mask[:, None] * position_f
                      + backward_mask[:, None] * position_b),
-                    2 * np.pi
+                    #  2 * np.pi
                 )
 
             with tf.name_scope('momentum_post'):
@@ -264,55 +264,6 @@ class GaugeDynamics(tf.keras.Model):
 
         return self.backward(position, beta)
 
-    # pylint:disable=missing-docstring,invalid-name,unused-argument
-    def _transition_kernel(self, position, beta, forward=True):
-        """Transition kernel of augmented leapfrog integrator."""
-        if forward:
-            name_scope = 'transition_kernel_forward'
-        else:
-            name_scope = 'transition_kernel_backward'
-
-        with tf.name_scope(name_scope):
-            lf_fn = self._forward_lf if forward else self._backward_lf
-
-            # Resample momentum
-            with tf.name_scope('random_momentum'):
-                momentum = tf.random_normal(tf.shape(position),
-                                            name='momentum')
-
-            position_post, momentum_post = position, momentum
-            sumlogdet = 0.
-
-            t = tf.constant(0., dtype=tf.float32)
-            dN = tf.shape(position)[0]
-            j = tf.zeros((dN,))
-
-            # Apply augmented leapfrog steps
-            def body(x, v, beta, t, j):
-                new_x, new_v, logdet = lf_fn(x, v, beta, t)
-                return new_x, new_v, beta, t+1, j+logdet
-
-            def cond(x, v, beta, t, j):
-                return tf.less(t, self.num_steps)
-
-            position_post, momentum_post, beta, t, sumlogdet = tf.while_loop(
-                cond=cond,
-                body=body,
-                loop_vars=[position_post, momentum_post, beta, t, j]
-            )
-
-            with tf.name_scope('accept_prob'):
-                accept_prob = self._compute_accept_prob(
-                    position,
-                    momentum,
-                    position_post,
-                    momentum_post,
-                    sumlogdet,
-                    beta
-                )
-
-        return position_post, momentum_post, accept_prob
-
     def forward(self, position, beta):
         """Forward implementation of transition kernel."""
         with tf.name_scope('forward'):
@@ -320,7 +271,9 @@ class GaugeDynamics(tf.keras.Model):
             with tf.name_scope('resample_momentum'):
                 momentum = tf.random_normal(tf.shape(position),
                                             name='momentum')
+
             position_post, momentum_post = position, momentum
+
             sumlogdet = 0.
             t = tf.constant(0., name='step_forward', dtype=tf.float32)
             dN = tf.shape(position)[0]
@@ -328,17 +281,27 @@ class GaugeDynamics(tf.keras.Model):
 
             # Apply augmented leapfrog steps
             def body(x, v, beta, t, j):
-                new_x, new_v, logdet = self._forward_lf(x, v, beta, t)
+                with tf.name_scope('forward_body'):
+                    new_x, new_v, logdet = self._forward_lf(x, v, beta, t)
                 return new_x, new_v, beta, t+1, j+logdet
 
             def cond(x, v, beta, t, j):
-                return tf.less(t, self.num_steps)
+                with tf.name_scope('forward_cond'):
+                    condition = tf.less(t, self.num_steps)
+                return condition
 
-            position_post, momentum_post, beta, t, sumlogdet = tf.while_loop(
-                cond=cond,
-                body=body,
-                loop_vars=[position_post, momentum_post, beta, t, j]
-            )
+            with tf.name_scope('forward_while_loop'):
+                outputs = tf.while_loop(cond=cond, body=body,
+                                        loop_vars=[position_post,
+                                                   momentum_post, beta, t, j])
+
+                position_post, momentum_post, beta, t, sumlogdet = outputs
+                #  position_post, momentum_post, beta, t, sumlogdet =
+                #  tf.while_loop(
+                #      cond=cond,
+                #      body=body,
+                #      loop_vars=[position_post, momentum_post, beta, t, j]
+                #  )
 
             with tf.name_scope('accept_prob'):
                 accept_prob = self._compute_accept_prob(
@@ -359,7 +322,9 @@ class GaugeDynamics(tf.keras.Model):
             with tf.name_scope('resample_momentum'):
                 momentum = tf.random_normal(tf.shape(position),
                                             name='momentum')
+
             position_post, momentum_post = position, momentum
+
             sumlogdet = 0.
             t = tf.constant(0., name='step_forward', dtype=tf.float32)
             dN = tf.shape(position)[0]
@@ -367,18 +332,21 @@ class GaugeDynamics(tf.keras.Model):
 
             # Apply augmented leapfrog steps
             def body(x, v, beta, t, j):
-                tt = self.num_steps - t - 1
-                new_x, new_v, logdet = self._backward_lf(x, v, beta, tt)
+                with tf.name_scope('backward_body'):
+                    tt = self.num_steps - t - 1
+                    new_x, new_v, logdet = self._backward_lf(x, v, beta, tt)
                 return new_x, new_v, beta, t+1, j+logdet
 
             def cond(x, v, beta, t, j):
-                return tf.less(t, self.num_steps)
+                with tf.name_scope('backward_cond'):
+                    condition = tf.less(t, self.num_steps)
+                return condition
 
-            position_post, momentum_post, beta, t, sumlogdet = tf.while_loop(
-                cond=cond,
-                body=body,
-                loop_vars=[position_post, momentum_post, beta, t, j]
-            )
+            with tf.name_scope('backward_while_loop'):
+                outputs = tf.while_loop(cond=cond, body=body,
+                                        loop_vars=[position_post,
+                                                   momentum_post, beta, t, j])
+                position_post, momentum_post, beta, t, sumlogdet = outputs
 
             with tf.name_scope('accept_prob'):
                 accept_prob = self._compute_accept_prob(
