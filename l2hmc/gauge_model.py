@@ -151,6 +151,8 @@ def create_log_dir(root_dir='gauge_logs_graph'):
 
 def get_run_num(d):
     """Get integer value for next run directory."""
+    #  if HAS_HOROVOD and hvd.rank() != 0:
+    #      return -1
     try:
         run_dirs = [i for i in os.listdir(d) if 'run' in i]
         run_nums = [int(i.split('_')[-1]) for i in run_dirs]
@@ -497,9 +499,13 @@ class GaugeModel(object):
 
         project_dir = os.path.abspath(os.path.dirname(FILE_PATH))
         root_log_dir = os.path.abspath(os.path.join(project_dir, log_dir))
-        run_num = get_run_num(root_log_dir)
-        log_dir = os.path.abspath(os.path.join(root_log_dir, f'run_{run_num}'))
-        io.check_else_make_dir(log_dir)
+
+        if self.condition1 or self.condition2:
+            run_num = get_run_num(root_log_dir)
+            log_dir = os.path.abspath(os.path.join(root_log_dir,
+                                                   f'run_{run_num}'))
+            io.check_else_make_dir(log_dir)
+
         self.log_dir = log_dir
         #  self.log_dir = os.path.abspath(os.path.join(root_log_dir,
         #                                              f'run_{run_num}'))
