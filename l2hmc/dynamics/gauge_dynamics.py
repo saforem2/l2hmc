@@ -72,25 +72,26 @@ class GaugeDynamics(tf.keras.Model):
             if key != 'eps':  # want to use self.eps as tf.Variable
                 setattr(self, key, val)
 
-        #  if not self.hmc:
-        #      self.alpha = tf.get_variable(
-        #          'alpha',
-        #          initializer=tf.log(tf.constant(kwargs.get('eps', 0.1))),
-        #          trainable=self.eps_trainable,
-        #          dtype=tf.float32
-        #      )
-        #  else:
-        #      self.alpha = tf.log(tf.constant(kwargs.get('eps', 0.1),
-        #                                      dtype=tf.float32))
+        with tf.name_scope('alpha'):
+            if not self.hmc:
+                self.alpha = tf.get_variable(
+                    'alpha',
+                    initializer=tf.log(tf.constant(kwargs.get('eps', 0.1))),
+                    trainable=self.eps_trainable,
+                    dtype=tf.float32
+                )
+            else:
+                self.alpha = tf.log(tf.constant(kwargs.get('eps', 0.1),
+                                                dtype=tf.float32))
 
         with tf.name_scope('eps'):
-            #  self.eps = exp(self.alpha, name='eps')
-            self.eps = tf.Variable(
-                initial_value=kwargs.get('eps', 0.2),
-                name='eps',
-                dtype=tf.float32,
-                trainable=self.eps_trainable
-            )
+            self.eps = exp(self.alpha, name='eps')
+            #  self.eps = tf.Variable(
+            #      initial_value=kwargs.get('eps', 0.4),
+            #      name='eps',
+            #      dtype=tf.float32,
+            #      trainable=self.eps_trainable
+            #  )
 
         self._construct_time()
         self._construct_masks()
@@ -264,6 +265,7 @@ class GaugeDynamics(tf.keras.Model):
 
         return self.backward(position, beta)
 
+    # pylint: disable=invalid-name
     def forward(self, position, beta):
         """Forward implementation of transition kernel."""
         with tf.name_scope('forward'):

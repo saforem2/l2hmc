@@ -156,6 +156,7 @@ def get_run_num(d):
         run_nums = [int(i.split('_')[-1]) for i in run_dirs]
         run_num = sorted(run_nums)[-1] + 1
     except:
+        io.log(f"No previous runs found in {d}, setting run_num=1.")
         run_num = 1
 
     return run_num
@@ -187,7 +188,8 @@ def linear_fft(x, N=100):
     y *= - 2
     return y
 
-def project_angle_approx(x, N=25):
+
+def project_angle_approx(x, N=5):
     """Use the fourier series representation `x` to approx `project_angle`.
 
     NOTE: Because `project_angle` suffers a discontinuity, we approximate `x`
@@ -200,8 +202,7 @@ def project_angle_approx(x, N=25):
     """
     y = np.zeros(x.shape)
     for n in range(1, N):
-        y += (-1) ** (1 + n) * tf.sin(n * x) / n
-    y *= 2
+        y += (-2 / n) * ((-1) ** n) * tf.sin(n * x)
     return y
 
 
@@ -497,8 +498,11 @@ class GaugeModel(object):
         project_dir = os.path.abspath(os.path.dirname(FILE_PATH))
         root_log_dir = os.path.abspath(os.path.join(project_dir, log_dir))
         run_num = get_run_num(root_log_dir)
-        self.log_dir = os.path.abspath(os.path.join(root_log_dir,
-                                                    f'run_{run_num}'))
+        log_dir = os.path.abspath(os.path.join(root_log_dir, f'run_{run_num}'))
+        io.check_else_make_dir(log_dir)
+        self.log_dir = log_dir
+        #  self.log_dir = os.path.abspath(os.path.join(root_log_dir,
+        #                                              f'run_{run_num}'))
 
         self.info_dir = os.path.join(self.log_dir, 'run_info')
         self.figs_dir = os.path.join(self.log_dir, 'figures')
@@ -754,8 +758,13 @@ class GaugeModel(object):
         lattice for each sample in samples.
 
         Args:
-            samples: Tensor of shape (N, D) where N is the batch size and D is
-            the number of links on the lattice (flattened)
+            samples (N, D): Tensor of shape where N is the batch size and D is
+                the number of links on the lattice (flattened)
+
+        Returns:
+            plaq_sums (N, Lx, Lt): Sum of link variables around each plaquette.
+
+            NOTE: Lx, Lt re self.lattice.space_size, time_size respectively.
         """
         x = tf.reshape(x, shape=(self.batch_size, *self.lattice.links.shape))
 
@@ -845,7 +854,7 @@ class GaugeModel(object):
             zn = z_[0]
 
         with tf.name_scope('top_charge_diff'):
-            x_dq = self._calc_top_charges_diff(x, xn, fft=False)
+            x_dq = self._calc_top_charges_diff(x, x_out, fft=False)
 
         # Add eps for numerical stability; following released impl
         with tf.name_scope('calc_loss'):
@@ -871,8 +880,8 @@ class GaugeModel(object):
                     x_dq_fft = self._calc_top_charges_diff(x, xn, fft=True)
                     xq_loss = px * x_dq_fft + eps
                 with tf.name_scope('z_loss'):
-                    z_dq = self._calc_top_charges_diff(z, zn, fft=True)
-                    zq_loss = aux_weight * (pz * z_dq + eps)
+                    z_dq_fft = self._calc_top_charges_diff(z, zn, fft=True)
+                    zq_loss = aux_weight * (pz * z_dq_fft + eps)
 
                 with tf.name_scope('tot_loss'):
                     charge_loss = charge_weight * (xq_loss + zq_loss)
@@ -924,8 +933,16 @@ class GaugeModel(object):
             building unnecessary operations for calculating loss.
         """
         with tf.name_scope('sampler'):
-            inputs = (self.x, self.beta)
-            _, _, self.px, self.x_out = self.dynamics(inputs)
+            #  inputs = (self.x, self.beta)
+            #  _, _, self.px, self.x_out = self.dynamics(self.x, self.beta)
+            _, _, px, x_out = self.dynamics(self.x, self.beta)
+            #  xn = x_[0]                  # dynamics update:    x  -->  xn
+            self.px = px
+            self.x_out = tf.squeeze(x_out)      # accept/reject:      xn -->  xf
+
+            x_dq = self._calc_top_charges_diff(self.x, self.x_out, fft=False)
+            self.charge_diff_op = tf.reduce_sum(x_dq) / self.num_samples
+            #  self.charge_diff_op = x_dq) / self.num_samples
 
     def _create_summaries(self):
         """Create summary objects for logging in TensorBoard."""
@@ -965,12 +982,11 @@ class GaugeModel(object):
     # pylint:disable=too-many-statements
     def build_graph(self, sess=None, config=None):
         """Build graph for TensorFlow."""
-
         def log_and_write(s, f):
             """Print string `s` to std out and also write to file `f`."""
             io.log(s)
             io.write(s, f)
-            return
+            return 1
 
         sep_str = 80 * '-'
         log_and_write(sep_str, self.files['run_info_file'])
@@ -1009,9 +1025,8 @@ class GaugeModel(object):
                                                  self.global_step,
                                                  self.lr_decay_steps,
                                                  self.lr_decay_rate,
-                                                 staircase=True,
+                                                 staircase=False,
                                                  name='learning_rate')
-
         with tf.name_scope('optimizer'):
             if self.using_hvd:
                 self.optimizer = tf.train.AdamOptimizer(self.lr * hvd.size())
@@ -1253,7 +1268,8 @@ class GaugeModel(object):
                 ], feed_dict=fd)
 
                 loss_np = outputs[1]
-                samples_np = outputs[2]
+                samples_np = np.mod(outputs[2], 2 * np.pi)
+                #  samples_np = outputs[2]
                 px_np = outputs[3]
                 eps_np = outputs[4]
                 actions_np = outputs[5]
@@ -1461,6 +1477,7 @@ class GaugeModel(object):
                 ], feed_dict=fd)
 
                 samples = np.mod(outputs[0], 2 * np.pi)
+                #  samples = outputs[0]
                 px = outputs[1]
                 actions_np = outputs[2]
                 plaqs_np = outputs[3]
@@ -1568,7 +1585,7 @@ class GaugeModel(object):
 
         actions_arr = np.array(list(actions_dict.values()))
         plaqs_arr = np.array(list(plaqs_dict.values()))
-        charges_arr = np.array(list(charges_dict.values()))
+        charges_arr = np.array(list(charges_dict.values()), dtype=int)
         suscept_arr = np.array(charges_arr ** 2)
 
         num_steps = actions_arr.shape[0]
@@ -1768,6 +1785,7 @@ class GaugeModel(object):
         title_str = (r"$\beta = $"
                      f"{beta}, {run_steps} {key} steps")
 
+        charges = np.array(charges, dtype=int)
         # if we have more than 10 samples per batch, only plot first 10
         for idx in range(min(self.num_samples, 5)):
             counts = Counter(charges[:, idx])
@@ -2204,6 +2222,14 @@ def main(FLAGS):
 
     if FLAGS.hmc:
         params['eps_trainable'] = False
+        beta1 = params.get('beta', 4.)
+        beta2 = params.get('beta_init', 4.)
+        beta3 = params.get('beta_final', 4.)
+        beta = max((beta1, beta2, beta3))
+
+        params['beta'] = beta
+        params['beta_init'] = beta
+        params['beta_final'] = beta
 
     config = tf.ConfigProto()
     if FLAGS.time_size > 8:
@@ -2286,8 +2312,8 @@ def main(FLAGS):
         run_steps_grid = [20000, 50000]
         betas = [model.beta_final - 1, model.beta_final]
         for steps in run_steps_grid:
-            for beta in betas:
-                model.run(steps, beta=beta)
+            for beta1 in betas:
+                model.run(steps, beta=beta1)
 
     except (KeyboardInterrupt, SystemExit):
         io.log("\nKeyboardInterrupt detected! \n")
