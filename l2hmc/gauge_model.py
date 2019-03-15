@@ -2280,6 +2280,12 @@ def main(FLAGS):
                        log_dir=FLAGS.log_dir,
                        restore=FLAGS.restore)
 
+    io.log('\n\n\n')
+    io.log(80*'~')
+    io.log(f"model.log_dir: {model.log_dir}")
+    io.log(80*'~')
+    io.log('\n\n\n')
+
     if not FLAGS.horovod or (FLAGS.horovod and hvd.rank() == 0):
         io.save_params_to_pkl_file(params, model.info_dir)
 
