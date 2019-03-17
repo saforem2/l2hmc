@@ -860,7 +860,8 @@ class GaugeModel(object):
             zn = z_[0]
 
         with tf.name_scope('top_charge_diff'):
-            x_dq = self._calc_top_charges_diff(x, x_out, fft=False)
+            x_dq = tf.cast(self._calc_top_charges_diff(x, x_out, fft=False),
+                           dtype=tf.int32)
 
         # Add eps for numerical stability; following released impl
         with tf.name_scope('calc_loss'):
@@ -911,7 +912,6 @@ class GaugeModel(object):
             accept_prob: Acceptance probabilities used in Metropolis-Hastings
                 accept/reject step.
         """
-
         if tf.executing_eagerly():
             with tf.name_scope('grads'):
                 with tf.GradientTape() as tape:
@@ -1027,12 +1027,16 @@ class GaugeModel(object):
             self.global_step.assign(1)
 
         with tf.name_scope('learning_rate'):
-            self.lr = tf.train.exponential_decay(self.lr_init,
-                                                 self.global_step,
-                                                 self.lr_decay_steps,
-                                                 self.lr_decay_rate,
-                                                 staircase=False,
-                                                 name='learning_rate')
+            self.lr = tf.Variable(self.lr_init,
+                                  trainable=False,
+                                  name='learning_rate',
+                                  dtype=tf.float32)
+            #  self.lr = tf.train.exponential_decay(self.lr_init,
+            #                                       self.global_step,
+            #                                       self.lr_decay_steps,
+            #                                       self.lr_decay_rate,
+            #                                       staircase=False,
+            #                                       name='learning_rate')
         with tf.name_scope('optimizer'):
             if self.using_hvd:
                 self.optimizer = tf.train.AdamOptimizer(self.lr * hvd.size())
