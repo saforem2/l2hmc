@@ -95,9 +95,9 @@ class GaugeDynamics(tf.keras.Model):
                 trainable=self.eps_trainable
             )
 
-        self._construct_time()
+        #  self._construct_time()
         #  self._construct_masks()
-        self._construct_masks_while()
+        self._construct_masks()
 
         if self.hmc:
             self.position_fn = lambda inp: [
