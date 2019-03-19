@@ -945,14 +945,18 @@ class GaugeModel(object):
         """Build graph for TensorFlow."""
         def log_and_write(s, f):
             """Print string `s` to std out and also write to file `f`."""
+            #  if self.using_hvd:
+            #      if hvd.rank() != 0:
+            #          return
             io.log(s)
             io.write(s, f)
             return 1
 
         sep_str = 80 * '-'
-        log_and_write(sep_str, self.files['run_info_file'])
-        log_and_write(f"Building graph... (started at: {time.ctime()})",
-                      self.files['run_info_file'])
+        if self.safe_write:
+            log_and_write(sep_str, self.files['run_info_file'])
+            log_and_write(f"Building graph... (started at: {time.ctime()})",
+                          self.files['run_info_file'])
         start_time = time.time()
         #  io.log(sep_str)
         #  io.log(graph_str0)
@@ -1000,7 +1004,9 @@ class GaugeModel(object):
                 self.optimizer = tf.train.AdamOptimizer(self.lr)
 
         with tf.name_scope('loss'):
-            log_and_write("  Creating loss...", self.files['run_info_file'])
+            if self.safe_write():
+                log_and_write("  Creating loss...",
+                              self.files['run_info_file'])
             t0 = time.time()
 
             output = self._calc_loss_and_grads(x=self.x, beta=self.beta,
@@ -1011,13 +1017,15 @@ class GaugeModel(object):
             #  self.charge_diff_op = tf.reduce_mean(x_dq)
 
             t_diff = time.time() - t0
-            log_and_write(f"    done. took: {t_diff:4.3g} s.",
-                          self.files['run_info_file'])
+            if self.safe_write():
+                log_and_write(f"    done. took: {t_diff:4.3g} s.",
+                              self.files['run_info_file'])
 
         with tf.name_scope('train'):
             #  io.log(f"  Creating gradient operations...")
-            log_and_write(f"  Creating gradient operations...",
-                          self.files['run_info_file'])
+            if self.safe_write():
+                log_and_write(f"  Creating gradient operations...",
+                              self.files['run_info_file'])
             t0 = time.time()
 
             grads_and_vars = zip(self.grads, self.dynamics.variables)
@@ -1027,19 +1035,22 @@ class GaugeModel(object):
 
             t_diff = time.time() - t0
             #  io.log(f"    done. took: {t_diff:4.3g} s")
-            log_and_write(f"    done. took: {t_diff:4.3g} s",
-                          self.files['run_info_file'])
+            if self.safe_write():
+                log_and_write(f"    done. took: {t_diff:4.3g} s",
+                              self.files['run_info_file'])
 
         if self.summaries:
             #  io.log("  Creating summaries...")
-            log_and_write("  Creating summaries...",
-                          self.files['run_info_file'])
+            if self.safe_write():
+                log_and_write("  Creating summaries...",
+                              self.files['run_info_file'])
             t0 = time.time()
             self._create_summaries()
             t_diff = time.time() - t0
             #  io.log(f'    done. took: {t_diff:4.3g} s to create.')
-            log_and_write(f'    done. took: {t_diff:4.3g} s to create.',
-                          self.files['run_info_file'])
+            if self.safe_write():
+                log_and_write(f'    done. took: {t_diff:4.3g} s to create.',
+                              self.files['run_info_file'])
 
         if config is None:
             self.config = tf.ConfigProto()
@@ -1093,10 +1104,11 @@ class GaugeModel(object):
         #  if self.using_hvd:
         #      self.sess.run(hvd.broadcast_global_variables(0))
 
-        log_and_write((f'done. Graph took: '
-                       f'{time.time() - start_time:4.3g} s to build.'),
-                      self.files['run_info_file'])
-        log_and_write(sep_str, self.files['run_info_file'])
+        if self.safe_write():
+            log_and_write((f'done. Graph took: '
+                           f'{time.time() - start_time:4.3g} s to build.'),
+                          self.files['run_info_file'])
+            log_and_write(sep_str, self.files['run_info_file'])
 
     def update_beta(self, step):
         """Returns new beta to follow annealing schedule."""
