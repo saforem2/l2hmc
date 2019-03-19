@@ -44,9 +44,8 @@ except ImportError:
 #  import utils.gauge_model_helpers as helpers
 import utils.file_io as io
 
+from globals import COLORS, FILE_PATH, GLOBAL_SEED, MARKERS, PARAMS
 from collections import Counter, OrderedDict
-from definitions import COLORS, FILE_PATH, GLOBAL_SEED, MARKERS
-from gauge_model_params import PARAMS
 from lattice.lattice import GaugeLattice, u1_plaq_exact
 from utils.tf_logging import variable_summaries
 
@@ -55,6 +54,7 @@ from tensorflow.python import debug as tf_debug
 from tensorflow.python.client import timeline
 from tensorflow.core.protobuf import rewriter_config_pb2
 
+from gauge_model_params import PARAMS
 from dynamics.gauge_dynamics import GaugeDynamics
 
 if HAS_MATPLOTLIB:
