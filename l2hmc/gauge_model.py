@@ -1242,7 +1242,10 @@ class GaugeModel(object):
 
         try:
             io.log(self.train_header)
-            io.write(self.train_header, self.files['run_info_file'], 'a')
+            try:
+                io.write(self.train_header, self.files['run_info_file'], 'a')
+            except AttributeError:
+                continue
 
             #  while not self.sess.should_stop():
             for step in range(initial_step, train_steps):
@@ -1308,7 +1311,10 @@ class GaugeModel(object):
                                 f"{lr_np:^9.4g}")
 
                     io.log(data_str)
-                    io.write(data_str, self.files['run_info_file'], 'a')
+                    try:
+                        io.write(data_str, self.files['run_info_file'], 'a')
+                    except AttributeError:
+                        continue
 
                 # Intermittently run sampler and save samples to pkl file.
                 # We can calculate observables from these samples to
@@ -1359,17 +1365,18 @@ class GaugeModel(object):
                         run_metadata = None
 
                     if self.summaries:
-                        summary_str = self.sess.run(
-                            self.summary_op, feed_dict={
-                                self.x: samples_np,
-                                self.beta: beta_np,
-                                #  self.lr: lr_np
-                            }, options=options, run_metadata=run_metadata
-                        )
-                        self.writer.add_summary(summary_str,
-                                                global_step=step)
-                        if trace:
-                            tag = f'metadata_step_{step}'
+                        if self.condition1 or self.condition2:
+                            summary_str = self.sess.run(
+                                self.summary_op, feed_dict={
+                                    self.x: samples_np,
+                                    self.beta: beta_np,
+                                    #  self.lr: lr_np
+                                }, options=options, run_metadata=run_metadata
+                            )
+                            self.writer.add_summary(summary_str,
+                                                    global_step=step)
+                            if trace:
+                                tag = f'metadata_step_{step}'
                             self.writer.add_run_metadata(run_metadata, tag=tag,
                                                          global_step=step)
                     if self.condition1 or self.condition1:
