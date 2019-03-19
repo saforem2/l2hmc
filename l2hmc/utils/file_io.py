@@ -21,7 +21,7 @@ try:
 except ImportError:
     HAS_HOROVOD = False
 
-from definitions import ROOT_DIR
+from definitions import ROOT_DIR, PROJECT_DIR, FILE_PATH
 
 
 def write(s, f, mode='a', nl=True):
@@ -46,15 +46,6 @@ def log(s, nl=True):
         print(s, end='\n' if nl else '')
 
 
-def save_params_to_pkl_file(params, out_dir):
-    """Save `params` dictionary to `parameters.pkl` in `out_dir.`"""
-    check_else_make_dir(out_dir)
-    params_file = os.path.join(out_dir, 'parameters.pkl')
-    #  print(f"Saving params to: {params_file}.")
-    log(f"Saving params to: {params_file}.")
-    with open(params_file, 'wb') as f:
-        pickle.dump(params, f)
-
 
 def check_else_make_dir(d):
     """If directory `d` doesn't exist, it is created."""
@@ -66,42 +57,58 @@ def check_else_make_dir(d):
             pass
 
 
-def _create_log_dir(base_name):
-    """Create directory for storing information about experiment."""
-    root_log_dir = os.path.join(os.path.split(ROOT_DIR)[0], base_name)
-    log_dir = make_run_dir(root_log_dir)
-    info_dir = os.path.join(log_dir, 'run_info')
-    figs_dir = os.path.join(log_dir, 'figures')
-    if not os.path.isdir(info_dir):
-        os.makedirs(info_dir)
-    if not os.path.isdir(figs_dir):
-        os.makedirs(figs_dir)
-    return log_dir, info_dir, figs_dir
+def make_dirs(dirs):
+    """Make directories if and only if hvd.rank == 0."""
+    _ = [check_else_make_dir(d) for d in dirs]
 
 
-def create_log_dir(base_name):
-    """Create directory for storing information about experiment."""
-    dirs = _create_log_dir(base_name)
-
-    return dirs
-
-
-def _check_log_dir(log_dir):
-    """Check that log_dir and subdirectories `run_info`, `figures` exist."""
-    if not os.path.isdir(log_dir):
-        raise ValueError(f'Unable to locate {log_dir}, exiting.')
-    else:
-        info_dir = os.path.join(log_dir, 'run_info')
-        figs_dir = os.path.join(log_dir, 'figures')
-        check_else_make_dir(info_dir)
-        check_else_make_dir(figs_dir)
-    return log_dir, info_dir, figs_dir
+def save_params_to_pkl_file(params, out_dir):
+    """Save `params` dictionary to `parameters.pkl` in `out_dir.`"""
+    check_else_make_dir(out_dir)
+    params_file = os.path.join(out_dir, 'parameters.pkl')
+    #  print(f"Saving params to: {params_file}.")
+    log(f"Saving params to: {params_file}.")
+    with open(params_file, 'wb') as f:
+        pickle.dump(params, f)
 
 
-def check_log_dir(log_dir):
-    """Check that log_dir and subdirectories `run_info`, `figures` exist."""
-    dirs = _check_log_dir(log_dir)
-    return dirs
+def create_log_dir(root_dir='gauge_logs_graph'):
+    root_log_dir = os.path.join(PROJECT_DIR, root_dir)
+    check_else_make_dir(root_log_dir)
+    try:
+        run_dirs = [i for i in os.listdir(root_log_dir) if 'run' in i]
+        run_nums = [int(i.split('_')[-1]) for i in run_dirs]
+        run_num = sorted(run_nums)[-1] + 1
+    except:
+        run_num = 1
+
+    log_dir = os.path.join(root_log_dir, f'run_{run_num}')
+    try:
+        check_else_make_dir(log_dir)
+    except:
+        pass
+
+    return log_dir
+
+
+def get_run_num(log_dir):
+    """Get integer value for next run directory."""
+    check_else_make_dir(log_dir)
+    contents = os.listdir(log_dir)
+    if contents in ([], ['.DS_Store']):
+        return 1
+    try:
+        run_dirs = [i for i in os.listdir(log_dir) if 'run' in i]
+        run_nums = [int(i.split('_')[-1]) for i in run_dirs]
+        run_num = sorted(run_nums)[-1] + 1
+    except ValueError:
+        log(f"No previous runs found in {log_dir}, setting run_num=1.")
+        run_num = 1
+
+    return run_num
+
+
+
 
 
 def _get_run_num(log_dir):
@@ -123,39 +130,3 @@ def _get_run_num(log_dir):
         return 1
 
     return sorted(run_nums)[-1] + 1
-
-
-def get_run_num(log_dir):
-    """Determine the next sequential number to use for new run directory."""
-    run_num = _get_run_num(log_dir)
-
-    return run_num
-
-
-def _make_run_dir(log_dir):
-    """Create directory for new run called `run_num` where `num` is unique."""
-    #  if log_dir.endswith('/'):
-    #      _dir = log_dir
-    #  else:
-    #      _dir = log_dir + '/'
-    run_num = get_run_num(log_dir)
-    #  run_dir = _dir + f'run_{run_num}/'
-    run_dir = os.path.join(log_dir, f'run_{run_num}')
-    check_else_make_dir(run_dir)
-    #  if os.path.isdir(run_dir):
-    #      raise f'Directory: {run_dir} already exists, exiting!'
-    #  else:
-    #      log(f'Creating directory for new run: {run_dir}')
-    #      os.makedirs(run_dir)
-    return run_dir
-
-
-def make_run_dir(log_dir):
-    """Create directory for new run called `run_num` where `num` is unique."""
-    #  try:
-    #      if HAS_HOROVOD and hvd.rank() != 0:
-    #          return
-    #      run_dir = _make_run_dir(log_dir)
-    #  except NameError:
-    run_dir = _make_run_dir(log_dir)
-    return run_dir
