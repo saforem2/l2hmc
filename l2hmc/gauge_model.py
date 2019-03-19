@@ -69,6 +69,19 @@ if '2.' not in tf.__version__:
 ##############################################################################
 #                       Helper functions
 ##############################################################################
+def check_else_make_dir(d):
+    if HAS_HOROVOD:
+        if hvd.rank() != 0:
+            return
+    if os.path.isdir(d):
+        io.log(f"Directory {d} already exists... Continuing.")
+    else:
+        try:
+            io.log(f"Creating directory {d}")
+            os.makedirs(d)
+        except OSError as e:
+            raise
+
 def tf_accept(x, _x, px):
     """Helper function for determining if x is accepted given _x."""
     mask = (px - tf.random_uniform(tf.shape(px)) > 0.)
@@ -379,7 +392,7 @@ class GaugeModel(object):
 
     def _create_dir_structure(self, log_dir):
         """Create self.files and directory structure."""
-        if self.using_hvd:
+        if self.using_hvd or HAS_HOROVOD:
             io.log('\n')
             io.log(80 * '-')
             io.log(f"Calling _create_dir_structure from {hvd.rank()}...")
@@ -398,11 +411,15 @@ class GaugeModel(object):
         #  if self.safe_write:
         project_dir = os.path.abspath(os.path.dirname(FILE_PATH))
         if log_dir is None:
-            root_log_dir = os.path.join(project_dir, 'gauge_logs_graph')
+            if (self.using_hvd and hvd.rank() == 0) or not self.using_hvd:
+                root_log_dir = os.path.join(project_dir, 'gauge_logs_graph')
+            else:
+                return
         else:
             root_log_dir = os.path.join(project_dir, log_dir)
 
-        io.check_else_make_dir(root_log_dir)
+        check_else_make_dir(root_log_dir)
+        #  io.check_else_make_dir(root_log_dir)
 
         #  if self.log_dir is not None:
         #      io.log("self.log_dir already exists, returning.")
@@ -424,7 +441,8 @@ class GaugeModel(object):
             run_num = io.get_run_num(root_log_dir)
             log_dir = os.path.abspath(os.path.join(root_log_dir,
                                                    f'run_{run_num}'))
-            io.check_else_make_dir(log_dir)
+            #  io.check_else_make_dir(log_dir)
+            check_else_make_dir(log_dir)
 
             self.log_dir = log_dir
             if self.using_hvd:
@@ -1127,9 +1145,9 @@ class GaugeModel(object):
         if self.using_hvd:
             self.train_steps = train_steps // hvd.size()
 
-        if self.condition1 or self.condition2:
-            self.saver = tf.train.Saver(max_to_keep=2)
-            self.writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
+        #  if self.condition1 or self.condition2:
+        #      self.saver = tf.train.Saver(max_to_keep=2)
+            #  self.writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
 
         samples_init = kwargs.get('samples_init', None)
         beta_init = kwargs.get('beta_init', None)
@@ -2138,8 +2156,9 @@ def main(FLAGS):
         config.intra_op_parallelism_threads = OMP_NUM_THREADS
         config.inter_op_parallelism_threads = 1
 
-    #  if HAS_HOROVOD and FLAGS.horovod:
-    #      params['lr_init'] *= hvd.size()
+    if HAS_HOROVOD and FLAGS.horovod:
+        params['lr_init'] *= hvd.size()
+        params['train_steps'] /= hvd.size()
 
     model = GaugeModel(params=params,
                        config=config,
@@ -2155,8 +2174,8 @@ def main(FLAGS):
     io.log('\n\n\n')
 
     #  if not FLAGS.horovod or (FLAGS.horovod and hvd.rank() == 0):
-    if not model.using_hvd or (model.using_hvd and hvd.rank() == 0):
-        io.save_params_to_pkl_file(params, model.info_dir)
+    #  if not model.using_hvd or (model.using_hvd and hvd.rank() == 0):
+    #      io.save_params_to_pkl_file(params, model.info_dir)
 
     if FLAGS.horovod:
         io.log('Number of CPUs: %d' % hvd.size())
