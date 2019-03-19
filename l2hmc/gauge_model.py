@@ -209,7 +209,7 @@ class GaugeModel(object):
 
                 self._create_dir_structure(log_dir)
                 # ---------------------------------------------------------
-                # Write relevant instance attributes to human readable .txt file.
+                # Write relevant instance attributes to .txt file.
                 # ---------------------------------------------------------
                 self._write_run_parameters(_print=True)
 
@@ -387,6 +387,14 @@ class GaugeModel(object):
         if self.using_hvd:                    # If we are using horovod:
             if hvd.rank() == 0:               # AND rank == 0:
                 self.condition2 = True        # condition2: True
+        io.log('\n')
+        io.log(80*'-')
+        io.log(f'self.condition1: {self.condition1}')
+        io.log(f'self.condition2: {self.condition2}')
+        io.log(f'self.condition1 or self.condition2: '
+               f'{self.condition1 or self.condition2}')
+        io.log('\n')
+        io.log(80*'-')
 
         self.safe_write = self.condition1 or self.condition2
 
@@ -1062,6 +1070,7 @@ class GaugeModel(object):
         else:
             t_diff_summaries = 0.
 
+
         if config is None:
             self.config = tf.ConfigProto()
             if self.space_size > 8:
@@ -1110,6 +1119,7 @@ class GaugeModel(object):
             )
         else:
             self.sess = sess
+
 
         times = {
             't_diff_loss': t_diff_loss,
@@ -1189,8 +1199,12 @@ class GaugeModel(object):
         beta_init = kwargs.get('beta_init', None)
         trace = kwargs.get('trace', False)
 
+        #  if self.condition1 or self.condition2:
         if self.condition1 or self.condition2:
-            self.writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
+            try:
+                self.writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
+            except AttributeError:
+                pass
 
         h_str = ("{:^12s}{:^10s}{:^10s}{:^10s}{:^10s}"
                  "{:^10s}{:^10s}{:^10s}{:^10s}{:^10s}{:^10s}")
@@ -1378,8 +1392,9 @@ class GaugeModel(object):
                                                     global_step=step)
                             if trace:
                                 tag = f'metadata_step_{step}'
-                            self.writer.add_run_metadata(run_metadata, tag=tag,
-                                                         global_step=step)
+                                self.writer.add_run_metadata(run_metadata,
+                                                             tag=tag,
+                                                             global_step=step)
                     if self.condition1 or self.condition1:
                         self.writer.flush()
 
@@ -2199,9 +2214,10 @@ def main(FLAGS):
         config.intra_op_parallelism_threads = OMP_NUM_THREADS
         config.inter_op_parallelism_threads = 1
 
-    if HAS_HOROVOD and FLAGS.horovod:
+    #  if HAS_HOROVOD and FLAGS.horovod:
         #  params['lr_init'] *= hvd.size()
-        params['train_steps'] /= hvd.size()
+        #  params['train_steps'] /= hvd.size()
+        #  params['lr_decay_steps'] /= hvd.size()
 
     model = GaugeModel(params=params,
                        config=config,
@@ -2233,7 +2249,7 @@ def main(FLAGS):
 
     if not FLAGS.hmc:
         if FLAGS.profiler:
-            model.train_profiler(FLAGS.train_steps, trace=True)
+            model.train_profiler(params['train_steps'], trace=True)
         else:
             if FLAGS.restore:
                 # pylint: disable=protected-access
@@ -2241,14 +2257,13 @@ def main(FLAGS):
                     model.train(model.train_steps,
                                 samples_init=model._current_state['samples'],
                                 beta_init=model._current_state['beta'],
-                                pre_train=False,
-                                trace=False)
+                                trace=FLAGS.trace)
                 else:
                     io.log('Model restored but training completed. '
                            'Preparing to run the trained sampler...')
             else:
-                model.train(FLAGS.train_steps, samples_init=None,
-                            beta_init=None, trace=False)
+                model.train(params['train_steps'], samples_init=None,
+                            beta_init=None, trace=FLAGS.trace)
 
     try:
         #  run_steps_grid = [100, 500, 1000, 2500, 5000, 10000]
@@ -2382,6 +2397,11 @@ if __name__ == '__main__':
                         required=False, dest="train_steps",
                         help=("Number of training steps to perform. "
                               "(Default: 1000)"))
+
+    parser.add_argument("--trace", action="store_true",
+                        required=False, dest="trace",
+                        help=("Flag that when passed will create trace during "
+                              "training loop."))
 
     parser.add_argument("--save_steps", type=int, default=50,
                         required=False, dest="save_steps",
