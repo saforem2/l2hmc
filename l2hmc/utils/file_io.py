@@ -21,7 +21,7 @@ try:
 except ImportError:
     HAS_HOROVOD = False
 
-from definitions import ROOT_DIR, PROJECT_DIR, FILE_PATH
+from globals import ROOT_DIR, PROJECT_DIR, FILE_PATH
 
 
 def write(s, f, mode='a', nl=True):

@@ -54,7 +54,6 @@ from tensorflow.python import debug as tf_debug
 from tensorflow.python.client import timeline
 from tensorflow.core.protobuf import rewriter_config_pb2
 
-from gauge_model_params import PARAMS
 from dynamics.gauge_dynamics import GaugeDynamics
 
 if HAS_MATPLOTLIB:
