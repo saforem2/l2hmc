@@ -192,7 +192,9 @@ class GaugeModel(object):
             # --------------------------------------------------------------
             # Create necessary directories for holding checkpoints, data, etc.
             # --------------------------------------------------------------
-            self._create_dir_structure(log_dir)
+            if (self.using_hvd and hvd.rank() == 0) or not self.using_hvd:
+
+                self._create_dir_structure(log_dir)
             # -------------------------------------------------------------
             # Write relevant instance attributes to human readable .txt file.
             # -------------------------------------------------------------
@@ -378,8 +380,13 @@ class GaugeModel(object):
     def _create_dir_structure(self, log_dir):
         """Create self.files and directory structure."""
         if self.using_hvd:
+            io.log('\n')
+            io.log(80 * '-')
+            io.log(f"Calling _create_dir_structure from {hvd.rank()}...")
             if hvd.rank() != 0:
-                io.log(f"Calling _create_dir_structure from {hvd.rank()}...")
+                io.log("Returning...")
+                io.log(80 * '-')
+                io.log('\n')
                 return
         #  log_dir = os.path.join(root_log_dir, f'run_{run_num}')
         #  if log_dir is None:
@@ -412,18 +419,22 @@ class GaugeModel(object):
 
         #  if self.condition1 or self.condition2:
         #  if self.safe_write:
-        run_num = io.get_run_num(root_log_dir)
-        log_dir = os.path.abspath(os.path.join(root_log_dir,
-                                               f'run_{run_num}'))
-        io.check_else_make_dir(log_dir)
 
-        self.log_dir = log_dir
-        if self.using_hvd:
-            io.log('\n')
-            io.log(f"Successfully created and assigned `self.log_dir` on "
-                   f"{hvd.rank()}.")
-            io.log(f"self.log_dir: {self.log_dir}")
-            io.log('\n')
+        if not self.using_hvd or (self.using_hvd and hvd.rank() == 0):
+            run_num = io.get_run_num(root_log_dir)
+            log_dir = os.path.abspath(os.path.join(root_log_dir,
+                                                   f'run_{run_num}'))
+            io.check_else_make_dir(log_dir)
+
+            self.log_dir = log_dir
+            if self.using_hvd:
+                io.log('\n')
+                io.log(f"Successfully created and assigned `self.log_dir` on "
+                       f"{hvd.rank()}.")
+                io.log(f"self.log_dir: {self.log_dir}")
+                io.log('\n')
+        else:
+            return
 
         self.info_dir = os.path.join(self.log_dir, 'run_info')
         self.figs_dir = os.path.join(self.log_dir, 'figures')
@@ -967,8 +978,8 @@ class GaugeModel(object):
                                                **self.loss_weights)
 
             self.loss_op, self.grads, self.x_out, self.px, x_dq = output
-            #  self.charge_diff_op = tf.reduce_sum(x_dq) / self.num_samples
-            self.charge_diff_op = tf.reduce_mean(x_dq)
+            self.charge_diff_op = tf.reduce_sum(x_dq) / self.num_samples
+            #  self.charge_diff_op = tf.reduce_mean(x_dq)
 
             t_diff = time.time() - t0
             log_and_write(f"    done. took: {t_diff:4.3g} s.",
@@ -1013,46 +1024,45 @@ class GaugeModel(object):
             self.config = config
 
         if sess is None:
-            self.sess = tf.Session(config=self.config)
-            #  if self.using_hvd:
-            #      hooks = [
-            #          # Horovod: BroadcastGlobalVariablesHook broadcasts initial
-            #          # variable states from rank 0 to all other processes. This
-            #          # is necessary to ensure consistent initialization of all
-            #          # workers when training is started with random weights or
-            #          # restored from a checkpoint.
-            #          hvd.BroadcastGlobalVariablesHook(0),
-            #
-            #          # Horovod: adjust number of steps based on number of GPUs.
-            #          #  tf.train.StopAtStepHook(
-            #          #      last_step=self.train_steps // hvd.size()
-            #          #  ),
-            #
-            #          #  tf.train.LoggingTensorHook(tensors={'step': global_step,
-            #          #                                      'loss': loss},
-            #          #                             every_n_iter=10),
-            #      ]
-            #      if hvd.rank == 0:
-            #          checkpoint_dir = self.log_dir
-            #  else:
-            #      hooks = []
-            #      checkpoint_dir = self.log_dir
+            #  self.sess = tf.Session(config=self.config)
+            if self.using_hvd:
+                hooks = [
+                    # Horovod: BroadcastGlobalVariablesHook broadcasts initial
+                    # variable states from rank 0 to all other processes. This
+                    # is necessary to ensure consistent initialization of all
+                    # workers when training is started with random weights or
+                    # restored from a checkpoint.
+                    hvd.BroadcastGlobalVariablesHook(0),
+
+                    # Horovod: adjust number of steps based on number of GPUs.
+                    #  tf.train.StopAtStepHook(
+                    #      last_step=self.train_steps // hvd.size()
+                    #  ),
+
+                    #  tf.train.LoggingTensorHook(tensors={'step': global_step,
+                    #                                      'loss': loss},
+                    #                             every_n_iter=10),
+                ]
+                checkpoint_dir = self.log_dir if hvd.rank() == 0 else None
+            else:
+                hooks = []
+                checkpoint_dir = self.log_dir
             # The MonitoredTrainingSession takes care of session
             # initialization, restoring from a checkpoint, saving to a
             # checkpoint, and closing when done or an error occurs.
-            #  self.sess = tf.train.MonitoredTrainingSession(
-            #      checkpoint_dir=checkpoint_dir,
-            #      hooks=hooks,
-            #      config=config,
-            #      save_summaries_secs=None,
-            #      save_summaries_steps=None
-            #  )
+            self.sess = tf.train.MonitoredTrainingSession(
+                checkpoint_dir=checkpoint_dir,
+                hooks=hooks,
+                config=config,
+                save_summaries_secs=None,
+                save_summaries_steps=None
+            )
         else:
             self.sess = sess
 
-        self.sess.run(tf.global_variables_initializer())
-        if self.using_hvd:
-            self.sess.run(hvd.broadcast_global_variables(0))
+        #  self.sess.run(tf.global_variables_initializer())
+        #  if self.using_hvd:
+        #      self.sess.run(hvd.broadcast_global_variables(0))
 
         log_and_write((f'done. Graph took: '
                        f'{time.time() - start_time:4.3g} s to build.'),
