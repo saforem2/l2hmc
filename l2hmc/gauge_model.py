@@ -80,17 +80,6 @@ def project_angle(x):
     return x - 2 * np.pi * tf.floor((x + np.pi) / (2 * np.pi))
 
 
-#  def linear_fft(x, N=100):
-#      """Fourier series representation of linear function y = x."""
-#      y = np.zeros_like(x)
-#      #  k = np.arange(1, N)
-#      for n in range(1, N):
-#          y[n] = np.sum(np.sin(n * x))
-#          #  y += (-1) ** (1 + n) * np.sin(n * x)
-#      y *= - 2
-#      return y
-
-
 def project_angle_approx(x, N=5):
     """Use the fourier series representation `x` to approx `project_angle`.
 
