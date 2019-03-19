@@ -7,8 +7,8 @@
 
 --time_size 8                  
 --space_size 8                  
---num_samples 64 
---num_steps 5                
+--num_samples 128 
+--num_steps 3                
 --eps 0.35
 --annealing
 --beta_init 2.                  
@@ -31,7 +31,7 @@
 --eps_trainable
 #--clip_grads
 #--clip_val 10.
---log_dir 'conv3D_logs/lattice_L8/fourier_approx/num_steps5/lr1e-3/'
+--log_dir 'conv3D_logs/lattice_L8/fourier_approx/num_steps3/lr1e-3/while_loop'
 
 
 #============================================================================================
