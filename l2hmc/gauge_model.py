@@ -375,6 +375,9 @@ class GaugeModel(object):
 
     def _create_dir_structure(self, log_dir='gauge_logs_graph'):
         """Create self.files and directory structure."""
+        if self.using_hvd:
+            if hvd.rank != 0:
+                return
         #  log_dir = os.path.join(root_log_dir, f'run_{run_num}')
         #  if log_dir is None:
         #      root_log_dir = os.path.join(project_dir, 'gauge_logs_graph')
@@ -941,7 +944,8 @@ class GaugeModel(object):
                                                **self.loss_weights)
 
             self.loss_op, self.grads, self.x_out, self.px, x_dq = output
-            self.charge_diff_op = tf.reduce_sum(x_dq) / self.num_samples
+            #  self.charge_diff_op = tf.reduce_sum(x_dq) / self.num_samples
+            self.charge_diff_op = tf.reduce_mean(x_dq)
 
             t_diff = time.time() - t0
             log_and_write(f"    done. took: {t_diff:4.3g} s.",
@@ -1010,8 +1014,13 @@ class GaugeModel(object):
             # The MonitoredTrainingSession takes care of session
             # initialization, restoring from a checkpoint, saving to a
             # checkpoint, and closing when done or an error occurs.
+            if self.using_hvd:
+                checkpoint_dir = self.log_dir if hvd.rank() == 0 else None
+            else:
+                checkpoint_dir = self.log_dir
+
             self.sess = tf.train.MonitoredTrainingSession(
-                checkpoint_dir=self.log_dir,
+                checkpoint_dir=checkpoint_dir,
                 hooks=hooks,
                 config=config,
                 save_summaries_secs=None,
