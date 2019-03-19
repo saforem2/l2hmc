@@ -1245,7 +1245,7 @@ class GaugeModel(object):
             try:
                 io.write(self.train_header, self.files['run_info_file'], 'a')
             except AttributeError:
-                continue
+                pass
 
             #  while not self.sess.should_stop():
             for step in range(initial_step, train_steps):
