@@ -192,12 +192,11 @@ class GaugeModel(object):
             # --------------------------------------------------------------
             # Create necessary directories for holding checkpoints, data, etc.
             # --------------------------------------------------------------
-            if not self.using_hvd or (self.using_hvd and hvd.rank() == 0):
-                self._create_dir_structure(log_dir)
-                # ----------------------------------------------------------
-                # Write relevant instance attributes to human readable .txt file.
-                # ----------------------------------------------------------
-                self._write_run_parameters(_print=True)
+            self._create_dir_structure(log_dir)
+            # -------------------------------------------------------------
+            # Write relevant instance attributes to human readable .txt file.
+            # -------------------------------------------------------------
+            self._write_run_parameters(_print=True)
 
         # ------------------------------------------------------------------
         # Create lattice object.
@@ -376,11 +375,11 @@ class GaugeModel(object):
 
         self.safe_write = self.condition1 or self.condition2
 
-    def _create_dir_structure(self, log_dir='gauge_logs_graph'):
+    def _create_dir_structure(self, log_dir):
         """Create self.files and directory structure."""
         if self.using_hvd:
-            if hvd.rank != 0:
-                self.log_dir = None
+            if hvd.rank() != 0:
+                io.log(f"Calling _create_dir_structure from {hvd.rank()}...")
                 return
         #  log_dir = os.path.join(root_log_dir, f'run_{run_num}')
         #  if log_dir is None:
@@ -389,42 +388,42 @@ class GaugeModel(object):
         #      root_log_dir = os.path.join(project_dir, log_dir)
         #      self.log_dir = log_dir
         #      io.check_else_make_dir(self.log_dir)
-
-        if log_dir is None:
-            log_dir = 'gauge_logs_graph'
-
+        #  if self.safe_write:
         project_dir = os.path.abspath(os.path.dirname(FILE_PATH))
-        root_log_dir = os.path.abspath(os.path.join(project_dir, log_dir))
-        if not os.path.exists(log_dir):
-            try:
-                os.makedirs(log_dir)
-            except OSError as e:
-                if e.errno == errno.EEXIST and os.path.isdir(log_dir):
-                    return
-                else:
-                    raise
+        if log_dir is None:
+            root_log_dir = os.path.join(project_dir, 'gauge_logs_graph')
+        else:
+            root_log_dir = os.path.join(project_dir, log_dir)
+
+        io.check_else_make_dir(root_log_dir)
+
+        #  if self.log_dir is not None:
+        #      io.log("self.log_dir already exists, returning.")
+        #  project_dir = os.path.abspath(os.path.dirname(FILE_PATH))
+        #  root_log_dir = os.path.abspath(os.path.join(project_dir, log_dir))
+        #  if not os.path.exists(log_dir):
+        #      try:
+        #          os.makedirs(log_dir)
+        #      except OSError as e:
+        #          if e.errno == errno.EEXIST and os.path.isdir(log_dir):
+        #              return
+        #          else:
+        #              raise
 
         #  if self.condition1 or self.condition2:
-        if self.safe_write:
-            run_num = io.get_run_num(root_log_dir)
-            log_dir = os.path.abspath(os.path.join(root_log_dir,
-                                                   f'run_{run_num}'))
-            if not os.path.exists(log_dir):
-                try:
-                    os.makedirs(log_dir)
-                except OSError as e:
-                    if e.errno == errno.EEXIST and os.path.isdir(log_dir):
-                        pass
-                    else:
-                        raise
-            #  io.check_else_make_dir(log_dir)
+        #  if self.safe_write:
+        run_num = io.get_run_num(root_log_dir)
+        log_dir = os.path.abspath(os.path.join(root_log_dir,
+                                               f'run_{run_num}'))
+        io.check_else_make_dir(log_dir)
 
+        self.log_dir = log_dir
         if self.using_hvd:
-            self.log_dir = log_dir if hvd.rank() == 0 else None
-        else:
-            self.log_dir = log_dir
-        #  self.log_dir = os.path.abspath(os.path.join(root_log_dir,
-        #                                              f'run_{run_num}'))
+            io.log('\n')
+            io.log(f"Successfully created and assigned `self.log_dir` on "
+                   f"{hvd.rank()}.")
+            io.log(f"self.log_dir: {self.log_dir}")
+            io.log('\n')
 
         self.info_dir = os.path.join(self.log_dir, 'run_info')
         self.figs_dir = os.path.join(self.log_dir, 'figures')
