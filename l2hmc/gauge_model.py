@@ -208,10 +208,10 @@ class GaugeModel(object):
             if (self.using_hvd and hvd.rank() == 0) or not self.using_hvd:
 
                 self._create_dir_structure(log_dir)
-            # -------------------------------------------------------------
-            # Write relevant instance attributes to human readable .txt file.
-            # -------------------------------------------------------------
-            self._write_run_parameters(_print=True)
+                # ---------------------------------------------------------
+                # Write relevant instance attributes to human readable .txt file.
+                # ---------------------------------------------------------
+                self._write_run_parameters(_print=True)
 
         # ------------------------------------------------------------------
         # Create lattice object.
@@ -601,9 +601,20 @@ class GaugeModel(object):
 
     def _write_run_parameters(self, _print=False):
         """Write model parameters out to human readable .txt file."""
-        if self.using_hvd:
+        if self.using_hvd or HAS_HOROVOD:
+            io.log('\n')
+            io.log(80 * '-')
+            io.log(f"Calling _write_run_parameters from {hvd.rank()}...")
             if hvd.rank() != 0:
+                io.log("Returning...")
+                io.log(80 * '-')
+                io.log('\n')
                 return
+        #  if self.using_hvd:
+        #      if hvd.rank() != 0:
+        #          return
+        if self.info_dir is None:
+            return
 
         s0 = 'Parameters'
         sep_str = 80 * '-'
