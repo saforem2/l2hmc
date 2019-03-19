@@ -2200,7 +2200,7 @@ def main(FLAGS):
         config.inter_op_parallelism_threads = 1
 
     if HAS_HOROVOD and FLAGS.horovod:
-        params['lr_init'] *= hvd.size()
+        #  params['lr_init'] *= hvd.size()
         params['train_steps'] /= hvd.size()
 
     model = GaugeModel(params=params,
