@@ -1027,7 +1027,8 @@ class GaugeModel(object):
                                                  name='learning_rate')
         with tf.name_scope('optimizer'):
             if self.using_hvd:
-                self.optimizer = tf.train.AdamOptimizer(self.lr * hvd.size())
+                #  self.optimizer = tf.train.AdamOptimizer(self.lr * hvd.size())
+                self.optimizer = tf.train.AdamOptimizer(self.lr)
                 self.optimizer = hvd.DistributedOptimizer(self.optimizer)
             else:
                 self.optimizer = tf.train.AdamOptimizer(self.lr)
@@ -1177,8 +1178,8 @@ class GaugeModel(object):
                     'trace': Trace training loop for profiling. (Default:
                         False)
         """
-        if self.using_hvd:
-            self.train_steps = train_steps // hvd.size()
+        #  if self.using_hvd:
+        #      self.train_steps = train_steps // hvd.size()
 
         #  if self.condition1 or self.condition2:
         #      self.saver = tf.train.Saver(max_to_keep=2)
