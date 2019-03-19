@@ -414,7 +414,7 @@ class GaugeModel(object):
         if self.using_hvd:
             self.log_dir = log_dir if hvd.rank() == 0 else None
         else:
-            self.log_dir = log_dir if hvd.rank() == 0
+            self.log_dir = log_dir
         #  self.log_dir = os.path.abspath(os.path.join(root_log_dir,
         #                                              f'run_{run_num}'))
 
