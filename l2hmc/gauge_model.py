@@ -183,7 +183,7 @@ class GaugeModel(object):
         """Initialization method."""
         np.random.seed(GLOBAL_SEED)
         tf.set_random_seed(GLOBAL_SEED)
-        #  tf.enable_resource_variables()
+        tf.enable_resource_variables()
         # ------------------------------------------------------------------
         # Create instance attributes from key, val pairs in `params`.
         # ------------------------------------------------------------------
@@ -374,10 +374,13 @@ class GaugeModel(object):
             if hvd.rank() == 0:               # AND rank == 0:
                 self.condition2 = True        # condition2: True
 
+        self.safe_write = self.condition1 or self.condition2
+
     def _create_dir_structure(self, log_dir='gauge_logs_graph'):
         """Create self.files and directory structure."""
         if self.using_hvd:
             if hvd.rank != 0:
+                self.log_dir = None
                 return
         #  log_dir = os.path.join(root_log_dir, f'run_{run_num}')
         #  if log_dir is None:
@@ -387,19 +390,31 @@ class GaugeModel(object):
         #      self.log_dir = log_dir
         #      io.check_else_make_dir(self.log_dir)
 
-        if log_dir is None:
-            log_dir = 'gauge_logs_graph'
+        #  if log_dir is None:
+        #      log_dir = 'gauge_logs_graph'
 
         project_dir = os.path.abspath(os.path.dirname(FILE_PATH))
         root_log_dir = os.path.abspath(os.path.join(project_dir, log_dir))
 
-        if self.condition1 or self.condition2:
+        #  if self.condition1 or self.condition2:
+        if self.safe_write:
             run_num = io.get_run_num(root_log_dir)
             log_dir = os.path.abspath(os.path.join(root_log_dir,
                                                    f'run_{run_num}'))
-            io.check_else_make_dir(log_dir)
+            if not os.path.exists(log_dir):
+                try:
+                    os.makedirs(log_dir)
+                except OSError as e:
+                    if e.errno == errno.EEXIST and os.path.isdir(log_dir):
+                        pass
+                    else:
+                        raise
+            #  io.check_else_make_dir(log_dir)
 
-        self.log_dir = log_dir
+        if self.using_hvd:
+            self.log_dir = log_dir if hvd.rank() == 0 else None
+        else:
+            self.log_dir = log_dir if hvd.rank() == 0
         #  self.log_dir = os.path.abspath(os.path.join(root_log_dir,
         #                                              f'run_{run_num}'))
 
