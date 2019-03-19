@@ -2266,12 +2266,18 @@ def main(FLAGS):
                             beta_init=None, trace=FLAGS.trace)
 
     try:
+        run_steps = 5e4
+        model.run(run_steps, beta=model.beta_final)
+        model.run(run_steps, beta=model.beta_final - 1)
         #  run_steps_grid = [100, 500, 1000, 2500, 5000, 10000]
-        run_steps_grid = [20000, 50000]
-        betas = [model.beta_final - 1, model.beta_final]
-        for steps in run_steps_grid:
-            for beta1 in betas:
-                model.run(steps, beta=beta1)
+        #  run_steps_grid = [20000, 50000]
+        #  run_steps = 50000
+        #  run_steps_grid = [50000]
+        #  betas = [model.beta_final - 1, model.beta_final]
+        #  betas = [model.beta_final]
+        #  for steps in run_steps_grid:
+        #      for beta1 in betas:
+        #          model.run(steps, beta=beta1)
 
     except (KeyboardInterrupt, SystemExit):
         io.log("\nKeyboardInterrupt detected! \n")
