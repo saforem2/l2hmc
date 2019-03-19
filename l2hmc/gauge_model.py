@@ -192,11 +192,12 @@ class GaugeModel(object):
             # --------------------------------------------------------------
             # Create necessary directories for holding checkpoints, data, etc.
             # --------------------------------------------------------------
-            self._create_dir_structure(log_dir)
-            # --------------------------------------------------------------
-            # Write relevant instance attributes to human readable .txt file.
-            # --------------------------------------------------------------
-            self._write_run_parameters(_print=True)
+            if not self.using_hvd or (self.using_hvd and hvd.rank() == 0):
+                self._create_dir_structure(log_dir)
+                # ----------------------------------------------------------
+                # Write relevant instance attributes to human readable .txt file.
+                # ----------------------------------------------------------
+                self._write_run_parameters(_print=True)
 
         # ------------------------------------------------------------------
         # Create lattice object.
@@ -990,44 +991,46 @@ class GaugeModel(object):
             self.config = config
 
         if sess is None:
-            #  self.sess = tf.Session(config=self.config)
-            if self.using_hvd:
-                hooks = [
-                    # Horovod: BroadcastGlobalVariablesHook broadcasts initial
-                    # variable states from rank 0 to all other processes. This
-                    # is necessary to ensure consistent initialization of all
-                    # workers when training is started with random weights or
-                    # restored from a checkpoint.
-                    hvd.BroadcastGlobalVariablesHook(0),
-
-                    # Horovod: adjust number of steps based on number of GPUs.
-                    #  tf.train.StopAtStepHook(
-                    #      last_step=self.train_steps // hvd.size()
-                    #  ),
-
-                    #  tf.train.LoggingTensorHook(tensors={'step': global_step,
-                    #                                      'loss': loss},
-                    #                             every_n_iter=10),
-                ]
-            else:
-                hooks = []
+            self.sess = tf.Session(config=self.config)
+            #  if self.using_hvd:
+            #      hooks = [
+            #          # Horovod: BroadcastGlobalVariablesHook broadcasts initial
+            #          # variable states from rank 0 to all other processes. This
+            #          # is necessary to ensure consistent initialization of all
+            #          # workers when training is started with random weights or
+            #          # restored from a checkpoint.
+            #          hvd.BroadcastGlobalVariablesHook(0),
+            #
+            #          # Horovod: adjust number of steps based on number of GPUs.
+            #          #  tf.train.StopAtStepHook(
+            #          #      last_step=self.train_steps // hvd.size()
+            #          #  ),
+            #
+            #          #  tf.train.LoggingTensorHook(tensors={'step': global_step,
+            #          #                                      'loss': loss},
+            #          #                             every_n_iter=10),
+            #      ]
+            #      if hvd.rank == 0:
+            #          checkpoint_dir = self.log_dir
+            #  else:
+            #      hooks = []
+            #      checkpoint_dir = self.log_dir
             # The MonitoredTrainingSession takes care of session
             # initialization, restoring from a checkpoint, saving to a
             # checkpoint, and closing when done or an error occurs.
-            if self.using_hvd:
-                checkpoint_dir = self.log_dir if hvd.rank() == 0 else None
-            else:
-                checkpoint_dir = self.log_dir
-
-            self.sess = tf.train.MonitoredTrainingSession(
-                checkpoint_dir=checkpoint_dir,
-                hooks=hooks,
-                config=config,
-                save_summaries_secs=None,
-                save_summaries_steps=None
-            )
+            #  self.sess = tf.train.MonitoredTrainingSession(
+            #      checkpoint_dir=checkpoint_dir,
+            #      hooks=hooks,
+            #      config=config,
+            #      save_summaries_secs=None,
+            #      save_summaries_steps=None
+            #  )
         else:
             self.sess = sess
+
+        self.sess.run(tf.global_variables_initializer())
+        if self.using_hvd:
+            self.sess.run(hvd.broadcast_global_variables(0))
 
         log_and_write((f'done. Graph took: '
                        f'{time.time() - start_time:4.3g} s to build.'),
@@ -1090,7 +1093,11 @@ class GaugeModel(object):
                         False)
         """
         if self.using_hvd:
-            train_steps = train_steps // hvd.size()
+            self.train_steps = train_steps // hvd.size()
+
+        if self.condition1 or self.condition2:
+            self.saver = tf.train.Saver(max_to_keep=2)
+            self.writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
 
         samples_init = kwargs.get('samples_init', None)
         beta_init = kwargs.get('beta_init', None)
@@ -1287,16 +1294,18 @@ class GaugeModel(object):
             io.log("Training complete!")
             io.log(f"Time to complete training: {train_time:.3g}.")
             step = self.sess.run(self.global_step)
-            self._save_model(samples=samples_np)
-            self._plot_charge_diff()
+            if self.condition1 or self.condition2:
+                self._save_model(samples=samples_np)
+                self._plot_charge_diff()
 
         except (KeyboardInterrupt, SystemExit):
             io.log("\nKeyboardInterrupt detected! \n", nl=False)
             io.log("Saving current state and exiting.\n", nl=False)
             io.log(data_str)
             io.write(data_str, self.files['run_info_file'], 'a')
-            self._save_model(samples=samples_np)
-            self._plot_charge_diff()
+            if self.condition1 or self.condition2:
+                self._save_model(samples=samples_np)
+                self._plot_charge_diff()
 
     # pylint: disable=inconsistent-return-statements, too-many-locals
     def run(self, 
@@ -1532,7 +1541,7 @@ class GaugeModel(object):
 
     def _plot_observables(self, observables, beta, current_step=None):
         """Plot observables stored in `observables`."""
-        if not HAS_MATPLOTLIB:
+        if not HAS_MATPLOTLIB or (self.using_hvd and hvd.rank() != 0):
             return
 
         io.log("Plotting observables...")
@@ -1619,7 +1628,7 @@ class GaugeModel(object):
 
     def _plot_charge_diff(self):
         """Plot num. of tunneling events vs. training step after training."""
-        if not HAS_MATPLOTLIB:
+        if not HAS_MATPLOTLIB or (self.using_hvd and hvd.rank() != 0):
             return
         #  charge_diff_keys = np.array(list(self.tunn_events_dict.keys()))
         charge_diff_vals = np.array(list(self.charge_diff_dict.values()))
@@ -1641,7 +1650,7 @@ class GaugeModel(object):
 
     def _plot_top_charges(self, charges, beta, current_step=None):
         """Plot top. charge history using samples generated from `self.run`."""
-        if not HAS_MATPLOTLIB:
+        if not HAS_MATPLOTLIB or (self.using_hvd and hvd.rank() != 0):
             return
 
         io.log("Plotting topological charge vs. step for each sample...")
@@ -1678,7 +1687,7 @@ class GaugeModel(object):
 
     def _plot_top_charge_probs(self, charges, beta, current_step=None):
         """Create scatter plot of frequency of topological charge values."""
-        if not HAS_MATPLOTLIB:
+        if not HAS_MATPLOTLIB or (self.using_hvd and hvd.rank() != 0):
             return
 
         io.log("Plotting top. charge probability vs. value")
@@ -1736,6 +1745,9 @@ class GaugeModel(object):
 
     def _get_plot_dir(self, charges, beta, current_step=None):
         """Returns directory where plots of observables are to be saved."""
+        if not HAS_MATPLOTLIB or (self.using_hvd and hvd.rank() != 0):
+            return
+
         run_steps = charges.shape[0]
 
         if current_step is not None:  # i.e. sampler evaluated DURING training
@@ -1755,6 +1767,9 @@ class GaugeModel(object):
 
     def _save_run_info(self, observables, stats, _args):
         """Save samples and observables generated from `self.run` call."""
+        if not HAS_MATPLOTLIB or (self.using_hvd and hvd.rank() != 0):
+            return
+
         actions_dict = observables[0]
         plaqs_dict = observables[1]
         charges_dict = observables[2]
@@ -1963,6 +1978,8 @@ class GaugeModel(object):
 
     def _get_run_files(self, *_args):
         """Create dir and files for storing observables from `self.run`."""
+        if not HAS_MATPLOTLIB or (self.using_hvd and hvd.rank() != 0):
+            return
         run_steps, current_step, beta, _ = _args
 
         observables_dir = os.path.join(self.eval_dir, 'observables')
@@ -2100,11 +2117,13 @@ def main(FLAGS):
 
     io.log('\n\n\n')
     io.log(80*'~')
-    io.log(f"model.log_dir: {model.log_dir}")
+    if not model.using_hvd:
+        io.log(f"model.log_dir: {model.log_dir}")
     io.log(80*'~')
     io.log('\n\n\n')
 
-    if not FLAGS.horovod or (FLAGS.horovod and hvd.rank() == 0):
+    #  if not FLAGS.horovod or (FLAGS.horovod and hvd.rank() == 0):
+    if not model.using_hvd or (model.using_hvd and hvd.rank() == 0):
         io.save_params_to_pkl_file(params, model.info_dir)
 
     if FLAGS.horovod:
