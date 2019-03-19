@@ -940,26 +940,59 @@ class GaugeModel(object):
 
         self.summary_op = tf.summary.merge_all(name='summary_op')
 
+
+    def _log_write_graph_creation_time(self, **times):
+        if self.using_hvd or HAS_HOROVOD:
+            io.log('\n')
+            io.log(80 * '-')
+            io.log(f"Calling _write_run_parameters from {hvd.rank()}...")
+            if hvd.rank() != 0:
+                io.log("Returning...")
+                io.log(80 * '-')
+                io.log('\n')
+                return
+
+        if self.files is None:
+            return
+
+        def log_and_write(s, f):
+            """Print string `s` to std out and also write to file `f`."""
+            if self.using_hvd:
+                if hvd.rank() != 0:
+                    return
+            io.log(s)
+            io.write(s, f)
+            return
+
+        t_diff_loss = times.get('t_diff_loss', 0.)
+        t_diff_train = times.get('t_diff_train', 0.)
+        t_diff_summaries = times.get('t_diff_summaries', 0.)
+        t_diff_graph = times.get('t_diff_graph', 0.)
+
+        sep_str = 80 * '-'
+        log_and_write(sep_str, self.files['run_info_file'])
+        log_and_write(f"Building graph... (started at: {time.ctime()})",
+                      self.files['run_info_file'])
+        log_and_write("  Creating loss...", self.files['run_info_file'])
+        log_and_write(f"    done. took: {t_diff_loss:4.3g} s.",
+                      self.files['run_info_file'])
+        log_and_write(f"  Creating gradient operations...",
+                      self.files['run_info_file'])
+        log_and_write(f"    done. took: {t_diff_train:4.3g} s",
+                      self.files['run_info_file'])
+        log_and_write("  Creating summaries...",
+                      self.files['run_info_file'])
+        log_and_write(f'    done. took: {t_diff_summaries:4.3g} s to create.',
+                      self.files['run_info_file'])
+        log_and_write(f'done. Graph took: {t_diff_graph:4.3g} s to build.',
+                      self.files['run_info_file'])
+        log_and_write(sep_str, self.files['run_info_file'])
+
     # pylint:disable=too-many-statements
     def build_graph(self, sess=None, config=None):
         """Build graph for TensorFlow."""
-        def log_and_write(s, f):
-            """Print string `s` to std out and also write to file `f`."""
-            #  if self.using_hvd:
-            #      if hvd.rank() != 0:
-            #          return
-            io.log(s)
-            io.write(s, f)
-            return 1
 
-        sep_str = 80 * '-'
-        if self.safe_write:
-            log_and_write(sep_str, self.files['run_info_file'])
-            log_and_write(f"Building graph... (started at: {time.ctime()})",
-                          self.files['run_info_file'])
         start_time = time.time()
-        #  io.log(sep_str)
-        #  io.log(graph_str0)
 
         if self.hmc:  # if running generic HMC, all we need is the sampler
             if config is None:
@@ -986,10 +1019,6 @@ class GaugeModel(object):
             self.global_step.assign(1)
 
         with tf.name_scope('learning_rate'):
-            #  self.lr = tf.Variable(self.lr_init,
-            #                        trainable=False,
-            #                        name='learning_rate',
-            #                        dtype=tf.float32)
             self.lr = tf.train.exponential_decay(self.lr_init,
                                                  self.global_step,
                                                  self.lr_decay_steps,
@@ -1004,10 +1033,7 @@ class GaugeModel(object):
                 self.optimizer = tf.train.AdamOptimizer(self.lr)
 
         with tf.name_scope('loss'):
-            if self.safe_write():
-                log_and_write("  Creating loss...",
-                              self.files['run_info_file'])
-            t0 = time.time()
+            t0_loss = time.time()
 
             output = self._calc_loss_and_grads(x=self.x, beta=self.beta,
                                                **self.loss_weights)
@@ -1016,41 +1042,24 @@ class GaugeModel(object):
             self.charge_diff_op = tf.reduce_sum(x_dq) / self.num_samples
             #  self.charge_diff_op = tf.reduce_mean(x_dq)
 
-            t_diff = time.time() - t0
-            if self.safe_write():
-                log_and_write(f"    done. took: {t_diff:4.3g} s.",
-                              self.files['run_info_file'])
+            t_diff_loss = time.time() - t0_loss
 
         with tf.name_scope('train'):
-            #  io.log(f"  Creating gradient operations...")
-            if self.safe_write():
-                log_and_write(f"  Creating gradient operations...",
-                              self.files['run_info_file'])
-            t0 = time.time()
+            t0_train = time.time()
 
             grads_and_vars = zip(self.grads, self.dynamics.variables)
             self.train_op = self.optimizer.apply_gradients(
                 grads_and_vars, global_step=self.global_step, name='train_op'
             )
 
-            t_diff = time.time() - t0
-            #  io.log(f"    done. took: {t_diff:4.3g} s")
-            if self.safe_write():
-                log_and_write(f"    done. took: {t_diff:4.3g} s",
-                              self.files['run_info_file'])
+            t_diff_train = time.time() - t0_train
 
         if self.summaries:
-            #  io.log("  Creating summaries...")
-            if self.safe_write():
-                log_and_write("  Creating summaries...",
-                              self.files['run_info_file'])
-            t0 = time.time()
+            t0_summaries = time.time()
             self._create_summaries()
-            t_diff = time.time() - t0
-            #  io.log(f'    done. took: {t_diff:4.3g} s to create.')
-            if self.safe_write():
-                log_and_write(f'    done. took: {t_diff:4.3g} s to create.',
-                              self.files['run_info_file'])
+            t_diff_summaries = time.time() - t0_summaries
+        else:
+            t_diff_summaries = 0.
 
         if config is None:
             self.config = tf.ConfigProto()
@@ -1064,7 +1073,6 @@ class GaugeModel(object):
             self.config = config
 
         if sess is None:
-            #  self.sess = tf.Session(config=self.config)
             if self.using_hvd:
                 hooks = [
                     # Horovod: BroadcastGlobalVariablesHook broadcasts initial
@@ -1090,6 +1098,8 @@ class GaugeModel(object):
             # The MonitoredTrainingSession takes care of session
             # initialization, restoring from a checkpoint, saving to a
             # checkpoint, and closing when done or an error occurs.
+
+            #  self.sess = tf.Session(config=self.config)
             self.sess = tf.train.MonitoredTrainingSession(
                 checkpoint_dir=checkpoint_dir,
                 hooks=hooks,
@@ -1100,15 +1110,17 @@ class GaugeModel(object):
         else:
             self.sess = sess
 
+        times = {
+            't_diff_loss': t_diff_loss,
+            't_diff_train': t_diff_train,
+            't_diff_summaries': t_diff_summaries,
+            't_diff_graph': time.time() - start_time
+        }
+        self._log_write_graph_creation_time(**times)
+
         #  self.sess.run(tf.global_variables_initializer())
         #  if self.using_hvd:
         #      self.sess.run(hvd.broadcast_global_variables(0))
-
-        if self.safe_write():
-            log_and_write((f'done. Graph took: '
-                           f'{time.time() - start_time:4.3g} s to build.'),
-                          self.files['run_info_file'])
-            log_and_write(sep_str, self.files['run_info_file'])
 
     def update_beta(self, step):
         """Returns new beta to follow annealing schedule."""
