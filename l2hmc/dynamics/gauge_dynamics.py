@@ -417,7 +417,8 @@ class GaugeDynamics(tf.keras.Model):
 
             # use self._format_time when using while loop in transition_kernel
             t = self._format_time(step, tile=tf.shape(position)[0])
-            mask, mask_inv = self._get_mask_while(step)
+            #  mask, mask_inv = self._get_mask_while(step)
+            mask, mask_inv = self._get_mask(step)
             sumlogdet = 0.
 
             momentum, logdet = self._update_momentum_forward(position,
@@ -454,7 +455,8 @@ class GaugeDynamics(tf.keras.Model):
                                   tile=tf.shape(position)[0])
 
             #  t = self._get_time(self.num_steps - step - 1)
-            mask, mask_inv = self._get_mask_while(self.num_steps - step - 1)
+            #  mask, mask_inv = self._get_mask_while(self.num_steps - step - 1)
+            mask, mask_inv = self._get_mask(self.num_steps - step - 1)
 
             sumlogdet = 0.
 
