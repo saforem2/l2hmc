@@ -182,6 +182,20 @@ def project_angle_fft(x, num_components=50):
     y_fft = calc_fourier_series(a0, a, b, x, 2 * np.pi)
     return y_fft
 
+def load_previous_state(log_dir):
+    info_dir = os.path.join(log_dir, 'run_info')
+    current_state_file = os.path.join(info_dir, 'current_state.pkl')
+    parameters_file = os.path.join(info_dir, 'parameters.pkl')
+    train_data_file = os.path.join(info_dir, 'train_data.pkl')
+    with open(current_state_file, 'rb') as f:
+        current_state = pickle.load(f)
+    with open(parameters_file, 'rb') as f:
+        parameters = pickle.load(f)
+    with open(train_data_file, 'rb') as f:
+        train_data = pickle.load(f)
+
+    return current_state, parameters, train_data
+
 
 # pylint: disable=attribute-defined-outside-init, too-many-instance-attributes
 class GaugeModel(object):
@@ -197,21 +211,41 @@ class GaugeModel(object):
         np.random.seed(GLOBAL_SEED)
         tf.set_random_seed(GLOBAL_SEED)
         tf.enable_resource_variables()
-        # ------------------------------------------------------------------
-        # Create instance attributes from key, val pairs in `params`.
-        # ------------------------------------------------------------------
-        if not restore:
+        if 'horovod' in list(params.keys()):
+            self.is_chief = hvd.rank() == 0
+        else:
+            self.is_chief = True
+
+        if restore and log_dir is not None:
+            if self.is_chief:
+                try:
+                    output = load_previous_state(log_dir)
+                    self._current_state = output[0]
+                    self.params = output[1]
+                    self.train_data_dict = output[2]
+                except:
+                    pass
+        else:
+            # --------------------------------------------------------------
+            # Create instance attributes from key, val pairs in `params`.
+            # --------------------------------------------------------------
             self._create_attrs(params)
-            # --------------------------------------------------------------
+            # -----------------------------------------------------------------
             # Create necessary directories for holding checkpoints, data, etc.
-            # --------------------------------------------------------------
+            # -----------------------------------------------------------------
             if (self.using_hvd and hvd.rank() == 0) or not self.using_hvd:
 
                 self._create_dir_structure(log_dir)
-                # ---------------------------------------------------------
+                # -------------------------------------------------
                 # Write relevant instance attributes to .txt file.
-                # ---------------------------------------------------------
+                # -------------------------------------------------
                 self._write_run_parameters(_print=True)
+
+        #  else:
+        #      if self.using_hvd:
+        #          if is_chief:
+        #              current_state, parameters, train_data =
+        #              load_previous_state
 
         # ------------------------------------------------------------------
         # Create lattice object.
@@ -515,7 +549,8 @@ class GaugeModel(object):
                    "No model to restore. Exiting.")
             sys.exit(1)
 
-        assert os.path.isdir(log_dir), (f"log_dir: {log_dir} does not exist.")
+        #  if self.using_hvd:
+        #  assert os.path.isdir(log_dir), (f"log_dir: {log_dir} does not exist.")
 
         run_info_dir = os.path.join(log_dir, 'run_info')
         assert os.path.isdir(run_info_dir), (f"run_info_dir: {run_info_dir}"
@@ -1403,8 +1438,11 @@ class GaugeModel(object):
             io.log(f"Time to complete training: {train_time:.3g}.")
             step = self.sess.run(self.global_step)
             if self.condition1 or self.condition2:
-                self._save_model(samples=samples_np)
-                self._plot_charge_diff()
+                try:
+                    self._save_model(samples=samples_np)
+                    self._plot_charge_diff()
+                except AttributeError:
+                    pass
 
         except (KeyboardInterrupt, SystemExit):
             io.log("\nKeyboardInterrupt detected! \n", nl=False)
@@ -1412,8 +1450,11 @@ class GaugeModel(object):
             io.log(data_str)
             io.write(data_str, self.files['run_info_file'], 'a')
             if self.condition1 or self.condition2:
-                self._save_model(samples=samples_np)
-                self._plot_charge_diff()
+                try:
+                    self._save_model(samples=samples_np)
+                    self._plot_charge_diff()
+                except AttributeError:
+                    pass
 
     # pylint: disable=inconsistent-return-statements, too-many-locals
     def run(self, 
