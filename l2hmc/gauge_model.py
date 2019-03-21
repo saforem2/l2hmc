@@ -1403,8 +1403,14 @@ class GaugeModel(object):
             io.log(f"Time to complete training: {train_time:.3g}.")
             step = self.sess.run(self.global_step)
             if self.condition1 or self.condition2:
-                self._save_model(samples=samples_np)
-                self._plot_charge_diff()
+                try:
+                    self._save_model(samples=samples_np)
+                except AttributeError:
+                    pass
+                try:
+                    self._plot_charge_diff()
+                except:
+                    pass
 
         except (KeyboardInterrupt, SystemExit):
             io.log("\nKeyboardInterrupt detected! \n", nl=False)
@@ -1412,8 +1418,14 @@ class GaugeModel(object):
             io.log(data_str)
             io.write(data_str, self.files['run_info_file'], 'a')
             if self.condition1 or self.condition2:
-                self._save_model(samples=samples_np)
-                self._plot_charge_diff()
+                try:
+                    self._save_model(samples=samples_np)
+                except AttributeError:
+                    pass
+                try:
+                    self._plot_charge_diff()
+                except:
+                    pass
 
     # pylint: disable=inconsistent-return-statements, too-many-locals
     def run(self, 
